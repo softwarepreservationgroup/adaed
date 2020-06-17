@@ -179,12 +179,16 @@ control compiling, binding and execution of an Ada program.
 
 * NYUADA and GWUADA projects. Ada/Ed 1.11.2 source code and
   executables for PC and Macintosh. 1992-1995.
-  - All files. The nyu directory contains two versions of the original
-    files, apparently only differing by some renaming to produce
-    shorter filenames. The gwu directory contains subdirectories for
-    DOS and Macintosh; within the Macintosh subdirectory there are
-    several copies of most source files for unknown
-    reasons. [files](c/adaed.1.11.2)
+  - [files](c/adaed.1.11.2)
+      + The [nyu](c/adaed.1.11.2/nyu) directory contains the
+        [original](c/adaed.1.11.2/nyu/Adaed-1.11.2/) files and
+        [copies](c/adaed.1.11.2/nyu/src/) apparently only differing by
+        some renaming to produce shorter filenames. The
+        [gwu](c/adaed.1.11.2/gwu) directory contains subdirectories
+        for [DOS](c/adaed.1.11.2/gwu/dos/) and
+        [Macintosh](c/adaed.1.11.2/gwu/mac/); within the Macintosh
+        subdirectory there are several copies of most source files for
+        unknown reasons.
   - The Public Ada Library, Walnut Creek CD-ROM, November 1997.
   [Two ISO images at archive.org](https://archive.org/details/ADA_-_The_Public_Ada_Library_Walnut_Creek_November_1997)
   - [mirror](RAW/Public_Ada_Library_1997_11/ada/compiler/adaed)
