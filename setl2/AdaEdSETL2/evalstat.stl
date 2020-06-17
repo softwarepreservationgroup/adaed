@@ -1,0 +1,1937 @@
+--Author: schonber $ $Date: 91/01/09 17:31:09 $ $Revision: 1.3 $
+--Source: /cs.a/ada/ada/src/hll/evalstat.stl,v $
+--
+--Header: /cs.a/ada/ada/src/hll/evalstat.stl,v 1.53 90/07/05 08:56:16 schonber Exp $
+
+package body evalstat;
+
+use globals;
+use adasem1;
+use adasem2;
+use adasem3;
+use adasem4;
+use adasem5;
+use adasem6;
+use adasem7;
+use adasem8;
+use adasem9;
+use adasem10;
+use adasem11;
+use adasem12;
+use adasem13;
+use adaio;
+use adaarith;
+use adautil;
+
+--T+ Constant folding  
+--S+ const_val
+procedure const_val(obj);
+sem_trace_proc_entry(4, "Const_Val("+ str(obj) + ")");
+
+-- Return the constant value of the object if it has one; else return
+-- obj unchanged.  A constant value has the format:
+--			['ivalue', value]
+-- The constant value of a user-defined constant is derived from its
+-- SIGNATURE, when this is a static value. The constant value of a 
+-- literal is obtained from the literal map of its type. When perfor-
+-- ming conformance checks, folding is desabled by the global flag
+-- fold_context.
+
+if is_literal(obj) then
+    return trace_and_return(4, "Const_Val",
+           ["ivalue", ST(ST(obj).type_of).literal_map(original_name(obj))]);
+end if;
+
+if is_constant(obj) and is_scalar_type(ST(obj).type_of) and 
+		is_value(sig := ST(obj).signature) and fold_context then
+    sem_trace_proc_exit(4, "Const_Val");
+    sem_trace(4,"with return value: " + str(sig) ) ;
+    return sig ;
+else
+    sem_trace_proc_exit(4, "Const_Val");
+    sem_trace(4,"with return value: " + str(obj) ) ;
+    return obj;
+end if;
+
+end const_val;
+--S+ eval_static
+procedure eval_static (expn);
+--
+-- This procedure is called to evaluate a static expression.
+-- If expn is static, its internal value is returned, otherwise
+-- expn is returned.  If the static evaluation shows that the
+-- expression would raise an exception, a ['raise' exception]
+-- value is returned.
+
+const
+ binary_operators :=
+     {"qual_range", "in", "notin", "record_aggregate", "andthen", "orelse", 
+      "+i",  "+fl", "+fx",  "-i",   "-fl",  "-fx",   "*i",  "*fl",
+      "/i",  "/fl", "*fxi", "*fli", "*ifx", "/fxi",  "/fli",
+      "*fx", "/fx", "remi", "modi", "**i",  "**fl",  "&",
+      "and", "or",  "xor",  "=",    "/=",   "<",     "<=" , ">", ">="},
+
+ unary_operators :=
+     {"int_literal", "real_literal", "string_literal", "CHARACTER", "qualify",
+      "()",  "+ui",  "+ufl",  "+ufx",  "-ui", "-ufl", "-ufx",
+      "not", "absi", "absfl", "absfx" };
+
+sem_trace_proc_entry(4, "Eval_Static");
+sem_trace(4, "expn: "+ str(expn) ) ;
+--
+-- If the expression is a scalar constant or a literal, return that value
+--
+    if expn = om or is_value(expn) then 
+	sem_trace(4,"Expression is om or a value, return it");
+        sem_trace_proc_exit(4, "Eval_Static");
+	return expn;
+
+    elseif is_identifier(expn) then
+	sem_trace(4,"Expression is an identifier, return its value");
+	return  trace_and_return(4, "Eval_Static",
+		const_val(expn));
+    elseif not is_tuple(expn) then 
+        sem_trace_proc_exit(4, "Eval_Static");
+        return expn ;
+    else
+        opn := expn(1) ;
+        sem_trace(4,"opn = "+ str(opn) ) ;
+        if opn in unary_operators then
+	   return trace_and_return(4, "Eval_Static",
+		eval_unary_ops(expn)) ;
+        elseif opn in binary_operators then
+            return trace_and_return(4, "Eval_Static",
+	           eval_binary_ops(expn));
+        else case opn 
+	       when "'" =>  
+                        return trace_and_return(4, "Eval_Static",
+  			    eval_attribute(expn)) ;
+
+               when "array_aggregate" =>  
+                        return trace_and_return(4, "Eval_Static",
+  			    eval_array_aggregate(expn));
+
+	       when "convert" =>  
+		 [-,from_type, to_type, -] := expn;	
+	         expn :=  eval_conversion(expn) ;
+		 --
+		 -- if the item can be folded make the item look non-static
+		 -- by packaging it as a noop convert.
+		 if is_value(expn) then 
+		    expn := ["convert", from_type, from_type, expn];
+		 end if;
+		 sem_trace_proc_exit(4, "Eval_Static");
+		 return expn;
+               otherwise => 
+		 sem_trace_proc_exit(4, "Eval_Static");
+		 return expn ;
+             end case;
+        end if;
+    end if;
+sem_trace_proc_exit(4, "Eval_Static");
+end eval_static;
+
+procedure eval_unary_ops(expn) ;
+
+	[opn, op1] := expn;
+	case opn 
+ 
+	    when "int_literal" => 
+		return ["ivalue", sem_adaval ("universal_integer", op1)];
+ 
+	    when "real_literal" => 
+		return ["ivalue", sem_adaval ("universal_real", op1)];
+ 
+	    when "string_literal" => 
+		return ["ivalue", ["string", op1]];
+ 
+	    when "CHARACTER" => 
+		return ["ivalue", abs(op1) ];
+ 
+	    when "+ui", "+ufl", "+ufx" => 
+		if is_value(op1) then
+		    return op1;
+		else
+		    return expn;
+		end if;
+ 
+	    when "-ui" => 
+		return if is_value(op1) then ["ivalue", -op1(2)] 
+		else expn end if;
+
+	    when "-ufl" => 
+		return if is_value(op1) then 
+                        ["ivalue", float_umin(op1(2))]
+		else expn end if;
+
+	    when "-ufx" => 
+		return if is_value(op1) then 
+			["ivalue", fix_umin(op1(2))]
+		else expn end if;
+ 
+	    when "not" => 
+		return if is_value(op1) then ["ivalue", 1-op1(2)] 
+                else expn end if;
+ 
+	    when "absi" =>  
+		return if is_value(op1) then ["ivalue", abs(op1(2)) ]
+		else expn end if;
+
+	    when "absfl" => 
+                return if is_value(op1) then
+                        ["ivalue", float_abs(op1(2))]
+		else expn end if;
+
+	    when "absfx" => 
+                return if is_value(op1) then
+    			["ivalue", fix_abs(op1(2))]
+		else expn end if;
+ 
+	    when "()", "qualify" => 			
+		return if is_value(op1) then op1 else expn end if;
+	    otherwise =>
+		return expn;
+	end case;
+end eval_unary_ops;
+
+procedure eval_binary_ops(expn) ; 
+
+const
+    float_0 := [0,[0],0],
+    fix_0 :=  [0,[0]];
+
+	[opn,op1,op2] := expn;
+ 
+	case opn 
+ 
+	    when "qual_range" => 
+                rv := eval_qual_range(op1,op2,expn);
+                if rv = "constraint_error" then
+                   return constraint_error();
+                else
+                   return rv;
+		end if;
+
+	    when "record_aggregate" => 
+		if ST(op1).nature /= "record" or ST(op1).type_of(2) /= [] then
+		    return expn;	-- Could be static but let it go.
+		end if;
+
+		if exists [-, v] in op2 | not is_value(v) then
+		    return expn;	-- Not all components are static
+		end if;
+
+		return ["ivalue", ["record_ivalue",
+			{[f, v(2)] : [fn, v] in op2, f in fn} ] ];
+		
+        otherwise => null ;
+        end case;
+
+	op1 := const_val(op1);
+	if is_value(op1) then
+	    op1 := op1(2);
+	else
+	    return expn;
+	end if;
+ 
+	op2 := const_val(op2);
+	if is_value(op2) then
+	    op2 := op2(2);
+	else
+	    return expn;
+	end if;
+ 
+	case opn 
+ 
+	    when "[]" => 
+		[-, agg, lb, ub] := op1;
+		if op2 >= lb and op2 <= ub then
+		    return ["ivalue", agg(op2 - lb + 1)];
+		else
+		    return constraint_error();
+		end if;
+ 
+	    when "+i" => 
+		return check_overflow(op1 + op2);
+
+	    when "+fl" => 
+		return check_overflow(float_add(op1, op2));
+
+	    when "+fx" => 
+		return ["ivalue", fix_add(op1, op2)];
+ 
+	    when "-i" => 
+		return check_overflow(op1 - op2);
+
+	    when "-fl" => 
+		return check_overflow(float_sub(op1, op2));
+
+	    when "-fx" => 
+		return ["ivalue", fix_sub(op1, op2)];
+ 
+	    when "*i" => 
+		return check_overflow(op1 * op2);
+
+	    when "*fl" => 
+		return check_overflow(float_mul(op1, op2));
+
+	    when "/i" => 
+		if op2 = 0 then
+		    return constraint_error();
+                else return ["ivalue", op1 / op2];
+		end if;
+
+	    when "/fl" => 
+                return check_overflow(float_div(op1, op2));
+
+	    when "*fxi" => 
+		return
+		["ivalue", fixi_mul(op1, op2)]; 
+
+            when "*fli" => 
+                return
+                check_overflow(floati_mul(op1, op2)); 
+	
+	    when "*ifx" => 
+		return 
+		["ivalue", fixi_mul(op2, op1)]; 
+
+	    when "/fxi" => 
+		if op2 = 0 then 
+		    return constraint_error(); 
+                else 
+                    return ["ivalue", fixi_div(op1, op2)]; 
+		end if;
+
+             when "/fli" => 
+		if op2 = 0 then 
+		    return constraint_error(); 
+                else 
+                    return check_overflow(floati_div(op1, op2)); 
+		end if;
+
+--	    ('*fx'):
+--
+--		return ['ivalue', fix_mul(op1, op2,
+--               type_precision(type1), type_precision(type2))];
+-- 
+--	    ('/fx'):
+--		if op2 = fix_0  then
+--		    return constraint_error();
+--		end if;
+--		return ['ivalue', fix_div (op1, op2,
+--                         type_precision(type1), type_precision(type2))];
+-- 
+--
+            when "*fx", "/fx" => 
+                errmsg("unexpected operator in evalstat","","");
+
+	    when "remi" => 
+		if op2 = 0 then
+		    return constraint_error();
+                else return ["ivalue", op1 - (op1 / op2)*op2];
+		end if;
+
+
+	    when "modi" => 
+		if op2 = 0 then
+		    return constraint_error();
+                else 
+    		   m := op1 - ((op1 / op2) * op2);
+		   if (sign(m) * sign(op2)) = -1  then
+		      m +:= op2;
+		   end if;
+                   return ["ivalue", m];
+		end if;
+
+	    when "**i" => 
+		if op2 < 0 then
+		    return constraint_error();
+                else 
+  		   return  check_overflow((op1) ** (op2));
+		end if;
+
+
+	    when "**fl" => 
+		if op1 = float_0 and op2 < 0 then 
+		    return constraint_error();
+		else 
+		    return check_overflow(float_exp(op1, op2)) ;
+		end if;
+ 
+	    when "&" => 		-- $ /TBSL/ Bounds may not be correct!
+		[-, agg1, lb1, ub1] := op1;
+		[-, agg2, lb2, ub2] := op2;
+		agg := agg1 + agg2;
+		lb := lb1 min lb2;
+		return 
+		 ["ivalue", ["array_ivalue", agg, lb, lb + #agg - 1]];
+
+	    when "and" => return if is_simple_value(op1) 
+			then ["ivalue", (op1 min op2)] else expn end if;
+
+	    when "or"  => return if is_simple_value(op1) 
+			then ["ivalue", (op1 max op2)] else expn end if;
+
+	    when "xor" => return if is_simple_value(op1) 
+			then ["ivalue",test(op1 /=  op2)] 
+			else expn end if;
+ 
+	    when "=" => 
+		if is_simple_value(op1) then
+		    return ["ivalue", test(op1 = op2)];
+		elseif is_fixed_ivalue(op1) then
+		    return ["ivalue", test(fix_eql(op1, op2))];
+		elseif is_universal_real(op1) and 
+		   			is_universal_real(op2) then
+		    return ["ivalue", test(rat_eql(op1, op2))];
+	        else return expn ;
+		end if;
+ 
+	    when "/=" => 
+		if is_simple_value(op1) then
+		    return ["ivalue", test(op1 /= op2)];
+		elseif is_fixed_ivalue(op1) then
+		    return ["ivalue", test(fix_neq(op1, op2))];
+		elseif is_universal_real(op1) and 
+		   			is_universal_real(op2) then
+		    return ["ivalue", test(rat_neq(op1, op2))];
+		else return expn ;
+		end if;
+ 
+	    when "<" =>  
+		if is_simple_value(op1) then
+		    return ["ivalue", test(op1 < op2)];
+		elseif is_fixed_ivalue(op1) then
+		    return ["ivalue", test(fix_lss(op1, op2))];
+		else		-- $ /TBSL/ need array types
+		    return expn;
+		end if;
+ 
+	    when "<=" => 
+		if is_simple_value(op1) then
+		    return ["ivalue", test(op1 <= op2)];
+		elseif is_fixed_ivalue(op1) then
+		    return ["ivalue", test(fix_leq(op1, op2))];
+		else		-- $ /TBSL/ need array types
+		    return expn;
+		end if;
+ 
+	    when ">" => 
+		if is_simple_value(op1) then
+		    return ["ivalue", test(op1 > op2)];
+		elseif is_fixed_ivalue(op1) then
+		    return ["ivalue", test(fix_gtr(op1, op2))];
+		else		-- $ /TBSL/ need array types
+		    return expn;
+		end if;
+ 
+	    when ">=" => 
+		if is_simple_value(op1) then
+		    return ["ivalue", test(op1 >= op2)];
+		elseif is_fixed_ivalue(op1) then
+		    return ["ivalue", test(fix_geq(op1, op2))];
+		else		-- $ /TBSL/ need array types
+		    return expn;
+		end if;
+ 
+	    otherwise =>
+		return expn;
+	end case;
+
+    procedure is_simple_value(t) ;
+	return is_integer(t);
+    end is_simple_value;
+ 
+    procedure test(x);
+	return if x then 1 else 0 end if;
+    end test;
+
+end eval_binary_ops;
+
+procedure eval_attribute(expn) ; 
+
+	[-, attr, typ1, op1] := expn;
+	typ1 := eval_static(typ1) ;
+
+	-- The array attributes apply to types as well as objects. The
+        -- interpreter distinguishes among these two by means of the
+	-- prefixes  T_ and O_. Same is done for CONSTRAINED.
+
+       if attr in 
+	    ["CONSTRAINED", "FIRST", "LAST", "LENGTH", "RANGE", "SIZE"] 
+       then
+	    if is_identifier(typ1) and is_type(typ1) then
+		pref := "T_" ;
+
+       		if attr notin ["CONSTRAINED", "SIZE"] 
+         	    and can_constrain(typ1) then
+	 	      errmsg("attribute " + attr + " is undefined on ",
+         	 " unconstrained type " + original_name(typ1),"3.6.2") ;
+       		end if;
+
+	        -- Array attributes are not static, therefore just replace the 
+		-- typ field of expn with the index type of the array and 
+		-- return. Except in the case of the Size attribute which 
+		-- needs the array type in order to know the component size.
+
+	        if is_array(typ1) then
+   		   -- The second argument indicates the dimension whose 
+		   -- attribute is sought. It must be a static integer (this 
+		   -- has been checked already).
+    		   if not is_value(op1) then
+       		      dim := 1 ;          -- By default.
+    		   else
+        	      dim := op1(2) ;
+    		   end if;
+
+		   if attr /= "SIZE" then 
+	              expn(3) := index_types(typ1)(dim);
+		   end if;
+	           expn(2) := pref + attr ;
+		   return expn;
+	         end if;
+
+	    else
+		pref := "O_" ;
+		if attr = "SIZE" then
+		   if is_identifier(typ1) then
+		      expn(2) := "T_SIZE";
+		      expn(3) := ST(typ1).type_of;
+		   elseif is_tuple(typ1) and typ1(1) = "." then
+		      [-, record_obj, -] := typ1;
+	  	      typ1(2) := ST(record_obj).type_of;
+		      expn(2) := "O_SIZE";
+	              expn(3) := typ1;
+		   else
+		      expn(2) := "O_SIZE";
+		   end if;
+		   return expn;
+		end if;
+	    end if;
+	    expn(2) := pref + attr ;
+       end if;
+
+
+       if attr = "BASE" then    -- always evaluate.
+           return base_type(typ1) ;
+       end if;
+
+       if attr in ["FIRST_BIT", "LAST_BIT", "POSITION"] then
+	  -- Only process prefix of the attribute if it is a valid record
+	  -- record component. Otherwise just return it as is.
+          if is_component(typ1) then
+	     [-, record_obj, -] := typ1;
+	     typ1(2) := ST(record_obj).type_of;
+	     expn(3) := typ1;
+	  end if;
+	  return expn;
+       end if;
+
+       if not is_identifier(typ1)  then 
+	    return expn;
+       end if;
+
+
+        -- Code removed for static evaluation of Size attribute for objects
+
+	-- Attributes that are functions take the type of their argument.
+	-- Also the attributes SAFE_SMALL and SAFE_LARGE are the SMALL
+	-- and LARGE of the corresponding base_type.
+	if attr in base_attributes or
+	   attr in ["SAFE_SMALL", "SAFE_LARGE", "SAFE_EMAX"] then
+	   expn(3) := base_type(typ1) ;
+	end if;
+	-- They are evaluable statically only if the subtype typ1 itself
+	-- is static.
+
+  	force_representation(typ1);
+        if (is_type(typ1) and is_static_subtype(typ1))
+	or is_task_type(ST(typ1).type_of)
+	or attr = "CONSTRAINED" then  
+		null;	-- may have to include other attributes. 
+	else
+           return expn;				-- not static (RM 4.9 (8)
+        end if;
+
+	if is_generic_type(typ1)  then   
+	    return expn;
+	end if;
+
+	if is_tuple(ST(typ1).signature) then
+	    [-, first, last, d] := ST(typ1).signature;
+	end if;
+
+
+	case attr 
+
+        -- Attributes of SCALAR types or ARRAY types:
+
+	    when "FIRST" => 
+		if is_value(first) then
+		    return first;
+		else
+		    return expn;
+		end if;
+
+	    when "LAST" => 
+		if is_value(last) then
+		    return last;
+		else
+		    return expn;
+		end if;
+
+	    when "RANGE", "LENGTH" => 		-- Non-static.    ES139
+		if is_value(typ1) and is_value(op1) then
+			object := typ1(2) ;
+			index_value := op1(2) ;
+			[tag, seq, lb, ub] := object;
+			for i in [2..index_value] loop 
+				if seq = [] then  
+					errmsg("LENGTH","","");
+					exit;
+				end if;
+				[-, seq, lb, ub] := seq(1);
+			end loop;
+			if is_value(lb) then
+				lbd := lb(2);
+			else 
+				return expn ;
+			end if;
+			if is_value(ub) then 
+				ubd := ub(2);
+			else 
+				return expn ;
+			end if;
+			return ["ivalue", ((ubd - lbd + 1) max 0)] ;
+		else
+			return expn ;
+		end if;
+
+    	    -- Attributes of DISCRETE types:
+
+
+	    when "IMAGE" => 
+		if is_value(op1) then
+		    op1 := op1(2);
+		else
+		    return expn;
+		end if;
+		btyp1 := ST(typ1).root_type;
+		if btyp1 in ["INTEGER", "SHORT_INTEGER"] then
+	           image := str(op1) ;
+                   if op1>=0 then
+                        image := " "+image;
+                   end if;
+		else 		-- Enumeration type
+		    image := 
+		      if exists [nam, v] in ST(btyp1).literal_map | op1 = v
+			then nam else "" end if;
+		end if;
+
+		return ["ivalue", ["array_ivalue",
+			[abs(c) : c in image], 1, #image], 
+				"STRING"];
+		
+
+    	    when "VALUE" =>   
+		if is_value(op1) then
+		    [-,seq,l_val,u_val] := op1(2);
+		else
+		    return expn;
+		end if;
+                setl_string := +/[char(seq(i)): i in [l_val..u_val]];
+		-- remove leading and trailing blanks
+                leading_blanks := span(setl_string," ");
+                trailing_blanks := rspan(setl_string," ");
+		btyp1 := ST(typ1).root_type;
+
+   -- For an integer type, if the sequence of characters has the syntax of
+   -- an integer literal, with an optional single leading character that is 
+   -- a plus or minus sign, and if there is a corresponding value in the
+   -- base type of the prefix, the result is this value. In any other case
+   -- the exception CONSTRAINT_ERROR is raised. (LRM 3.5.5)
+
+		if btyp1 = "INTEGER" then
+		   if setl_string(1) = "+" then
+		      setl_string := setl_string(2..);
+		      sgn := "";
+		   elseif setl_string(1) = "-" then
+		      setl_string := setl_string(2..);
+		      sgn := "-";
+		   else
+		      sgn := "";
+		   end if;
+
+		   [num_string, remainder_of_string, scanning_errors]:=
+ 			scan_number (setl_string + " ", "integer");
+ 
+		   if (#scanning_errors > 0) or
+		      -- string was not in correct format for numeric literal
+		      (num_string = "")  or 
+		      -- string was not in correct format for integer literal
+		      (remainder_of_string /=" ") then
+		      -- extra non-blank characters following integer literal
+	    	      return constraint_error();
+		   else
+	   	      v := sem_adaval("integer",sgn + num_string);
+		      if v = "OVERFLOW" then 
+	       		 return constraint_error();
+	   	      else 
+	       		 return ["ivalue",v];
+		      end if;
+		   end if;
+
+		else 		-- Enumeration type
+                   if #setl_string>0 and setl_string(1) /= "'" then
+                      setl_string := upper_case_of(setl_string);
+                   end if;
+		   if (i := ST(btyp1).literal_map(setl_string)) /= om then
+                      return ["ivalue",i];
+                   else
+                      return constraint_error();
+		   end if;
+		end if;
+
+
+
+	    when "POS" => 
+		if is_value(op1) then
+		    return ["ivalue",op1(2)] ;	      
+		else
+		    return expn ;
+		end if;
+
+	    when "VAL","PRED","SUCC" => 
+		if is_value(op1) then
+		    op1 := op1(2);
+		else
+		    return expn;
+		end if;
+		rv := if attr = "VAL" then op1
+		      elseif attr = "PRED" then op1-1
+		      else op1 + 1 end if;
+		[-,lo, hi] := ST(base_type(typ1)).signature ? [];
+		if is_value(lo) and is_value(hi) then
+		    if rv >= lo(2) and rv <= hi(2) then
+		        return ["ivalue", rv];
+		    else
+		        return constraint_error();
+		    end if;
+		else
+		    return expn;
+		end if;
+
+		
+	    when "WIDTH" => 
+		if ST(typ1).root_type = "INTEGER" then
+		    if is_value(first) and is_value(last) then
+			if first(2) > last(2) then -- Null range
+			    return ["ivalue", 0] ;
+			else
+			    max_val := abs(first(2)) max abs(last(2)) ;
+			    return ["ivalue", # str(max_val) + 1] ;
+			end if;
+		    else 
+			return expn ;
+		    end if;
+		else
+		    if is_value(first) and is_value(last) and
+		       first(2) > last(2) then -- Null range
+			    return ["ivalue", 0] ;
+		    else
+		    	-- Must find longest name in enumeration type.
+			-- But exclude values out of the range of the
+			-- type.
+			d := { [x,y] in ST(base_type(typ1)).literal_map | 
+					y in [first(2)..last(2)] } ;
+		    	return ["ivalue", max/[# lit: [lit, -] in d]] ;
+		    end if;
+		end if; 
+
+
+    	    -- Miscellaneous attributes.
+	    -- none of the following are static.
+
+    	    when "ADDRESS", "STORAGE_SIZE" => 
+		return expn ;
+
+	    when "SIZE" => 
+		return size_attribute(expn);
+
+    	    when "CONSTRAINED" => 	
+        	-- Attribute is trivially true on constants and on -in-
+		-- parameters, false on non-generic types with discrs.
+
+		if is_identifier(typ1) 
+		  and ST(typ1).nature in {"constant","in"} then
+		    return ["ivalue", 1] ;
+
+		elseif (not is_generic_type(typ1)) and 
+		        is_type(typ1) and  -- to eliminate record objects
+		        is_record(typ1) and 
+		        has_discriminants(typ1) then
+		    return ["ivalue", 				
+			if ST(typ1).nature = "subtype" then 1 else 0 end if] ;
+
+		else
+    		    return expn;
+		end if;
+
+	    when "TERMINATED","CALLABLE" =>
+                 return expn ;
+
+	    otherwise =>
+
+    	    -- Attributes of FIXED and FLOATing point types:
+	
+              return eval_real_type_attribute(expn);   
+              
+	end case;
+
+end eval_attribute;
+--S+ eval_array_aggregate
+procedure eval_array_aggregate(expn) ;
+
+[-, indices, pos_list, nam_list] := expn ;		
+typ := indices(1) ;
+if typ = "any" then		-- Previous error.
+    return expn ;
+end if;
+[lo, hi, static_bounds] := get_index_bounds(typ) ;
+
+-- retrieve others choice if specified. 
+others := [];
+if #nam_list > 0 and nam_list(#nam_list)(1) = "others" then
+    others frome nam_list;
+
+    if not static_bounds 
+      and (#nam_list > 0 or #pos_list > 0) then	
+	errmsg("non-static \"others\" must appear alone", "", "4.3.2(3)") ;
+	return expn;	
+    end if;
+
+end if;
+
+if nam_list = [] then
+    -- Positional aggregate. 
+    if not static_bounds or
+       (others /= [] and not is_value(others(2))) or
+       (exists v in pos_list | not is_value(v)) then
+        return expn;
+    else
+	av := [v(2) : v in pos_list];
+	if others /= [] then
+	    -- Complete static range with value given for OTHERS choice.
+	    av +:= [others(2)(2) : i in [#pos_list + 1 .. hi-lo+1 ]];
+	end if;
+
+	return check_null_aggregate(av, lo, indices) ;
+    end if;
+
+else  return eval_named_aggregate(expn, indices, nam_list, others);
+end if;
+end eval_array_aggregate;
+
+procedure eval_named_aggregate(expn, indices, nam_list, others) ;
+
+-- Miscellaneous well-formedness checks on aggregates, and a simple model for
+-- constructing array aggregates whose bounds and components are static.
+
+triples := [] ;
+[lo, hi, static_bounds] := get_index_bounds(indices(1)) ;
+
+for [choice_list, cvalue] in nam_list loop 
+    for c in choice_list loop 
+        if is_tuple(c) and c(1) = "tname" then
+	    [-, ctyp] := c;
+	    if is_type(ctyp) then
+	        [-,loc, hic] := ST(ctyp).signature;
+	    else			-- range attribute
+		loc := hic := om ;	-- is non static
+	    end if;
+
+	elseif is_tuple(c) and c(1) = "range" then
+	    [-, loc, hic] := c;
+
+        elseif c(1) = "subtype" then    -- discrete range.
+            [-, type_mark, constraint] := c ;
+           if not is_static_subtype(type_mark) then
+                -- Force run-time evaluation.
+                loc := om ;
+           else
+                [-, loc, hic] := constraint;
+           end if;
+
+	else
+           loc := hic := c;
+	end if;
+        triples with:= [loc, hic, cvalue];
+
+    end loop;
+end loop;
+
+if exists [loc, hic, -] in triples |
+	not is_value(loc) or not is_value(hic) then
+    if  #triples = 1 and others = []	
+    then
+	return expn;		-- Single choice
+    else
+        errmsg("non_static choice must appear alone", "","4.3.2(3)");
+        return expn;
+    end if;
+end if;
+
+if exists [loc, hic, v] in triples |
+    (lov := loc(2)) > (hiv := hic(2)) then
+    -- Null range: must be the only association. Use
+    -- bounds to construct ghost element.
+    if  #triples = 1 and others = [] then
+       if is_value(v) then                        
+             return ["ivalue", ["array_ivalue", 
+                    [make_ghost_out_of(v(2))], lov, hiv, "null"]];
+       else
+           return expn;
+       end if;
+    else
+       errmsg("null range must appear alone", "", "4.3.2(3)") ;
+       return [] ;
+    end if;
+end if;				
+
+-- Sort the triples to verify that the range is covered without overlaps.
+triples := sort_triples([[loc(2), hic(2), v] : [loc, hic, v] in triples]) ;
+
+if exists i in  [1..#triples-1] |
+       triples(i)(2) > triples(i+1)(1) - 1 then	
+        errmsg("duplicate choices in aggregate", "", "4.3") ;
+        return [];
+
+elseif others = [] and (exists i in [1..#triples-1] |
+       triples(i)(2) < triples(i+1)(1) - 1) then	
+        errmsg("missing choices in aggregate", "", "4.3") ;
+        return [];
+end if;
+
+if (not static_bounds) or
+   (others /= [] and not is_value(others(2))) or
+   (exists [-,-,v] in triples | not is_value(v)) then
+   return expn ;
+end if;
+
+-- Retrieve the choices that give the bounds of the aggregate.
+lon := triples(1)(1) ;
+hin := triples(#triples)(2);
+
+if (lon < lo or hin > hi) then 
+    -- Looks like constraint error, but it may be a null
+    -- multidimensional aggregate. Will check at run-time.
+    return expn ;
+elseif hin - lon > 4000 then
+    -- Current maximum memory supported.
+    return storage_error() ;
+end if;					
+
+-- Assemble the aggregate. 
+nam_map := {[i, v]: [lov, hiv, v] in triples, i in [lov .. hiv]};
+
+if others = [] then
+   -- Use the bounds given by choices in the aggregate itself.
+   pos_list := [nam_map(i)  : i in [lon .. hin]];
+else
+   -- Use the bounds of the index subtype, and insert others value where needed.
+   pos_list := [nam_map(i) ? others(2) : i in [lo .. hi]];
+   lon := lo;
+end if;
+
+[-,sample_value ]:= pos_list(1);
+if is_tuple(sample_value) 
+  and sample_value(1) ="array_ivalue" then
+   [-,-,lo_sample,hi_sample] := sample_value;
+   if exists [-,[-,-,lox,hix]] in pos_list |
+           ((lox /= lo_sample) or (hix /= hi_sample)) then
+       warning("All subbaggregates must have identical bounds (4.3.2)");
+       return constraint_error();
+   end if;
+end if;
+
+return  check_null_aggregate([v(2) : v in pos_list], lon, indices)  ;
+end eval_named_aggregate;
+
+procedure get_index_bounds(typ) ;
+
+[-, lo, hi] := ST(typ).signature;
+if not is_value(lo) or not is_value(hi) then
+    return [lo, hi, false];
+else
+    return [lo(2), hi(2), is_static_subtype(typ)] ;
+end if; 
+
+end get_index_bounds;
+--S+ sort_triples
+procedure sort_triples(triples) ;
+-- Utility to sort the choices in an array aggregate, in order of increasing
+-- index.
+
+if #triples <= 1 then return triples ;
+else [lo, -, -] := triples(1) ;
+   return   sort_triples([t in triples | t(1) < lo]) 
+	  + [t in triples | t(1) = lo]
+          + sort_triples([t in triples | t(1) > lo]) ;
+end if;
+end sort_triples;
+--S+ eval_conversion
+procedure eval_conversion(expn) ;
+
+    	[-, from_type, to_type, opd] := expn;
+	if from_type = "universal_integer" then
+	    -- If not static, the expression is an attribute (POS, etc.).
+	    -- We assume that at run-time the attributes yield values of
+	    -- type INTEGER. If static, it will be converted below.
+	    expn(2) := "INTEGER";
+	end if;
+
+	if is_generic_type(from_type) 
+	or is_generic_type(to_type) 
+	or (ST(to_type).root_type in ["FLOAT", "$FIXED"] 
+	   and not is_value(ST(to_type).signature.precision_of))
+	then return expn ;
+	end if;
+
+	if is_value(opd) then
+	    opd := opd(2);
+	else
+	    return expn;
+	end if;
+	from_root := ST(from_type).root_type;
+	target_root := ST(to_type).root_type;
+	case from_root 		-- from type 
+
+	    when "INTEGER" => 
+
+		case target_root 
+
+		    when "INTEGER" => 
+			return ["ivalue", opd];
+
+		    when "FLOAT","LONG_FLOAT" => 
+			return check_overflow(float_fra([opd,1],
+                                       type_precision(to_type)));
+
+    		    when "universal_integer" => 
+    			return ["ivalue", (opd)];
+
+    		    when "universal_real", "universal_fixed" => 
+    			return ["ivalue", rat_fri(opd, 1)];
+ 
+    		    when "$FIXED" => 
+    			return ["ivalue", fix_fri(opd, 
+                                           type_precision(to_type))];
+ 
+		otherwise =>
+			return expn;
+		end case;
+ 
+	    when "FLOAT","LONG_FLOAT" => 
+
+		case target_root 
+
+		    when "INTEGER", "SHORT_INTEGER" => 
+			return check_overflow(float_toi(opd));
+ 
+		    when "FLOAT","LONG_FLOAT" => 
+			return ["ivalue", 
+		 	 float_convert(opd, type_precision(to_type))];
+
+		    when "$FIXED" => 
+			return ["ivalue", fix_ffl(opd,
+                                            type_precision(to_type))];
+ 
+		    when "universal_real", "universal_fixed" => 
+			return ["ivalue", float_tra(opd)];
+ 
+		    when "universal_integer" => 
+			return ["ivalue", float_toi(opd)];
+
+		otherwise =>
+			return expn;
+		end case;
+ 
+    	    when "universal_integer" => 
+
+    		case target_root 
+
+    		    when "INTEGER" => 
+			return check_overflow(opd);
+
+		    when "FLOAT","LONG_FLOAT" => 
+			return check_overflow(float_fra([opd,1],
+                                       type_precision(to_type)));
+
+    		    when "universal_integer" => 
+    			return ["ivalue", opd];
+
+    		    when "universal_real", "universal_fixed" => 
+    			return ["ivalue", rat_fri(opd, 1)];
+ 
+    		    when "$FIXED" => 
+    			return ["ivalue", fix_fri(opd,
+                                            type_precision(to_type))];
+ 
+    		otherwise =>
+    			return expn;
+    		end case;
+
+    	    when "universal_real" => 
+
+    		case target_root 
+
+    		    when "FLOAT","LONG_FLOAT" => 
+			return check_overflow(float_fra(opd,
+                                type_precision(to_type)));
+
+    		    when "universal_real" => 
+    			return ["ivalue", opd];
+
+    		    when "universal_fixed" => 
+                        return ["ivalue", float_tra(opd)];
+
+    		    when "$FIXED" => 
+    			return ["ivalue", fix_fra(opd, 
+                                            type_precision(to_type))];
+
+		    when "INTEGER" => 
+			return check_overflow(rat_toi(opd));
+
+    		otherwise =>
+    			return expn;
+    		end case;
+
+    	    when "universal_fixed" => 
+
+    		case target_root 
+
+    		    when "FLOAT","LONG_FLOAT" => 
+			return check_overflow(float_fra(opd, 
+                                         type_precision(to_type)));
+
+    		    when "universal_real", "universal_fixed" => 
+    			return ["ivalue", opd];
+
+    		    when "$FIXED" => 
+    			return ["ivalue", opd];
+
+		    when "INTEGER" => 
+			return check_overflow(rat_toi(opd));
+
+    		otherwise =>
+    			return expn;
+    		end case;
+
+    	    when "$FIXED" => 
+
+    		case target_root 
+
+    		    when "FLOAT","LONG_FLOAT" => 
+			return check_overflow(fix_tfl(opd, 
+                          type_precision(from_type), 
+			  type_precision(to_type)));
+
+    		    when "universal_real", "universal_fixed" => 
+    			return ["ivalue", fix_tra(opd, 
+                                        type_precision(from_type))];
+
+    		    when "$FIXED" => 
+    			return ["ivalue", opd];
+
+		    when "INTEGER" => 
+			return check_overflow(fix_toi(opd, 
+                                      type_precision(from_type)));
+
+    		otherwise =>
+    			return expn;
+    		end case;
+
+	otherwise =>
+		return expn;
+
+	end case;
+ 
+end eval_conversion;
+
+--S+  eval_qual_range
+procedure eval_qual_range(op1,op2,expn);
+--
+-- This has been separated from the main body of eval_static because
+-- it is used for two differents operators: 'qual_range' proper,
+-- and 'in' and 'notin'
+--
+-- If the expression is not static it return the former expression expn.
+-- If the expression evaluates to a ['raise','CONSTRAINT_ERROR'] because
+-- op1 is not in the range op2, it returns the string 'contraint_error'
+-- without emitting any warning; this is left to the caller 
+-- responsibility.
+--
+		if is_value(op2) then
+		    [-, op2, typ] := op2 ;
+	        elseif is_tuple(op2) and 
+			(op2(1) = "subtype" or op2 = []) then
+--
+-- This is wrong, but it is not clear how we should handle 
+-- constraints in slices and case choices. For example,
+--   when st range 2 .. 4 => ... where st is a subtype.
+-- If st is static a check could be made, but what do we do
+-- if st is dynamic?  In any case we don't want 'qual_range'.
+
+		    return op2;	
+		else
+		    return expn;
+		end if;
+		oop1 := op1 ;		-- May just be a type name.
+		if is_tuple(op1) and op1(1) = "subtype" and
+					is_scalar_type(op1(2)) then
+		    [-, op1, [-, lo, hi]] := op1;
+		elseif is_scalar_type(op1) then
+		    [-,lo,hi] := ST(op1).signature?[];
+		else
+	 	    return expn;
+	 	end if;
+
+		-- If the argument is universal, convert it to 
+		-- standard representation. A qual_range indicates
+		-- a constrained type, i.e. non-universal.
+		if is_universal_integer(op2) then
+--$$		    op2 := stl_int_toi(op2) ;			$$ES126
+		    expn(3) := ["ivalue", op2, typ] ;
+		elseif is_universal_real(op2) then
+		    if ST(op1).root_type = "$FIXED" then
+                       op2 := fix_fra(op2, type_precision(op1)) ;
+		       expn(3) := ["ivalue", op2, typ] ;
+                    else            -- It is a floating point type
+		       op2 := float_fra(op2, type_precision(op1)) ;
+		       expn(3) := ["ivalue", op2, typ] ;
+                    end if;
+		end if;
+
+		if is_value(lo) and is_value(hi) then 
+		    lo := lo(2);
+		    hi := hi(2);
+		else
+		    return expn;
+		end if;
+
+
+		if op2 = "OVERFLOW" then 
+		    return constraint_error() ;
+		end if;
+
+		if oop1 in {"INTEGER","FLOAT","LONG_FLOAT",
+			    "$FIXED","CHARACTER"}
+		    or ST(oop1).nature = "enum" 
+		    -- Predefined type without constraint.
+		then
+		    return ["ivalue", op2];
+		else
+
+		    -- At this point everything is known to be constant.
+		    -- If the constraint is obeyed, return the value without
+		    -- a range qualification. Otherwise emit a constraint
+		    -- exception.
+		    c_error := 
+			if ST(op1).root_type = "$FIXED" then
+			   (fix_lss(op2, lo) or fix_gtr(op2, hi))
+			elseif ST(op1).root_type = "FLOAT" or 
+			       ST(op1).root_type = "LONG_FLOAT" then
+			   (float_lss(op2, lo) or float_gtr(op2, hi))
+			else -- 'INTEGER', 'CHARACTER', 'BOOLEAN' or other
+			   (op2 < lo or op2 > hi)
+			end if;
+		    if c_error then
+			return "constraint_error";
+		    else
+			return ["ivalue", op2, op1] ;
+		    end if;
+		end if;
+end eval_qual_range;
+--S+ eval_real_type_attribute
+procedure eval_real_type_attribute(expn);
+  const
+     rat_1 :=  [1, 1],		 -- rational 1
+     rat_2 :=  [2, 1]; 		 -- rational 2
+
+--
+--    Static evaluation of real types characteristics
+--    ===============================================
+--
+  [-,attr,arg_type,-] := expn;
+  result := om;
+
+  [ kind,-] := sig := ST(arg_type).signature;
+  
+  case kind 
+--
+--    Part A : FLOATING POINT REAL 
+--
+--    For a floating point real type FL, we have the folowing
+--    basic informations:
+--        digits_declared   (SETL integer)
+--        fl_digits         (actually used: SETL_integer)
+--        fl_high           (SETL_real)
+--        fl_low            (SETL_real)
+--
+  when "digits" =>    
+    [-,[-,fl_low],[-,fl_high],
+	[-,fl_digits], [-,digits_declared]] := sig;
+    case attr 
+
+--====================
+--       
+--       FL'DIGITS    --> universal_integer
+--
+--            The minimum number of significant decimal digits.
+--
+    when "DIGITS" => 
+        result := digits_declared ;					
+
+--====================
+--
+--       FL'MANTISSA  --> universal_integer
+--
+--            The minimum number of binary digits required for DIGITS:
+--                  ceil(fl_digits*log(10)/log(2))+1)
+--
+    when "MANTISSA" => 
+        result := mantissa_from_digits(digits_declared) ;
+
+--====================
+--
+--       FL'EPSILON   --> universal_real
+--
+--            The absolute value of the difference between the nuber 1.0
+--            and the next model number above :
+--                  = 2.0**(1-FL'MANTISSA)
+--
+    when "EPSILON" => 
+        result := rat_exp(rat_2, 
+			(1 - mantissa_from_digits(digits_declared)));
+
+--====================
+--
+--       FL'EMAX      --> universal_integer
+--
+--            The largest exponent value in binary canonical form:
+--                  = 4*FL'MANTISSA
+--
+    when "EMAX" => 
+        result := 4 * mantissa_from_digits(digits_declared);
+
+    when "SAFE_EMAX" => 
+        result := fl_high(3); -- Exponent of safe_large
+
+--====================
+--
+--       FL'SMALL     --> universal_real
+--
+--            The smallest positive non-zero number :
+--                  = 2.0**(- FL'EMAX -1) 
+--
+    when "SMALL" => 
+        result := rat_exp(rat_2, 
+                -(4 * mantissa_from_digits(digits_declared) + 1));
+
+    when "SAFE_SMALL" => 
+        result := rat_exp(rat_2, 
+                (-fl_high(3) - 1));
+--====================
+--
+--       FL'LARGE     --> universal_integer
+--
+--             The largest positive number:
+--                   = 2.0**FL'EMAX * (1.0 - 2.0**(-FL'MANTISSA))
+--
+    when "LARGE" => 
+        result := rat_mul(
+                  rat_exp(rat_2, (4 * fl_mantissa(digits_declared))),
+                  rat_sub(rat_1, rat_exp(rat_2, 
+			-(mantissa_from_digits(digits_declared)))));
+
+    when "SAFE_LARGE" => 
+        result := rat_mul(
+                  rat_exp(rat_2, (fl_high(3))),
+                  rat_sub(rat_1, rat_exp(rat_2, 
+			-(mantissa_from_digits(digits_declared)))));
+--====================
+--
+--       FL'SAFE_EMAX  =  FL'BASE'EMAX
+--       FL'SAFE_SMALL =  FL'BASE'SMALL
+--       FL'SAFE_LARGE =  FL'BASE'LARGE
+--
+--        cf. FL'EMAX, FL'SMALL, FL'LARGE
+
+--====================
+--
+--       FL'MACHINE_ROUNDS --> boolean
+--
+    when "MACHINE_ROUNDS" => 
+        result := test(true);
+
+--====================
+--
+--       FL'MACHINE_OVERFLOWS --> boolean
+--
+    when "MACHINE_OVERFLOWS" => 
+        result := test(true);
+
+--====================
+--
+--       FL'MACHINE_RADIX     --> universal_integer
+--
+    when "MACHINE_RADIX" => 
+        result := (2);
+
+--====================
+--
+--       FL'MACHINE_MANTISSA  --> universal_integer
+--
+    when "MACHINE_MANTISSA" => 
+	if fl_digits = float_digits then
+	   result := float_machine_mantissa;
+	else
+	   result := long_float_machine_mantissa;
+	end if;
+
+--====================
+--
+--       FL'MACHINE_EMAX      --> universal_integer
+--
+    when "MACHINE_EMAX" => 
+	if fl_digits = float_digits then
+	   result := float_machine_emax;
+	else
+	   result := long_float_machine_emax;
+	end if;
+
+--====================
+--
+--       FL'MACHINE_EMIN      --> universal_integer
+--
+    when "MACHINE_EMIN" =>   
+	if fl_digits = float_digits then
+	   result := -float_machine_emax;
+	else
+	   result := -long_float_machine_emax;
+	end if;
+
+--
+    end case;
+
+--
+--    Part B : FIXED POINT REAL
+--
+--    For a fixed point real type FX, we have the following basic 
+--    informations:
+--       fx_low   (fixed point)
+--       fx_high  (fixed point)
+--       delta    (universal_real)
+--	small    (universal real)
+--
+  when "delta" => 
+
+    [-,[-, fx_low], [-, fx_high], [-, small], [-, delta]] := sig;
+
+    case attr 
+--====================
+--
+--       FX'DELTA     --> universal_real
+--
+--            The absolute value of the error bound.
+--
+
+    when "DELTA" => 
+        result := delta;
+
+--====================
+--
+--       FX'SMALL     --> universal_real
+
+    when "SMALL" => 
+	result := fx_small(arg_type);
+
+--====================
+--
+--       FX'SMALL     --> universal_real
+
+    when "SAFE_SMALL" => 
+        result := fx_small(arg_type);
+
+--====================
+--
+--       FX'MANTISSA  --> universal_integer
+
+    when "MANTISSA" => 
+           result := fx_mantissa(arg_type) ;
+
+--====================
+--        
+--       FX'LARGE     --> universal_real
+--    
+--            The largest positive number :
+--               = (2.0**FX'MANTISSA - 1) * FX'SMALL
+
+    when "LARGE","SAFE_LARGE" => 
+           result := rat_mul(
+                   rat_sub(rat_exp(rat_2, fx_mantissa(arg_type)), rat_1),
+                   fx_small(arg_type) );
+
+--====================
+--
+--       FX'FORE      --> universal_integer
+--
+-- Yields the minimum number of characters needed for the integer part 
+-- of the decimal representation of any value of the subtype, assuming 
+-- that the representation does not include an exponent, but includes a 
+-- one-character prefix that is either a minus sign or a space. (The 
+-- minimum value is always 2)
+--
+    when "FORE" => 
+          max_val := fix_toi(fx_max(fx_low, fx_high),small);
+          result := #str(max_val) + 1;
+
+--====================
+--
+--       FX'AFT       --> universal_integer
+--
+--            The number of decimal digits needed after the decimal point
+--              = smallest n such that (10**N)*FX'DELTA >= 1.0
+--
+    when "AFT" => 
+        xdelta := delta;
+        result := 1;
+       while rat_lss(xdelta,[1, 10])  loop 
+           xdelta := rat_mul(xdelta,[10, 1]);
+           result +:= 1;
+        end loop;
+
+--====================
+--
+--       FX'SAFE_SMALL =  FX'BASE'SMALL
+--       FX'SAFE_LARGE =  FX'BASE'LARGE
+--
+--       cf. FX'SMALL and FX'LARGE
+
+--====================
+--
+--       FX'MACHINE_ROUNDS --> boolean
+--
+    when "MACHINE_ROUNDS" => 
+        result := test(true);
+        
+--====================
+--
+--       FX'MACHINE_OVERFLOWS --> boolean
+--
+    when "MACHINE_OVERFLOWS" => 
+        result := test(true);
+
+--
+   end case;
+end case;
+
+if result /= om then
+    return ["ivalue",result];
+else
+    return expn;
+end if;
+
+  procedure is_ivalue (x) ; 
+     return (is_tuple(x) and x(1) = "ivalue");
+  end is_ivalue;
+
+  procedure test(x);
+     return if x then 1 else 0 end if;
+  end test;
+
+  procedure fl_mantissa(digits_declared);
+     return (ceil((float(digits_declared)*(log(10.0)))/(log(2.0)) + 1.0)) ;
+  end fl_mantissa;
+
+end eval_real_type_attribute;
+
+procedure mantissa_from_digits(d) ;
+
+return (ceil((float(d)*(log (10.0)))/(log (2.0)) + 1.0));
+
+end mantissa_from_digits;
+--S+ fx_mantissa
+procedure fx_mantissa(fixed_type) ;
+-- Compute the mantissa of a fixed type or subtype. If the subtype has the
+-- same delta as its type, the mantissa is the number of bits in the larger
+-- bound. Otherwise it is computed by the formula:
+--          = ceil(log(max(abs(fx_high),abs(fx_low))/FX'SMALL)/log(2.0)))
+-- Note that in this case the mantissa is a perfectly useless quantity which
+-- is unrelated to the representation of the type or subtype.
+
+[-,[-, fx_low], [-, fx_high], [-, small], [-, delta]] := ST(fixed_type).signature;
+max_bound := fx_max(fx_low, fx_high); 
+if fix_gtr(fx_low,fx_high) or ((fix_tra(max_bound, small))(1) = 0) then 
+   return 0;
+else
+   if small = fx_small(fixed_type) then 
+       return 1 max (bit_nbr((max_bound)(2)) 
+       			- (if is_pow2(max_bound(2)) then 1 else 0 end if)) ;
+   else 
+       --return 1 max (ceil(log (rat_tor(rat_div(fix_tra(max_bound, small), 
+		--fx_small(fixed_type)) ,
+		--long_float_digits)) /log(2.0)))  ;
+     -- calculate (LARGE/SMALL + 1)
+	rat_large := fix_tra(max_bound,small);
+	rat_small := fx_small(fixed_type);	
+	rat_val := rat_div(rat_large,rat_small);
+        mantissa := 1;
+	power_of_2 := [2,1];
+	while rat_lss(power_of_2,rat_val) loop
+	    power_of_2 := rat_mul(power_of_2,[2,1]);
+	    mantissa +:= 1;
+	end loop;
+	return mantissa;
+   end if;
+end if;
+end fx_mantissa;
+--S+ fx_max
+procedure fx_max(fx_low,  fx_high);
+return if fix_geq((h := fix_abs(fx_high)), (l := fix_abs(fx_low))) then h 
+else l
+end if;
+end fx_max;
+--S+ check_overflow
+-- verify that the result of an arithmetic operation can be computed exactly.
+-- Return an interpreter value if so, and an instruction to raise CONSTRAINT_
+-- ERROR otherwise. 
+-- If the argument is an integer, its absolute value must be smaller than
+-- ADA_MAX_INTEGER. If it is a floating point number, each operation verifies
+-- that the number is representable, or has already signaled OVERFLOW. 
+ 
+procedure check_overflow(x); 
+    if x = "OVERFLOW" then 
+	return constraint_error() ;
+    else 
+	if is_integer(x) then
+	   if abs(x) > ada_max_integer then
+	      return constraint_error();
+	   else 
+	      return ["ivalue", x];
+	   end if;
+	elseif is_float_ivalue(x) then
+	   return ["ivalue", x];
+	else
+	   assert false;
+	end if;
+    end if;
+end check_overflow;
+
+procedure constraint_error ;
+
+-- Invoked when static evaluation of expression indicates  constraint violation.
+
+	warning("Evaluation of expression will raise CONSTRAINT_ERROR") ;
+	return ["raise", "CONSTRAINT_ERROR", "static"] ;
+
+end constraint_error;
+procedure storage_error ;
+
+-- Invoked when static construction of an aggregate exceeds run_time storage.
+
+	warning("Evaluation of aggregate will raise STORAGE_ERROR") ;
+	return ["raise", "STORAGE_ERROR", "static"] ;
+
+end storage_error;
+
+--S+ check_null_aggregate
+procedure check_null_aggregate(seq, lo, indices) ;
+
+-- If the aggregate is multidimensional, and one of the dimensions is
+-- null, the whole aggregate is labelled as null, so that the 
+-- verification of bounds of subaggregates is skipped.
+
+-- Verify that length of aggregate is consistent with subtype.
+i := indices(1) ;
+[-, lob, hib] := ST(i).signature ;	
+
+if is_value(lob) and is_value(hib) then
+    l := lob(2) ;
+    h := hib(2) ;
+    if (h >= l and #seq > h-l+1) or (h < l and #seq > 0)
+    then return constraint_error() ; 
+    end if;
+end if;
+
+if #seq = 0 then
+    bi := base_type(i) ;
+    [-, lbi,-] := ST(bi).signature ;
+    if is_value(lbi) and lo = lbi(2) then
+	-- upper bound of empty aggregate is then non-existent!
+	return constraint_error() ;
+    end if;
+end if;
+
+agg := ["array_ivalue", seq, lo, lo + #seq -1] ;
+
+if (#indices > 1 and
+    (forall v in seq | 
+        is_tuple(v) and v(1) = "array_ivalue" and v(5) = "null" ))
+  or (#seq = 0)
+then
+    agg with:= "null" ;
+end if;
+return ["ivalue", agg] ;
+
+end check_null_aggregate;
+--S+ make_ghost_out_of
+
+procedure make_ghost_out_of(sample);
+--
+--  for null arrays ivalue, turns a sample element into a structurally
+--  equivalent (but totally empty) ghost element.
+--
+
+   if is_tuple(sample) and sample(1) = "array_ivalue" then
+      [ -, seq, lo, hi ] := sample ;
+      return [ "array_ivalue", [make_ghost_out_of(seq(1))], lo, hi ];
+   end if;
+   return om;
+
+end make_ghost_out_of;
+
+procedure is_value(x) ;
+return     (is_tuple(x) and x(1) = "ivalue") ;
+end is_value;
+
+procedure is_universal_integer(x) ;
+return is_integer(x) ;						
+end is_universal_integer;
+
+procedure is_universal_real(x) ;
+-- format is : [numerator denominator].
+
+return is_tuple(x) and #x = 2 and is_integer(x(1)) 
+		   and is_integer(x(2)) ;
+end is_universal_real;
+
+procedure is_float_ivalue(x);
+-- format is :  [sign mantissa exponent].
+
+return is_tuple(x) and #x = 3 and is_integer(x(1))
+	  	   and is_tuple(x(2)) and is_integer(x(3)) ; 
+end is_float_ivalue;
+
+procedure is_fixed_ivalue(x) ;
+-- format is [sign mantissa].
+
+return is_tuple(x) and #x = 2 and is_integer(x(1)) 
+		   and is_tuple(x(2)) ; 
+end is_fixed_ivalue;
+
+procedure fx_small(fixed_type);
+--
+-- Calculate the 'small corresponding to a given delta. 
+-- IN the absence of representation clauses,  'small is chosen as the largest 
+-- power of two that is not greater than the delta of the fixed point accuracy 
+-- definition. (LRM 3.5.9). For a type, small has already been computed at the
+-- time of type definition. It is only for a subtype that the computation must
+-- be performed.
+-- If a representation clause is given for small  then we use that value for the
+-- parent and its subtype.
+ 
+[-,[-, fx_low], [-, fx_high], [-, small], [-, delta]] := ST(fixed_type).signature;
+if explicit_small_given(fixed_type) then
+   return small;
+else
+    return calculate_small(delta);
+end if;
+end fx_small;
+procedure calculate_small(delta);
+power_of_2 := [1,1] ;
+    if rat_geq(delta , [1,1])  then
+       -- Multiply by powers of two.
+        until rat_gtr(power_of_2, delta) loop
+         small := power_of_2;
+         power_of_2 :=  rat_mul(power_of_2, [2,1]) ;
+       end loop;
+    else
+       -- Multiply by powers of one-half.
+        until rat_leq(power_of_2, delta) loop
+         power_of_2 := rat_mul(power_of_2, [1,2]) ;
+         small := power_of_2;
+       end loop;
+    end if;
+    return small;
+end calculate_small;
+--+ ADAVAL
+procedure sem_adaval(typ,number);
+const
+	hexdigits := "0123456789ABCDEFabcdef" ,
+
+	conv := {["0",0],["1",1],["2",2],["3",3],["4",4],
+	 	 ["5",5],["6",6],["7",7],["8",8],["9",9],
+	 	 ["a",10],["b",11],["c",12],["d",13],["e",14],["f",15],
+	 	 ["A",10],["B",11],["C",12],["D",13],["E",14],["F",15]} ;
+
+
+sem_trace_proc_entry(3, "Sem_Adaval");
+sem_trace(3, "type: "+ str(typ) );
+sem_trace(3, "number: "+ str(number) );
+
+    num := number;
+    if num=om or num="" then
+        return "OVERFLOW";
+     end if;
+    if num(1) in {"-","+"} then
+       numsign := num(1);
+       num := num(2..);
+       if num=om or num="" then
+          return "OVERFLOW";
+       end if;
+    end if;
+    -- Divide num into bse, num, and expnt:
+
+    b := sbreak (num, "#");
+    if b = om then	-- Not a based number.
+    	bse   := 10;
+    	expnt := num;
+    	num   := sbreak (expnt, "E");
+    	if num = om then	-- No exponent.
+    	    num   := expnt;
+    	    expnt := "";
+    	else			-- Exponent.
+    	    expnt := expnt(2..);
+    	end if;
+    else		-- Based number.
+    	bse   := sem_adaval ("integer", b);
+    	expnt := num(2..);
+    	num   := sbreak(expnt, "#"); -- strip off right base delimiter.
+    	if expnt = "#" then	-- No exponent.
+    	    expnt := "";
+    	else			-- Exponent.
+    	    expnt := expnt(3..);
+    	end if;
+    end if;
+
+    -- Compute exponent and bse ** expnt
+
+--								
+    if expnt /= "" then
+	exp_sgn := 1;
+    	if expnt(1) = "+" then
+    	    expnt := expnt(2..);
+    	elseif expnt(1) = "-" then
+    	    expnt := expnt(2..);
+    	    exp_sgn := -1;
+    	end if;
+    	e := (bse ** sem_adaval ("universal_integer", expnt));
+    else
+    	e := 1;
+	exp_sgn := 0;
+    end if;
+
+-- Now find the value of the number with base bse.
+
+    if typ in {"integer","universal_integer"} then
+
+    	    -- First convert body of integer:
+
+            n    := 0 ;
+             for char1 in num loop
+                d := conv(char1);            
+                if d=om or d>=bse then
+                   return "OVERFLOW";
+                end if;
+		n := (n * bse) + d;
+            end loop;
+
+    	    -- Apply exponent:   (n := n * e)
+
+    	    if exp_sgn = 1 then
+    		n := (n * e);
+    	    end if;
+
+    	    -- If regular integer, then convert.
+
+    	    if typ = "integer" then
+    		n := stl_int_toi (n);
+                if numsign = "-" then 
+                  n:= -n; 
+                end if;   
+    	    end if;
+
+
+        else
+
+    	    -- To obtain the numerator of the rational number,
+    	    -- concatenate whole part with fractional part and convert
+    	    -- the whole thing as an integer.  Then the denominator is
+    	    -- just the base raised to a power determined by the
+    	    -- length of the fractional part.
+
+    	    wh := span (num, hexdigits);
+	    if num(1) = "." then
+		num  := num(2..);
+		fr   := span (num, hexdigits);
+    		p    := #fr;
+    		wh  +:= fr;
+    	    else
+    		p    := 0;
+    	    end if;
+
+	    n := sem_adaval ("universal_integer",
+                         str(bse) + "#" + wh + "#");
+	    d := bse ** p ;
+	    n := rat_fri (n, d);
+
+    	    -- Apply exponent:   (n := n * e)
+
+    	    if exp_sgn = 1 then
+		n := rat_mul(n, rat_fri(e, 1));
+	    elseif exp_sgn = -1 then
+		n := rat_mul(n, rat_fri(1, e));
+     	    end if;
+
+    	    -- If non universal real, then convert.
+
+	    if typ /= "universal_real" then
+            	if ST(typ).root_type = "FLOAT" or 
+		   ST(typ).root_type = "LONG_FLOAT" then
+		    sem_trace(3,"converting to float with precision= "+
+				str(type_precision(typ)) );
+    		    n := float_fra(n, type_precision(typ));
+            	elseif ST(typ).root_type = "$FIXED" then
+	    	   sem_trace(3,"converting to fixed with precision=" +	
+				str(type_precision(typ)) );
+    		    n := fix_fra(n, type_precision(typ));
+            	end if;
+             end if;
+
+    end if;
+    sem_trace_proc_exit(3, "Sem_Adaval");
+    return n;
+
+end sem_adaval;
+procedure sign(x);
+case
+  when is_integer(x) =>
+     case
+        when (x<0) => return -1;
+        when (x=0) => return 0;
+        when (x>0) => return 1;
+     end case;
+  when is_real(x) =>
+     case of
+        when (x<0.0) => return -1;
+        when (x=0.0) => return 0;
+        when (x>0.0) => return 1;
+     end case;
+  otherwise =>
+     print("error in sign");
+     return 0;
+end case;
+end sign;
+end evalstat;

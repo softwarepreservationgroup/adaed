@@ -1,0 +1,145 @@
+New Release
+-----------
+GW-Ada/Ed Program Development Environment for Apple Macintosh
+-------------------------------------------------------------
+December 10, 1995 - Happy Birthday, Lady Ada Lovelace
+-----------------------------------------------------
+
+Prof. Michael B. Feldman 
+Department of Electrical Engineering and Computer Science 
+The George Washington University Washington, DC 20052 
+(202) 994-5919 (voice) 
+(202) 994-0227 (fax) 
+mfeldman@seas.gwu.edu (Internet)
+
+We are happy to announce a new release of GW-Ada/Ed for the Apple
+Macintosh family of computers. This software is now available by
+anonymous ftp from ftp.gwu.edu, in the directory pub/ada/gw-adaed/mac,
+and in the Public Ada Library at wuarchive.wustl.edu, in the directory
+languages/ada/compiler/adaed/gwu/mac.
+
+The new release does not add any functionality, but corrects a number of
+bugs and is significantly faster. A "fat binary" version for 68020/30/40
+and PPC Macs can be found in gwadafat.sit; a special version for
+68000 Macs is in gwada68k.sit. System 7 or higher is required.
+
+Thanks again to Fabrizio Oddone of Turin, Italy, for the splendid
+maintenance work on this system!
+
+This project was sponsored by The George Washington University, and in
+part by the United States Advanced Research Projects Agency (ARPA) under
+contract #FY3592-93-10234, administered by Phillips Laboratory, Kirtland
+AFB, NM 87117-5776. 
+
+Copyright (C) 1994, Manuel A. Perez and Michael Bliss Feldman 
+
+This program is free software, distributed under the terms of the GNU 
+General Public License as published by the Free Software Foundation. 
+
+This program is distributed in the hope that it will be useful, but WITHOUT 
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+FOR A PARTICULAR PURPOSE. 
+
+---------------------------------------------------------------------------
+
+I. ABOUT THE GW-Ada/Ed-Mac DEVELOPMENT ENVIRONMENT 
+
+GW-Ada/Ed-Mac is a development environment built around the New York
+University (NYU) AdaEd compiler/interpreter. It allows the editing,
+compiling, binding and execution of Ada 83 programs. GW-Ada/Ed-Mac was
+supervised by Prof. Michael B. Feldman. Manuel A. Perez, a GWU doctoral
+student in Computer Science, is responsible for the Macintosh version,
+including the editor and developer shell. Fabrizio Oddone of Turin,
+Italy, has been maintaining the system recently.
+
+NYU's original README file is included in the distribution, for your
+information. In summary, Ada/Ed was developed several years ago, and
+validated under the Ada Compiler Validation Capability suite then in
+effect. Ada/Ed is a full-scale compiler, which generates instructions for
+a virtual machine. Execution is carried out by an interpreter for this
+virtual machine. 
+
+Ada/Ed handles nearly all of Ada 83, including tasking and generics.
+Not supported are a number of machine-dependent features, most of which
+are not sensible to support in a virtual-machine environment.
+
+The multi-window editor follows the usual Macintosh menu and command-key
+conventions. Source files are limited to 32k characters, however. 
+Standard output is sent to a subset-VT100 console window, so that cursor 
+addressing and other ANSI escape sequences are supported. We think that
+the system will be fun to use and as easy to work with as most Mac 
+programs are. Students who have tested the system comment that it, like
+GW-Ada/Ed-DOS, is a great way to learn Ada.
+
+---------------------------------------------------------------------------
+
+II. ACQUIRING AND INSTALLING GW-Ada/Ed-Mac FROM AN FTP ARCHIVE 
+
+System requirements - any Mac with System 7, and at least 2.5Mb of RAM.
+You should have around 10mb free space on your hard disk, too.
+The program will not run under System 6.
+
+The distribution contains the files given below. If you are interested
+only in using GW-Ada/Ed-Mac but not modifying it, you need not copy the
+first file or c-source, which contains the source code (in C and C++).
+
+-rwxrwxr-x   1 root     adauser  2020836 Apr 27  1995 GWAdaSource.sea.hqx
+-rwxrwxr-x   1 root     adauser    94720 Apr 27  1995 adademos.sea
+-rwxrwxr-x   1 root     adauser  1006328 Apr 27  1995 c-source.sit
+-rwxrwxr-x   1 root     adauser   731392 Dec 12 03:53 gwada68k.sit
+-rwxrwxr-x   1 root     adauser  1200256 Dec 12 03:53 gwadafat.sit
+-rwxrwxr-x   1 root     adauser      366 Apr 27  1995 packing.list.mac
+-rwxrwxr-x   1 root     adauser     6654 Apr 27  1995 readme.mac
+-rwxrwxr-x   1 root     adauser    24329 Apr 27  1995 readme.nyu
+-rwxrwxr-x   1 root     adauser    12215 Apr 27  1995 userman.mac
+
+readme.mac gives brief instructions for unpacking and installing the
+system.  
+
+readme.nyu is the original NYU document for Ada/Ed; you don't need it
+to run this system, but it contains useful background information. 
+
+userman.mac is a brief user manual for GW-Ada/Ed-Mac; you can open it with
+any ASCII editor or Word Processor; we recommend that you open it with the
+GW-Ada/Ed-Mac editor, once you've installed the system.
+
+The files gwadafat.sit and gwada68k.sit are Mac Binary II Stuffit archives. 
+Once you've downloaded the files to your Mac, use Stuffit Expander or
+another recent Stuffit to unpack the distribution.
+
+Once the unpacked system is available on your Mac, start reading the user
+manual, which gives a brief tutorial on using the system.
+
+---------------------------------------------------------------------------
+
+IV. Electronic Discussion Group
+
+We are happy to announce the formation of an automated mailing list
+for discussions about GW-Ada/Ed. We get a lot of repetitive e-mail
+on this subject, so we decided to make the discussions public.
+Several of us at GW will be regularly reading and responding to
+messages from this list. 
+
+To use the list, you must first subscribe. Send an e-mail note to
+listproc@seas.gwu.edu. The subject line must be _empty_; the message
+should contain the 3 lines
+
+help
+help set
+subscribe gw-adaed firstname lastname (substitute your own names!)
+
+The first 2 lines will get you help messages indicating how to use the 
+various options listproc provides; the third line subscribes you to the
+list. This is all automated; our hands do not touch your message.
+
+Once you get an e-mail acknowledgement of your subscription, you can
+write to the list by sending e-mail to gw-adaed@seas.gwu.edu. In messages
+to the list, do _not_ leave the subject line empty.
+
+We hope you will spread around the news of the availability of this list.
+You do _not_ need Usenet news accesss or ftp to join the list; you need
+only to be able to send and receive Internet e-mail.
+
+We hope you enjoy the list, and using GW-Ada/Ed!
+
+------------------------------------------------------------------------

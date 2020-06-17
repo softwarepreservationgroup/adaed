@@ -1,0 +1,902 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem5.stl,v 1.1 90/12/05 16:16:42 ada Exp $
+--
+package body adasem5;
+
+use globals;
+use adasem1;
+use adasem2;
+use adasem3;
+use adasem4;
+use adasem6;
+use adasem7;
+use adasem8;
+use adasem9;
+use adasem10;
+use adasem11;
+use adasem12;
+use adasem13;
+use evalstat;
+use adalib;
+use adaio;
+
+--T+ 5. Statements.
+--S+ 5.1 Simple and Compound Statements - Sequences of Statements
+
+--S+ 5.2 Assign Statement 
+procedure assign_statement(name, expn) ;
+sem_trace_proc_entry(3, "Assign_Statement");
+sem_trace(3, "name: " + str(name) );
+sem_trace(3, "expn: " + str(expn) ) ;
+
+noop_error := false ;			-- To clear previous type errors
+-- Resolve the left-hand side of the assignment
+e1 := resolve1(find_old(name)) ;
+[-, t_l]  := e1 ;
+-- The lhs cannot be a limited type, so remove these from the set.
+t_left := {t in t_l | not is_limited_type(t)} ;			 
+-- Resolve the rhs of the assignment.
+e2 := resolve1(expn) ;
+[-, t_right] := e2 ;
+
+if noop_error then -- Previous error.
+   sem_trace_proc_exit(3, "Assign_Statement");
+   return [];
+end if;	
+
+ok_types := {t1 : t1 in t_left, t2 in t_right |
+				compatible_types(t1, t2)} ;	
+
+-- For the assignment to be unambiguous, the left-hand and right-hand 
+-- sides must have a single compatible interpretation.
+
+if #ok_types = 0 then
+    if #t_l = 1 and #t_left = 0 then 
+       -- worth a special error message.
+       errmsg("Assignment not available on a limited type","","7.4.2") ;
+    else				
+       errmsg("Incompatible types for assignment","","5.2") ;
+    end if;
+   sem_trace_proc_exit(3, "Assign_Statement");
+    return [] ;
+
+elseif #ok_types > 1 then		-- Ambiguous left-hand side.
+    -- Try removing implicit conversions from universal quantitites. 
+
+    e1 := remove_conversions(e1) ;
+    t_left := e1(2) ;
+    if #(ok_types := t_left * ok_types) /= 1 then
+    		errmsg("Ambiguous types for assigment","","5.2") ;
+                sem_trace_proc_exit(3, "Assign_Statement");
+    		return [] ;
+    end if;
+end if;
+
+t1 := arb ok_types ;
+out_context := true ;
+e1 := resolve2(e1, t1) ;
+out_context := false ;
+
+if not is_variable(e1) then
+     errmsg("left-hand side in assignment "," is not a variable","5.2");
+     sem_trace_proc_exit(3, "Assign_Statement");
+     return [] ;
+end if;
+
+-- If the left-hand side is a slice, its bounds must be imposed on 
+-- the right-hand side. We create a subtype of the index type of the
+-- lhs, whose bounds are given by the slice bounds. A special slice-
+-- assignment instruction is emitted, with the following structure:
+--		[ '[..]:=', index, subtype_indication, lhs, rhs]
+
+if is_tuple(e1) and e1(1) = "[..]" then
+	[-, obj, discr_range] := e1 ;
+
+	if is_identifier(discr_range) then
+	    ix := discr_range ;
+	else				-- Explicit range. Create anon.
+	    ix := newat_str();		-- entry for it.
+	    ST(ix) := discr_range ;
+	    ST(ix).root_type := ST(index_type(t1)).root_type ;
+	end if;
+
+	a_type := newat_str();		-- Build constrained array type.
+	ST(a_type) := ["subtype", base_type(t1), 
+	   [[ix], component_type(t1), 1], {}, current_scope, ST(t1).root_type] ;
+	ST(a_type).root_type := ST(t1).root_type ;
+
+	-- Now resolve right-hand side with it.
+        e2 := resolve2(e2, a_type) ;
+
+	-- Label right-hand side with array type.
+	if is_tuple(e2) then 
+            e2(#e2) := t1; 
+        end if;
+
+        return  trace_and_return(3, "Assign_Statement", 
+                ["[..]:=", ix, subtype_expression(ix), obj, e2]);
+
+else		-- Impose the unique type of the lhs on the rhs.
+
+    -- If the left-hand side is a parameter of an unconstrained array
+    -- type, it is valid for the right-hand side to be an aggregate with an
+    -- others choice. The others choice must be transformed into a range choice
+    -- over the parameter. The same applies to an object of an unconstrained
+    -- type that renames an (a priori constrained) other object.
+
+    if  (is_identifier(e1) and 
+	 ST(t1).nature = "array" and 
+	 (ST(e1).nature in ["inout", "out",  "generic_inout"]
+	    or
+	 (ST(e1).nature = "obj" and 
+	  ST(e1).signature /= om)))  -- renaming another object
+     then
+         e2 := replace_others(e2, e1, t1, 1);
+    end if;
+
+    e2 := resolve2(e2, t1);
+end if;
+
+if is_identifier(e2) and is_type(e2) then
+    errmsg("Invalid right-hand side in assignment", "", "5.2") ;
+end if;
+
+-- For array and record assignments, the interpreter obtains the applicable
+-- constraints (bounds and discriminants) from the object on the left-hand side.
+-- For scalar and access types a constraint check is indicated explicitly.
+
+if is_array(t1) or is_record(t1) then
+    rhs := e2 ;
+else
+    -- Apply constraint and try to constant fold.
+    rhs := eval_static(apply_constraint(e2, t1)) ;
+
+    -- If static constant, label right-hand side with its type.
+    if is_value(rhs) and #rhs=2 then rhs with:= t1; end if;
+
+end if;
+-- One difficult case is when then left-hand side is an access type constrained
+-- by discriminants. The values of the discriminants must be retrieved 
+-- explicitly because they do not appear in the component being assigned.
+
+if is_access(t1) and has_dynamic_constraint(ST(t1).designated_type) then
+    -- The right-hand side must be a selected component whose prefix is of a
+    -- record type and whose discriminants may constrain the component.
+    [-, prefix, selector] := e1 ;
+    rtype := base_type(expression_type(prefix)) ;
+    sem_trace_proc_exit(3, "Assign_Statement");
+    return  ["acc:=", prefix, selector, discriminant_list(rtype), rhs] ;
+else
+    sem_trace_proc_exit(3, "Assign_Statement");
+    return  [":=", e1, rhs] ;
+end if; 
+end assign_statement;
+
+procedure has_dynamic_constraint(subtype) ;
+
+if ST(subtype).nature /= "subtype" then return false ;
+elseif is_scalar_type(subtype) then
+    [-, lo, hi] := ST(subtype).signature ;
+    return is_discr_ref(lo) or is_discr_ref(hi);
+elseif is_array(subtype) then
+    return exists i in index_types(subtype) | has_dynamic_constraint(i) ;
+elseif is_record(subtype) then
+       [-, discr_map] := ST(subtype).signature ;
+    return exists [-, v] in discr_map | is_discr_ref(v) ;
+else return false ;
+end if;
+end has_dynamic_constraint; 
+
+procedure replace_others(e2, e1, t1, n) ;
+
+-- Transform an aggregate with a single others choice into an aggregate with
+-- a range choice. Used when assigning to a formal in out with an unconstrained
+-- type (AI-00568). e2 is a partially resolved aggregate expression, e1 is the 
+-- left-hand side, and t1 is its type.
+-- If e2 is a multidimensional aggregate, subaggregates may also be given
+-- by others clauses that must be replaced as well with range choices over the
+-- appropriate indices of t1. n is the dimension currently being converted.
+
+   others_pat := 
+  [["aggregate",
+    [["choice_list", [["others_choice", "..."]  ], "~expn" ] ] 
+   ],
+   {"composite_type"}
+  ];  
+
+if is_tuple( b := treematch(e2, others_pat)) then 
+    -- A binding exists for expn. Build an range choice over the lhs. If the
+    -- lhs is multidimensional, try to replace subaggregates as well.
+    expn := b(1) ;
+    if #index_types(t1) > n then
+        expn := replace_others(expn, e1, t1, n+1) ;
+    end if;
+
+    return  [["aggregate",
+        [["choice_list", [["range_choice",
+            [["'", "RANGE", [e1,  {t1}], ["ivalue", n, "INTEGER"]],
+             {index_types(t1)(n)}
+            ] ] ], expn ] ]
+         ],
+         {"composite_type"}
+        ];     
+else return e2 ;
+end if;
+end replace_others;
+
+procedure treematch(tree, pat) ;
+
+-- Simple tree matching routine, with wildcard (...) and bindings.
+
+if pat = "..." then return [] ;
+elseif is_string(pat) and pat(1) = "~" then return [tree] ;
+
+elseif is_string(tree) and tree=pat then return [ ] ;
+
+elseif is_tuple(tree) and is_tuple(pat) and (l := #tree) = #pat and l > 0 then
+        result :=  [treematch(tree(i), pat(i)): i in [1..l]] ;
+        if #result = l and not (exists x in result | x = om) then
+	    return +/result ;
+        else return om ;
+        end if;
+
+else return  if tree=pat then []  else om end if;
+end if;
+end treematch;
+
+--S+ 5.4 Case Statements
+procedure case_statement(expn, case_nodes) ;
+sem_trace_proc_entry(3, "Case_Statement");
+
+cexp := check_type("discrete_type", expn) ;
+if cexp = [] then				-- type error
+    sem_trace_proc_exit(3, "Case_Statement");
+    return [] ;
+else
+    exptype := expression_type(cexp) ;
+
+    if exptype = "universal_integer" then
+        cexp := specialize(cexp, "INTEGER") ;
+    end if;
+    if not is_static_case_expr(cexp) then 	-- See 5.4(4) and c54a13d
+       exptype := base_type(exptype) ;
+    end if;
+
+    case_list := [[ [adasem(c): c in choices], adasem(stats)] :
+				[choices, stats] in case_nodes] ;
+
+    sem_trace_proc_exit(3, "Case_Statement");
+    return  ["case", cexp] + process_case(exptype, case_list) ;
+end if;
+end case_statement;
+
+procedure process_case(exptype, case_list);
+sem_trace_proc_entry(3, "Process_Case");
+
+--
+-- This procedure is given the type of the case expression and
+-- uses this type to resolve the choices appearing in the case_list.
+-- It also checks that the choices are static expressions and 
+-- constructs the case statement intermediate code.
+-- It is called both for case statements and for variant parts.
+--
+-- The case_list has the form 
+--
+--	case_list ::= [ [choice_list, statement_list] ... ]
+--
+-- where a choice_list is a sequence of choices,
+--
+--	choice_list ::= [choice ...]
+--
+-- each of the form
+--
+--	choice ::= ['simple_choice', simp_expr,   node]
+--		  |['range_coice',   discr_range, node]
+--		  |['others_choice', '',          node]
+--
+-- where -node- is carried along for error reporting purposes.
+-- The case statement intermediate code has the form
+--
+--	case_statement ::= ['case', expr, altlist, others]
+--
+-- where
+--	altlist  ::=  { {choice} -> statement_list}
+-- and 
+--	choice ::=  choiceval | ['range', choiceval,choiceval]
+--
+--
+sem_trace(3,"case exptype: " + str(exptype) );
+--
+-- Check that the case expression is of a discrete type
+-- and that its range is static, and find the length of
+-- the range.
+--
+    invalid_case_type := false;
+    save_node := current_node ;	-- Use node of the choices
+
+    if exptype = "universal_integer" then		-- literal expr
+	exp_base_type := "INTEGER";			-- force INTEGER
+    else
+        exp_base_type := base_type(exptype);
+    end if;
+
+    if not is_discrete_type(exp_base_type) then
+	errmsg("Case expression not of discrete type","","3.7.3, 5.4");
+	invalid_case_type := true;	-- Still check the alternatives
+
+    elseif is_generic_type(exp_base_type) then
+	errmsg("Case expression cannot be of a generic type","","5.4") ;
+  	invalid_case_type := true ;
+    end if;
+
+    [-, exp_lo, exp_hi] := ST(exptype).signature ? [];
+
+    is_static := is_static_subtype(exptype) ;			
+
+    if not is_static then
+
+	[-, exp_lo, exp_hi] := ST(exp_base_type).signature ? [];
+	if not is_value(exp_lo) or not is_value(exp_hi) then
+	    -- This alternative can arise only if the type of the
+	    -- case expression does not have static bounds.  This
+	    -- has alreay been caught, so we give no error message here,
+	    -- but only the choices are type checked and no code put out.
+	    invalid_case_type := true;
+	end if;
+    end if;
+
+    if not invalid_case_type then
+        exp_lov := exp_lo(2);
+        exp_hiv := exp_hi(2);
+        range_size := (exp_hiv - exp_lov + 1) max 0 ;
+    end if;
+ 
+--
+-- Now check each of the case choices against exp_base_type, ensure
+-- that each is static, and construct the case statement code.
+--
+    resolved_case_list := {};
+    others_part := [];
+    is_others_part := false;
+    valset := {};
+    numval := 0;
+    if case_list /= [] then		-- empty case list is allowed
+	last_clist := top(case_list)(1);
+	if #last_clist = 1 and last_clist(1)(1) = "others_choice" then
+	    is_others_part := true;
+	    [-, stmt_list] frome case_list;
+	    others_part +:= stmt_list;	-- pick up others part 
+	end if;
+	for [choice_list, stmt_list] in case_list loop 
+	    choice_alt := {};
+	    for [choice_kind, choice, current_node] in choice_list loop 
+
+            -- Type check the choice and ensure that it is static,
+            -- that it is in the range for the expression subtype, and
+            -- that it appears no more than once as a value possibility.
+
+		case choice_kind 
+		  when "others_choice" => 
+		    errmsg("The choice OTHERS must appear alone and last",
+			   "","3.7.3, 5.4");
+	    	    is_others_part := true;
+		    continue;
+ 
+		  when "simple_choice" => 
+
+		    if choice(1) = "name" and is_identifier(choice(2))
+		    and is_type(choicev:= find_old(choice(2)))
+		    then			
+		      t := choicev ;
+		      if not compatible_types(t, exp_base_type)then
+			   errmsg("choice must have type ",
+			        original_name(exp_base_type), "5.4") ;
+			   choicev := [] ;
+                      end if;
+		    else				
+		        choicev := check_type(exp_base_type, choice);
+		    end if;
+
+		    if choicev = [] or invalid_case_type then
+			continue;
+		    elseif is_value(choicev) then
+			lov := hiv := choicev(2);
+		    elseif is_identifier(choicev) and is_type(choicev)
+		    then			-- discrete range 
+			[-, lov, hiv] := ST(choicev).signature;
+			if is_value(lov) and is_value(hiv) then
+			    [lov, hiv] := [lov(2), hiv(2)];
+			else
+			    errmsg("Case choice not static", "", "3.7.3, 5.4");
+			    continue;
+			end if;
+		    else
+			errmsg("Case choice not static", "", "3.7.3, 5.4");
+			continue;
+		    end if;
+ 
+		  when "range_choice" => 
+		    choicev := check_type(exp_base_type, choice);
+		    if choicev = [] or	invalid_case_type then
+			continue;
+		    else
+			[-,type_mark,[-,choicev1, choicev2]] := choicev ;
+		        if is_value(choicev1) and is_value(choicev2) 
+ 			and is_static_subtype(type_mark)
+		        then
+			    [lov, hiv] := [choicev1(2), choicev2(2)];
+		        else
+			    errmsg("Case choice not static", "", "3.7.3, 5.4");
+			    continue;
+			end if;
+		    end if;
+		end case;
+--
+-- At this point the choice is known to be static and is expressed as
+-- a range [lov, hiv].
+--
+		if is_static and (lov <= hiv) and
+				   ( lov < exp_lov or hiv > exp_hiv)
+		then
+		    errmsg("choice value(s) not in range of static",
+			 " subtype of case expression", "5.4") ;
+		end if;
+		lov max:= exp_lov;	-- Remove junk values from below
+		hiv min:= exp_hiv;	-- Remove junk values from above
+
+		if lov > hiv then	-- Null range -- ignore it.
+		    continue;
+		end if;
+
+-- Ensure that range is disjoint from all others.
+
+		range_choice := hiv > lov;
+		duplicate_choice := false;
+
+		if exists [a, b] in valset | lov >= a and lov <= b then
+		    duplicate_choice := true;
+		    lov := b + 1;
+		end if;
+
+		if range_choice 
+		and
+		   (exists [a, b] in valset | hiv >= a and hiv <= b) 
+		then
+		    duplicate_choice := true;
+		    hiv := a - 1;
+		end if;
+
+		if range_choice
+		and
+		   (exists [a, b] in valset | lov < a and hiv > b)
+		then
+		    duplicate_choice := true;
+		end if;
+
+		if duplicate_choice then
+		    errmsg("Duplicate choice value(s)", "", "3.7.3, 5.4");
+		end if;
+
+		if lov > hiv then	-- Again check for null range
+		    continue;
+		end if;
+
+--
+-- Add interval to set of values seen so far, add the number of choices
+-- to the count, and add to the case alternative.
+--
+		valset with:= [lov, hiv];
+		numval +:= (hiv - lov + 1);
+		choice_alt with:= if lov = hiv then lov
+				  else ["range", lov, hiv] end if;
+
+	    end loop;
+	    resolved_case_list(choice_alt) := stmt_list ;
+	end loop;
+    end if;
+    current_node := save_node ;		
+--
+-- Check that all of the possibilities in the range of the
+-- case expression have been used.
+--
+    if  not invalid_case_type 
+    and 
+	not is_others_part 
+    and 
+	(numval /= range_size or exptype = "universal_integer")
+    then
+	errmsg("Missing OTHERS choice", "","3.7.3, 5.4");
+	others_part +:= [];		-- add null others_part
+    end if;
+--
+    sem_trace_proc_exit(3, "Process_Case");
+    return [resolved_case_list, others_part];
+end process_case;
+
+procedure is_static_case_expr(cexp) ;
+
+-- Determine whether the expression in  a case statement is the name of
+-- an object, a qualification, or a conversion, either with a static subtype,
+-- according to 5.4(4).
+-- See c54a13d.
+
+return (is_identifier(cexp) and is_static_subtype(ST(cexp).type_of))
+       or ((opcode := cexp(1)) = "()" and is_static_case_expr(cexp(2)))
+       or (opcode = "qual_range" and is_static_case_expr(cexp(3)))
+       or (opcode = "convert" and is_static_subtype(cexp(3)))
+       or (opcode = "ivalue") ;
+end is_static_case_expr;
+
+--S+ 5.5 Loop Statements
+procedure loop_statement(iterat, stmts) ;
+
+sem_trace_proc_entry(3, "Loop_Statement");
+
+-- Close loop statement. If label of loop is used by EXIT statement
+-- then emit label definition.
+[used, loop_type, t_def] := ST(current_scope).signature ;
+loop_name := if used then current_scope else om end if;
+
+-- For loops whose iterators are given by a discrete range, an anonymous
+-- type  is generated. Its  type definition is emitted with the loop.
+
+if loop_type /= om then
+    iterat +:= [loop_type, t_def] ;
+end if;
+
+-- Exit from loop scope.
+popscope() ;
+sem_trace_proc_exit(3, "Loop_Statement");
+return  iterat + [stmts, loop_name] ; 
+
+end loop_statement;
+--H+ iter_var 
+procedure iter_var(id, disc_range) ;
+sem_trace_proc_entry(3, "Iter_Var");
+ 
+-- Insert loop variable in scope of loop.
+loop_var := find_new(id) ;
+
+-- If the iteration is given by a discrete range, construct an anonymous
+-- type for it, and save the defining expression. It is  emitted as part 
+-- of the loop header.
+
+iter_type := make_index(disc_range) ;
+
+if (#(top(newtypes)) > 0  and -- might be empty if there was an error in loop
+   top(top(newtypes)) = iter_type) then
+    -- Remove from anonymous types, and save subtype definition.
+    it frome newtypes(#newtypes) ;
+    type_def := subtype_expression(iter_type) ;
+else
+    type_def := [] ;
+end if;
+ 
+ST(loop_var) := ["loop_var", iter_type, [], {}, current_scope, om] ;
+ 
+ST(current_scope).signature +:= [iter_type, type_def] ;
+sem_trace_proc_exit(3, "Iter_Var");
+return loop_var ;
+ 
+end iter_var;
+
+--S+ 5.6 Block Statements
+procedure block(decls,stats, handler) ;
+sem_trace_proc_entry(3, "Block");
+
+check_incomplete_decls(current_scope,decls) ;
+
+-- Constraints on allocators appearing in the statement part may generate
+-- anonymous types which need not  be emitted, because they are  replaced
+-- in the aix by the corresponding subtype expressions.
+newtypes(#newtypes) := [] ;
+
+-- Insert the proper end statement at each exit from the block. Exits
+-- include  the statement list and each one of the exception handlers.
+-- For procedures, the end statement is a RETURN. 
+
+if is_proc(current_scope) then
+   -- Insert return statement at end.
+   if ST(current_scope).nature in {"function", "generic_function"} then
+	return end_function(decls, stats, handler) ;
+   else
+       exit_stat := return_statement(om);	
+   end if;
+
+elseif ST(current_scope).nature in {"task_obj", "task_type"} then
+
+   exit_stat := terminate_statement() ;	
+
+else  					-- scope is a block.
+   exit_stat := ["end"] ;
+end if;
+
+stats with:= exit_stat ;
+
+if not is_empty(handler) then
+    [[-,  hlist]] := handler ;
+    new_hlist := [] ;
+    for [e_list, s] in hlist loop 
+        new_hlist with:= [e_list, s with exit_stat] ;
+    end loop;
+    handler := [["exception", new_hlist]];
+end if;
+
+sem_trace_proc_exit(3, "Block");
+return [decls, stats, handler] ; 
+
+end block;
+
+--H+ new_block
+procedure new_block(id) ;
+sem_trace_proc_entry(3, "New_Block");
+
+-- Block names are declared when procedure containing them is entered.
+block_id := find_old(id) ;
+
+ST(block_id).nature := "block" ;
+
+newscope(block_id) ;
+
+sem_trace_proc_exit(3, "New_Block");
+return block_id ;
+end new_block;
+
+--H+ end_function
+procedure end_function(decls, stats, handler) ;
+sem_trace_proc_entry(3, "End_Function");
+sem_trace(3, "decls: " + str(decls) );
+sem_trace(3, "stats: " + str(decls) );
+sem_trace(3, "handler: " + str(decls) );
+
+-- For functions, the exception PROGRAM_ERROR is raised if an explicit 
+-- RETURN statement is not found. This is implemented by appending the
+-- raise statement to each possible exit path.
+
+if not has_return(stats) then
+    errmsg("function body must contain a return statement", "","6.5");
+end if;
+exit_stat := ["raise", "PROGRAM_ERROR", "missing RETURN"] ;
+
+if top(stats)(1) /= "return" then
+    stats with:= exit_stat ;
+end if;
+
+if not is_empty(handler) then
+    [[-,  hlist]] := handler ;
+    new_hlist := [] ;
+    for [e_list, s] in hlist loop 
+        if top(s)(1) /= "return" then 
+             s with:= exit_stat; 
+        end if;
+        new_hlist with:= [e_list, s] ;
+    end loop;
+    handler := [["exception", new_hlist]];
+end if;
+
+sem_trace_proc_exit(3, "End_Function");
+return [decls,  stats, handler] ; 
+
+end end_function;
+--H+ has_return
+procedure has_return(stats) ;
+
+-- Ascertain that the statement part of a function body contains a return
+-- statement (simple recursive tree traversal).
+return 
+       if not is_tuple(stats) and not is_set(stats) then false 
+       elseif is_tuple(stats) and 
+	      is_string(stats(1)) and stats(1) = "return" then true 
+       else (exists stat in stats | has_return(stat) )
+       end if;
+end has_return;
+
+--S+ 5.7 Exit Statements
+procedure exit_statement(id,cond);
+sem_trace_proc_entry(3, "Exit_Statement");
+
+-- An unqualified exit refers to the innermost enclosing scope.
+
+if id = [] then
+    if exists scope in open_scopes | ST(scope).type_of = "loop" then
+	-- Indicate that loop label must be emitted.
+	ST(scope).signature(1) := true ;
+    else
+	errmsg("EXIT statement not in loop","","5.7") ;
+	return [] ;
+    end if;
+else
+    -- Verify that loop label exists.
+    if exists scope in open_scopes | ST(scope).type_of = "loop" and
+      original_name(scope) = id then
+	ST(scope).signature(1) := true ;
+    else
+	errmsg("Invalid loop label in EXIT: ", id, "5.5, 5.7") ;
+	return [] ;
+    end if;
+end if;
+
+-- Now verify that the exit statement does not try to exit from
+-- a procedure, task, package or accept statement. This amounts
+-- to requiring that the scope stack contain only blocks up to the
+-- scope being exited.
+
+for sc in open_scopes loop 
+    if sc = scope then exit;
+    elseif ST(sc).nature /= "block" then
+	errmsg("attempt to exit from ", ST(sc).nature, "5.7") ;
+	exit;
+    end if;
+end loop;
+
+sem_trace_proc_exit(3, "Exit_Statement");
+return if cond = [] then ["exit", scope] 
+		    else ["exit", scope, cond]  end if;
+ 
+end exit_statement;
+ 
+--S+ 5.8 Return Statements
+procedure return_statement(exp1);
+sem_trace_proc_entry(3, "Return_Statement");
+
+-- Find subprogram or accept statement which is enclosing scope, and keep
+-- track of the  number of blocks that have to be exited.
+
+    certain := exists proc_name = open_scopes(i) | 
+				(nat:=ST(proc_name).nature) /= "block" ;
+
+    out_depth := i - 1 ;
+
+    -- Exception handlers are blocks for syntactic purposes, but not at 
+    -- run-time. They must be excluded from this count.
+    -- The same is true for loops.
+
+    for j in [1..i] | ST(open_scopes(j)).type_of in {"handler","loop"} loop 
+        out_depth -:= 1 ;
+    end loop;
+
+    if nat in {"function", "procedure", "generic_function",
+      "generic_procedure"} then
+        instr_name := "return" ;
+    elseif nat in {"entry", "entry_family"}   then
+        instr_name := "entry_return" ;
+    else
+	errmsg("invalid context for RETURN statement","","5.8") ;
+	return [] ;
+    end if;
+    r_type := if nat = "entry_family" then "none" 
+				      else ST(proc_name).type_of end if;
+    if exp1 = om then
+        ret_exp := om ;
+
+    elseif exp1 /= [] then
+	if r_type = "none" then 
+	    errmsg("Procedure cannot return value", "", "5.8") ;
+	    ret_exp := om ;
+        else
+	    -- If the value returned is an aggregate, there is no sliding
+	    -- for it, and named associations can appear together with 
+	    -- "others" (see 4.3.2(6)).
+
+	    full_others := true ;
+	    ret_exp := check_type(r_type, exp1) ;
+            full_others := false ;	
+        end if;
+    elseif r_type /= "none" then
+	errmsg("Function must return value","","5.8") ;
+	ret_exp := [] ;
+    end if;
+
+   sem_trace_proc_exit(3, "Return_Statement");
+   return [instr_name, proc_name, out_depth, ret_exp] ;
+
+end return_statement;
+--H+ label_decl
+procedure label_decl(id_list) ;
+sem_trace_proc_entry(3, "Label_Decl");
+
+for id in id_list loop 
+
+   if id in top(lab_seen) then
+        errmsg("Duplicate label in program unit: ", id ,"5.1") ;
+    else
+	lab_seen(#lab_seen) with:= id ;
+        label := find_new(id) ;
+        ST(label).nature := "label" ;
+        ST(label).label_status := "unreachable" ;
+    end if;
+
+end loop;
+sem_trace_proc_exit(3, "Label_Decl");
+end label_decl;
+
+--H+ lab_init
+procedure lab_init ;
+	lab_seen with:= {} ;
+end lab_init;
+ 
+--H+ lab_end 
+procedure lab_end ;
+old_labels frome lab_seen ;
+end lab_end;
+--S+ 5.9 Goto Statements
+procedure goto_statement(id) ;
+
+sem_trace_proc_entry(3, "Goto_Statement");
+
+label := find_old(id) ;
+if ST(label).nature /= "label" then
+    errmsg(id, " is not a label", "5.9") ;
+    
+elseif ST(label).label_status = "unreachable"  then
+    errmsg(id, " is not a reachable label", "5.9") ;
+
+else
+    for s in open_scopes loop 
+
+	if s = ST(label).scope_of then
+             exit;
+        elseif ST(s).nature /= "block" then
+	    errmsg("attempt to jump out of ", ST(s).nature, "5.9") ;
+	end if;
+
+    end loop;   
+end if;
+sem_trace_proc_exit(3, "Goto_Statement");
+return ["goto", label] ;
+
+end goto_statement;    
+--T+ Utility Procedures
+
+--H+ is_variable
+procedure is_variable(xpr) ;
+sem_trace_proc_entry(3, "Is_Variable");
+ 
+-- Verify that an expression is a variable name. This is called for
+-- assignment statements, when validating  out and inout parameters in a
+-- procedure or entry call, and the instantiation of generic inout parms.
+ 
+ return  trace_and_return(3, "Is_Variable",    
+    if is_identifier(xpr)
+       then ST(xpr).nature in {"obj", "inout", "out", "generic_inout"}
+    else
+        case xpr(1) 
+
+	  when "[]", "[..]" => is_variable(xpr(2))
+	    
+	  when "."  	    => is_variable(xpr(2))
+			       and ST(xpr(3)).nature = "obj"
+
+	  when "@"	    =>  is_identifier(access := xpr(2)) or 
+				is_variable(access) or
+				-- More detailed check needed here.
+		    		(is_tuple(access) and access(1) = "call" 
+		    		and is_access(ST(access(2)).type_of))
+
+	  when "convert"    =>  is_variable(xpr(4))
+
+	  otherwise 	    => false
+         end case
+
+    end if);
+
+end is_variable;
+--H+ is_static_subtype
+procedure is_static_subtype(subtype) ;
+
+bt := ST(subtype).type_of ;
+if is_generic_type(bt) 
+   or not is_scalar_type(bt)  -- RM 4.9 (11)
+then 
+    return false ;
+elseif bt = subtype then
+    return true ;
+else
+   [-, lo, hi] := ST(subtype).signature ;
+   return is_static_subtype(bt) and
+	  is_value(lo) and is_value(hi) ;
+end if;
+
+end is_static_subtype;
+
+end adasem5;

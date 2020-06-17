@@ -1,0 +1,5 @@
+echo "This program has no error handling...you can check some of the"
+echo "constraint errors with it"
+adacomp -nl Navy Navy
+adabind Navy
+adaexec Navy

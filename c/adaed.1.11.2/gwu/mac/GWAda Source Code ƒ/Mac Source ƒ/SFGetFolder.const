@@ -1,0 +1,1 @@
+/* SFGetFolder.const - constants shared between SFGetFolder.c and .r */#define	kSelectItem			10#define	kSFDlg				30128		/* SFGetFolder */#define	kDeskStrRsrc		30129#define kSFPut				30130		/* SFPut */

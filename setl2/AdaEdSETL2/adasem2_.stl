@@ -1,0 +1,6 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem2_.stl,v 1.1 90/12/05 16:16:19 ada Exp $
+--
+package adasem2;
+   procedure process_pragma(node) ;
+end adasem2;

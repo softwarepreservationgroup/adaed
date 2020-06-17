@@ -1,0 +1,1 @@
+--::::::::::--phil.ads--::::::::::PACKAGE Phil IS    TASK TYPE Philosopher IS        ENTRY Come_To_Life (My_ID :      Positive;                         Chopstick1 : Positive;                        Chopstick2 : Positive);   END Philosopher;   TYPE States IS (Breathing, Thinking, Eating, Done_Eating,                    Got_One_Stick, Got_Other_Stick); END Phil;

@@ -1,0 +1,21 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adalex_.stl,v 1.1 90/12/05 16:15:15 ada Exp $
+--
+-- Copyright 1990. Ada Project, Courant Institute, New York University
+-- 
+
+package adalex;
+   var
+     id_sym,
+     char_sym,
+     string_sym,
+     semi_sym,
+     eoft_sym,
+     reserved_syms,
+     name_map ;
+
+   procedure get_name(tok_val);
+   procedure gettok;
+   procedure init_lex;
+end adalex;
+

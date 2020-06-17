@@ -1,0 +1,15 @@
+Executing file  NYU Ada/Ed 1.11 SUN UNIX Version
+ADAfile:	t.ada
+ASTfile:	
+AISfile:	t.ais
+LIBfile:	t.lib
+	
+	
+*** Warning, could not read LIB file /cs.b/ada/banner/setl2/sem/predef.lib
+    1   procedure man is
+    2   begin raised constraint_error;
+                   ^
+*** Error: Reserved word "RAISE" misspelled
+    3   end;
+   
+  1 translation error detected

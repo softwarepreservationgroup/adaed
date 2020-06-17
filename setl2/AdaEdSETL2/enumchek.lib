@@ -1,0 +1,154 @@
+{[["spec" "IO_EXCEPTIONS"]
+  "/u/banner/setl2/sem/io_exceptions.ais"
+ ]
+ [["subprog spec" "ENUM_CHECK"]
+  "enumchek.ais"
+ ]
+ [["spec" "DIRECT_IO"]
+  "/u/banner/setl2/sem/direct_io.ais"
+ ]
+ [["spec" "TEXT_IO"]
+  "/u/banner/setl2/sem/text_io.ais"
+ ]
+ [["subprog" "ENUM_CHECK"]
+  "enumchek.ais"
+ ]
+ [["spec" "SEQUENTIAL_IO"]
+  "/u/banner/setl2/sem/sequential_io.ais"
+ ]
+ [["spec" "CALENDAR"]
+  "/u/banner/setl2/sem/calendar.ais"
+ ]
+ [["subprog" "UNCHECKED_DEALLOCATION"]
+  "/u/banner/setl2/sem/unchecked.ais"
+ ]
+ [["subprog" "UNCHECKED_CONVERSION"]
+  "/u/banner/setl2/sem/unchecked.ais"
+ ]
+ [["subprog spec" "UNCHECKED_CONVERSION"]
+  "/u/banner/setl2/sem/unchecked.ais"
+ ]
+ [["body" "REPORT"]
+  "report.ais"
+ ]
+ [["subprog spec" "UNCHECKED_DEALLOCATION"]
+  "/u/banner/setl2/sem/unchecked.ais"
+ ]
+ [["body" "DIRECT_IO"]
+  "/u/banner/setl2/sem/direct_io.ais"
+ ]
+ [["body" "TEXT_IO"]
+  "/u/banner/setl2/sem/text_io.ais"
+ ]
+ [["body" "SEQUENTIAL_IO"]
+  "/u/banner/setl2/sem/sequential_io.ais"
+ ]
+ [["spec" "SYSTEM"]
+  "/u/banner/setl2/sem/system.ais"
+ ]
+ [["spec" "REPORT"]
+  "report.ais"
+ ]
+ [["body" "CALENDAR"]
+  "/u/banner/setl2/sem/calendar.ais"
+ ]
+}
+{}
+{}
+{[["spec" "IO_EXCEPTIONS"]
+  {}
+ ]
+ [["subprog spec" "ENUM_CHECK"]
+  {}
+ ]
+ [["spec" "DIRECT_IO"]
+  {["spec" "IO_EXCEPTIONS"]}
+ ]
+ [["spec" "TEXT_IO"]
+  {["spec" "IO_EXCEPTIONS"]}
+ ]
+ [["subprog" "ENUM_CHECK"]
+  {["subprog spec" "UNCHECKED_CONVERSION"] ["spec" "REPORT"]}
+ ]
+ [["spec" "SEQUENTIAL_IO"]
+  {["spec" "IO_EXCEPTIONS"]}
+ ]
+ [["spec" "CALENDAR"]
+  {}
+ ]
+ [["subprog" "UNCHECKED_DEALLOCATION"]
+  {}
+ ]
+ [["subprog" "UNCHECKED_CONVERSION"]
+  {}
+ ]
+ [["subprog spec" "UNCHECKED_CONVERSION"]
+  {}
+ ]
+ [["body" "REPORT"]
+  {["spec" "TEXT_IO"] ["spec" "CALENDAR"]}
+ ]
+ [["subprog spec" "UNCHECKED_DEALLOCATION"]
+  {}
+ ]
+ [["body" "DIRECT_IO"]
+  {["spec" "IO_EXCEPTIONS"]}
+ ]
+ [["body" "TEXT_IO"]
+  {["spec" "IO_EXCEPTIONS"]}
+ ]
+ [["body" "SEQUENTIAL_IO"]
+  {["spec" "IO_EXCEPTIONS"]}
+ ]
+ [["spec" "SYSTEM"]
+  {}
+ ]
+ [["spec" "REPORT"]
+  {}
+ ]
+ [["body" "CALENDAR"]
+  {}
+ ]
+}
+{[["body" "REPORT"]
+  {["body" "TEXT_IO"] ["body" "CALENDAR"]}
+ ]
+}
+[["spec" "IO_EXCEPTIONS"]
+ ["spec" "SYSTEM"]
+ ["spec" "DIRECT_IO"]
+ ["body" "DIRECT_IO"]
+ ["spec" "SEQUENTIAL_IO"]
+ ["body" "SEQUENTIAL_IO"]
+ ["spec" "TEXT_IO"]
+ ["body" "TEXT_IO"]
+ ["spec" "CALENDAR"]
+ ["body" "CALENDAR"]
+ ["subprog spec" "UNCHECKED_DEALLOCATION"]
+ ["subprog spec" "UNCHECKED_CONVERSION"]
+ ["subprog" "UNCHECKED_DEALLOCATION"]
+ ["subprog" "UNCHECKED_CONVERSION"]
+ ["spec" "REPORT"]
+ ["body" "REPORT"]
+ ["subprog spec" "ENUM_CHECK"]
+ ["subprog" "ENUM_CHECK"]
+]
+{["subprog spec" "ENUM_CHECK"] ["spec" "DIRECT_IO"] ["subprog" "ENUM_CHECK"]
+ ["spec" "SEQUENTIAL_IO"] ["subprog spec" "UNCHECKED_CONVERSION"]
+ ["subprog" "UNCHECKED_DEALLOCATION"] ["subprog" "UNCHECKED_CONVERSION"]
+ ["subprog spec" "UNCHECKED_DEALLOCATION"] ["body" "DIRECT_IO"]
+ ["body" "SEQUENTIAL_IO"]
+}
+{}
+{["DEVICE_ERROR" "IO_EXCEPTIONS.DEVICE_ERROR#36"]
+ ["PRIORITY" "SYSTEM.PRIORITY#95"]
+ ["STATUS_ERROR" "IO_EXCEPTIONS.STATUS_ERROR#32"]
+ ["SYSTEM_ERROR" "SYSTEM.SYSTEM_ERROR#96"]
+ ["MODE_ERROR" "IO_EXCEPTIONS.MODE_ERROR#33"]
+ ["TIME_ERROR" "CALENDAR.TIME_ERROR#463"]
+ ["END_ERROR" "IO_EXCEPTIONS.END_ERROR#37"]
+ ["DATA_ERROR" "IO_EXCEPTIONS.DATA_ERROR#38"]
+ ["NAME_ERROR" "IO_EXCEPTIONS.NAME_ERROR#34"]
+ ["LAYOUT_ERROR" "IO_EXCEPTIONS.LAYOUT_ERROR#39"]
+ ["USE_ERROR" "IO_EXCEPTIONS.USE_ERROR#35"]
+}

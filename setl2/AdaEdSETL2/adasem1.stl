@@ -1,0 +1,1785 @@
+--Source: /cs.a/ada/ada/src/hll/adasem1.stl,v $ $State: Exp $
+--
+
+package body adasem1;
+
+use globals;
+use adautil;
+use adaarith;
+use adaio;
+use adasem2;
+use adasem3;
+use adasem4;
+use adasem5;
+use adasem6;
+use adasem7;
+use adasem8;
+use adasem9;
+use adasem10;
+use adasem11;
+use adasem12;
+use adasem13;
+use evalstat;
+
+procedure node_kind(node);
+  return ast(node)(1);
+end node_kind;
+
+procedure record_feature_use(node_type);
+ return;
+ if feature_option  then
+    feature_use_map(node_type) +:= 1;
+  end if;
+end record_feature_use;
+
+procedure type_precision(t);
+   return ST(t).signature.precision_of(2);
+end type_precision;
+
+procedure index_types(array_type);
+   return ST(array_type).signature(1);
+end index_types ;
+
+procedure index_type(array_type); 
+   return ST(array_type).signature(1)(1);
+end index_type;
+
+procedure component_type(array_type);
+   return ST(array_type).signature(2);
+end component_type;
+
+procedure no_dimensions(array_type);
+   return (#index_types(array_type));
+end no_dimensions;
+
+procedure discriminant_list(record);
+   return [n : [-, n, -] in ST(record).signature.invariant_part |
+	   			ST(n).nature = "discriminant"];
+end discriminant_list;
+
+procedure top(x);
+  return x(#x);
+end top;
+
+procedure is_empty(node);
+   return (node=[]);
+end is_empty;
+
+procedure has_discriminants(record) ;
+  return (exists [-, n, -] in ST(ST(record).root_type).signature.invariant_part
+		 | ST(n).nature = "discriminant");
+end has_discriminants;
+
+procedure is_range_attribute(e) ;
+   return 
+      (is_tuple(e) and e(1) = "'" and e(2) = "RANGE");
+end is_range_attribute;
+
+
+procedure is_comp_unit ;
+  return (#scope_st = 0) ;
+end is_comp_unit;
+
+--S+ Miscellaneous type predicates.
+procedure is_access(name) ; 
+    return ST(ST(name).root_type).nature = "access";
+end is_access;
+
+procedure is_identifier(name) ; 
+  return is_string(name);
+end is_identifier;
+
+procedure is_literal(name) ; 
+  return (is_identifier(name) and ST(name).nature = "literal");
+end  is_literal;
+
+procedure is_overloaded(name) ; 
+  return (is_set(name));
+end is_overloaded;
+
+procedure is_constant(name) ;
+    return (is_identifier(name) and ST(name).nature = "constant");
+end is_constant ;
+
+procedure is_proc(proc_name) ;
+  return ST(proc_name).nature in
+        {"procedure", "function","generic_procedure", "generic_function"};
+end is_proc;
+
+procedure is_anonymous(typ) ; 
+  return (original_name(typ) = "");
+end is_anonymous;
+
+procedure is_first_named_subtype(typ);  
+   return (is_anonymous(base_type(typ)));
+end is_first_named_subtype;
+
+procedure is_array(typ) ;  
+  return ST(ST(typ).root_type).nature ="array";
+end is_array;
+
+procedure is_formal(id) ;
+ return (ST(id).nature in ["in", "out", "inout"]);
+end is_formal;
+
+procedure is_anonymous_task(name) ;
+  return
+    (is_task_type(name) and "task_type:" in original_name(name));
+end is_anonymous_task;
+	
+procedure is_integer_type(x) ;
+  return 
+    (x in {"INTEGER","SHORT_INTEGER","LONG_INTEGER","universal_integer"});
+end is_integer_type;
+
+procedure static_expression(x); 
+   return (is_value(x));
+end static_expression;
+
+-- Added for SofTech Task4 - tracing facility.
+-- A filter: Global cdebug2 must be greater than the first argument,
+-- or no action taken.
+
+procedure sem_trace(level, msg);
+if cdebug2 > level then 
+    printa(errfile, "          "+  msg) ;
+end if;
+end sem_trace;
+
+procedure sem_trace_pp(level, label, object);
+if cdebug2 > level then 
+    printa(errfile, "          "+  label) ;
+    pretty_print(errfile, object);
+end if;
+end sem_trace_pp;
+
+procedure sem_trace_proc_entry(level, proc);
+
+if cdebug2 > level then 
+    printa(errfile, "ENTER   :", proc) ;
+end if;
+end sem_trace_proc_entry;
+
+procedure sem_trace_proc_exit(level, proc);
+if cdebug2 > level then 
+    printa(errfile, "EXIT    :", proc) ;
+end if;
+end sem_trace_proc_exit;
+
+-- SEM_TRACEn has "n" proper arguments. 
+-- These trace procedure always have a first integer argument, 
+-- that gives the trace level.
+
+procedure sem_trace2(m1,m2,m3);
+if cdebug2 > m1 then    
+   printa(errfile, "          ", m2,m3) ;
+end if;
+end sem_trace2;
+
+procedure sem_trace3(m1,m2,m3,m4);
+if cdebug2 > m1 then    
+   printa(errfile, "          ", m2,m3,m4) ;
+end if;
+end sem_trace3;
+
+-- Tracing of representations (adasem13.stl) is only done
+--    when SEMTRACE3 > 0.
+-- Note: this may be called BEFORE SEMTRACE3 is set, 
+-- during predef compilations, so the SEMTRACE3?0 is *necessary*.
+-- The parameter level is always 0 right now, but we leave it in
+-- for compatibility with other trace procedure, and for future use.
+
+procedure repr_trace_proc_entry(level, proc);
+if semtrace3?0 > level then 
+    printa(errfile, "ENTER   :", proc) ;
+end if;
+end repr_trace_proc_entry;
+
+procedure repr_trace_proc_exit(level, proc);
+if semtrace3?0 > 0 then 
+    printa(errfile, "EXIT    :", proc) ;
+end if;
+end repr_trace_proc_exit;
+
+--T+ proc INIT_SEM : primary initialization procedure
+-- This is the primary initialization procedure.  It is called
+-- when the compiler is initialized.
+--
+procedure init_sem;
+ 
+    sem_trace_proc_entry(5, "Init_Sem");
+
+    standard := "STANDARD#0";
+
+    boolean_ops    := {"not","and", "or", "xor"};
+    short_circ_ops := { "andthen", "orelse"};
+    equal_ops      := {"=", "/=", "in", "notin"};
+    order_ops      := {"<", "<=", ">=", ">"};
+    arith_ops      := {"+u","-u","abs","+", "-", "*", "/"};
+    expon_ops      := {"**"};
+    mod_ops        := {"mod", "rem"};
+    concat_ops     := {"&", "&ac", "&ca", "&cc"};
+
+ 
+    other_attributes := {"ADDRESS", "IMAGE"};
+
+    u_integer_attributes := {
+        "AFT",           "COUNT",        "DIGITS",       "EMAX",     
+	"FIRST_BIT",     "FORE",         "LAST_BIT",     "LENGTH",      
+        "MACHINE_EMAX",  "MACHINE_EMIN", "MACHINE_MANTISSA", 
+        "MACHINE_RADIX", "MANTISSA",     "POS",          "POSITION",
+        "SAFE_EMAX",     "SIZE",         "STORAGE_SIZE", "WIDTH"
+		};
+
+    overloaded_attributes := {
+	"BASE",          "FIRST",        "LAST",          "PRED",   
+	"RANGE",         "SUCC",         "VAL",           "VALUE" 
+		};
+    float_attributes := {
+	"DELTA",         "EPSILON",   "LARGE",   "SMALL", "SAFE_LARGE", 
+        "SAFE_SMALL"
+		};
+
+    boolean_attributes := {
+	"CONSTRAINED", "MACHINE_OVERFLOWS", "MACHINE_ROUNDS",
+	"CALLABLE",    "TERMINATED"
+		};
+ 
+    predefined_types :=
+	 {"BOOLEAN", "CHARACTER", "DURATION", "FLOAT", "LONG_FLOAT",
+	  "INTEGER", "$FIXED", "NATURAL", "POSITIVE",
+	  "STRING",  "universal_integer", "universal_real", 
+	   "discrete_type", "universal_fixed", 
+	   "string_type", "array_type", "null_type",  "any", "none"} ;
+
+
+    exceptions := { "CONSTRAINT_ERROR", "NUMERIC_ERROR", 
+		    "PROGRAM_ERROR",
+	            "STORAGE_ERROR", "TASKING_ERROR" };       
+
+
+    attributes := other_attributes + u_integer_attributes +
+	overloaded_attributes + boolean_attributes + float_attributes;
+ 
+ 
+    rep_clause_info := {};
+    forced    := {};
+    representation := {};
+    emit_repr := [] ;
+    delayed_reprs := [];
+    types_not_chosen_yet := {};
+
+    ST := {};
+    declared  := {};
+    scope_st  := [];
+    newtypes  := [];
+    proc_stack := [] ;						
+    stmlabs   := {};
+    lab_scope_stk := [];
+    lab_scope_map := [];
+    lab_seen	  := [];
+    goto_stmts    := [];
+    current_node  := [];
+    new_stubs  := [] ;
+    unit_name  := ["",""];
+    unit_type  := "";
+    all_vis    := {};
+    versions_used := {};
+ 
+    separate   := false;
+    visible    := {};
+     
+    [current_scope, name_prefix, open_scopes, used_mods, vis_mods, suffix] :=
+    ["STANDARD#0", "", ["STANDARD#0", "UNMENTIONABLE#0"], [], ["ASCII"], "" ];
+
+    noop_error := false ;
+    is_attribute_prefix := false ;
+    out_context := false ;				      
+    full_others := false;		-- common case for assignment.
+    fold_context := true ;		-- Everywhere but for conformance
+
+    delay_day :=  fix_fri(86400, delay_small);
+
+    init_symbtab := {
+	["INTEGER", ["type", "INTEGER",
+            ["range", ["ivalue", ada_min_integer],
+		      ["ivalue", ada_max_integer] ]]],
+	["LONG_INTEGER", ["type", "INTEGER",
+            ["range", ["ivalue", ada_min_integer],
+		      ["ivalue", ada_max_integer] ]]],
+	["SHORT_INTEGER", ["type", "SHORT_INTEGER",
+            ["range", ["ivalue", -2 ** 15],
+		      ["ivalue", 2 ** 15 -1] ]]],
+	["FLOAT",   ["type", "FLOAT",
+	    ["digits", ["ivalue", float_first],
+		       ["ivalue", float_last], 
+		       ["ivalue", float_digits],
+		       ["ivalue", float_digits]]]],
+	["LONG_FLOAT",   ["type", "LONG_FLOAT",
+	    ["digits", ["ivalue", long_float_first],
+		       ["ivalue", long_float_last], 
+		       ["ivalue", long_float_digits],
+		       ["ivalue", long_float_digits]]]],
+	["$FIXED",  ["type", "$FIXED",
+	    ["delta", ["ivalue",[ -1, 1], "universal_real"],
+		      ["ivalue",[  1, 1], "universal_real"],
+		      ["ivalue",[  1, 1073741824]], 
+		      ["ivalue",[1,1073741824]]  ] ] ],
+	["universal_fixed",  ["type", "universal_fixed",
+	    ["delta", ["ivalue",[ -1, [1]], "universal_fixed"],
+		      ["ivalue",[  1, [1]], "universal_fixed"],
+		      ["ivalue",[  0, 1]], 
+		      ["ivalue",[0,1]] ] ]],
+	["NATURAL",   ["subtype", "INTEGER",
+	    ["range", ["ivalue", 0], ["ivalue", ada_max_integer] ]]],
+	["POSITIVE",  ["subtype", "INTEGER",
+	    ["range", ["ivalue", 1], ["ivalue", ada_max_integer] ]]],
+	["STRING" , ["array", "STRING", [["POSITIVE"], "CHARACTER"]]],
+	["universal_integer", ["type", "INTEGER",
+            ["range", ["ivalue", ada_min_integer],
+		      ["ivalue", ada_max_integer] ]]],
+	["universal_real",   ["type", "LONG_FLOAT",
+	    ["digits", ["ivalue", long_float_first],
+		       ["ivalue", long_float_last], 
+		       ["ivalue", long_float_digits],
+		       ["ivalue", long_float_digits]]]],
+	["string_type", ["array", "string_type",[["POSITIVE"],
+					       "character_type"]]],
+        ["character_type", ["enum", "character_type", [], 
+			    {}, om, "character_type"]],
+        ["array_type",  ["array", "array_type", [["any"], "any"]]],
+        ["null_type",   ["some_access_type", "null_type", "any"]],
+	["discrete_type", ["type", "discrete_type"]],
+ 	["composite_type", ["type", "composite_type", [], {}, om,
+ 							"composite_type"]],
+	["boolean_type", ["type", "boolean_type", [], {}, om, "boolean_type"]],
+	["private", ["type", "private", [], {}, om, "private"]],
+	["limited private", 
+		    ["type", "limited private", [], {}, om, "limited private"]],
+	["IMAGE",	["attribute", "STRING" ]],
+	["ADDRESS",     ["attribute", "INTEGER"]],		
+	["DURATION",	["type", "DURATION",
+	                ["delta", ["ivalue", fix_umin(delay_day), "DURATION"],
+				   ["ivalue", delay_day, "DURATION"],
+				   ["ivalue", delay_small],
+				   ["ivalue", delay_small] 
+				   ]]],
+	["I:1",    ["constant","universal_integer", ["ivalue", 1] ]],
+	["UNMENTIONABLE#0", ["package"]],
+ 	[standard, ["package", "none", [], {}]],
+	["ASCII",   ["package", "none", [], {}]],
+	["any",    ["type", "any" ]],
+        ["any_id", ["obj",  "any" ]],
+	["none",   ["type", "none"]],
+	["numeric",["type", "numeric", [], {}, om, "numeric"]],
+	["LEFT",   ["in",   "any", [] ]],
+	["RIGHT",  ["in",   "any", [] ]],
+	["NULL",   ["null", "any" ]] 
+	    };
+
+    init_symbtab +:=
+	 { [name,["attribute","universal_integer"]] :
+		 name in u_integer_attributes} +
+	 { [name,["attribute","overloaded"]] :
+		 name in overloaded_attributes } +
+	 { [name,["attribute","universal_real"]] :
+		 name in float_attributes } +
+	 { [name,["attribute","BOOLEAN"]] :
+		 name in boolean_attributes };
+ 
+    for v = init_symbtab(n) loop  
+       ST(n) := v;
+       ST(n).scope_of := standard;
+     end loop;
+
+-- So that the usual naming conventions can be followed for the package
+-- STANDARD, STANDARD is declared within yet another scope, UNMENTIONABLE.
+    declared := {[standard, {}], ["ASCII", {}], 
+		 ["UNMENTIONABLE#0", {["STANDARD", standard]}]
+		};
+ 
+ 
+-- Operators (most) entered into Symbol Table and DECLARED.
+ 
+    symbtab_enter(boolean_ops,     "boolean_type");
+    symbtab_enter(short_circ_ops,  "boolean_type");		 
+    symbtab_enter(equal_ops,       "BOOLEAN")     ;
+    symbtab_enter(order_ops,       "BOOLEAN")  ;
+    symbtab_enter(arith_ops,       "numeric")     ;
+    symbtab_enter(mod_ops,         "numeric")     ;
+    symbtab_enter({"**"},          "numeric")     ;
+    symbtab_enter(concat_ops,      "array_type")  ;
+    symbtab_enter({"any_op"},      "any")         ;
+
+    -- The ABS operator is not a reserved word, and the interpreter
+    -- nevertheless expects its name in lower case. Thus :
+    declared(standard)("ABS") := declared(standard)("abs") ;
+ 
+    int_ops   := { opn + "i"  : opn in arith_ops + mod_ops } ;
+    float_ops := { opn + "fl" : opn in arith_ops} ;
+    fixed_ops := { opn + "fx" : opn in arith_ops} ;
+
+    new_arith_ops(int_ops, "universal_integer") ;
+    new_arith_ops(float_ops, "universal_real") ;
+    new_arith_ops(fixed_ops, "$FIXED") ;
+
+    -- The fixed multiplication and division operators return the
+    -- singular type universal_fixed, which must be explicitly con-
+    -- verted before use.
+    
+    
+    ST("*fx").type_of := ST("/fx").type_of := "universal_fixed" ;
+
+
+    -- There are two types of mixed mode arithmetic operators: the ones
+    -- for fixed-integer operations, used at run-time, and the ones for
+    -- universal_real - universal_integer operations, used only in literal
+    -- expressions.
+
+    new_arith_ops({"*fxi", "*ifx", "/fxi"}, "$FIXED") ;
+    new_arith_ops({"*fli", "*ifl", "/fli"}, "universal_real") ;
+    new_arith_ops({"**i"}, "universal_integer") ;
+    new_arith_ops({"**fl"}, "universal_real") ;
+ 
+-- Exceptions entered into ST.
+ 
+    for excep in exceptions loop 
+	ST(excep) := ["exception", "exception", [], "", standard, om];
+    end loop;
+ 
+-- Types and exceptions entered into DECLARED.
+
+    other_standard := {"ASCII", "NULL"};
+     for item in (predefined_types + other_standard
+	+ exceptions)
+    loop
+	declared(standard)(item) := item;
+    end loop;
+
+-- Printable characters are entered into Symbol table, as overloaded
+-- literals whose source name is the character between single quotes.
+ 
+    for i in [32..126] loop 
+	chain_overloads("'" + char(i) + "'", 
+					["literal", "CHARACTER",[]]);
+    end loop;
+ 
+    ascii_vals := { ["'" + char(i) + "'", i] : i in [0 .. 127] } ;
+ 
+    ST("CHARACTER") := ["enum", "CHARACTER", 
+	      	["range", ["ivalue", 0], ["ivalue", 127] ] ,ascii_vals,
+		standard, om] ;
+
+    -- Enter the scope of ASCII to initialize that package with the named
+    -- characters.
+ 
+    scope_st with:= [current_scope, name_prefix, open_scopes, 
+		     used_mods, vis_mods, suffix];
+
+    [current_scope, name_prefix, open_scopes, used_mods, vis_mods, suffix] :=
+            ["ASCII","",["ASCII","STANDARD#0","UNMENTIONABLE#0"],[],[],""] ;
+
+    char_names := [
+	"NUL",  "SOH",  "STX",   "ETX",  "EOT",   "ENQ",  "ACK",  "BEL",
+	"BS",   "HT",   "LF",    "VT",   "FF",    "CR",   "SO",   "SI", 
+	"DLE",  "DC1",  "DC2",   "DC3",  "DC4",   "NAK",  "SYN",  "ETB",
+	"CAN",  "EM",   "SUB",   "ESC",  "FS",    "GS",   "RS",   "US",
+        "EXCLAM", "QUOTATION", "SHARP", "DOLLAR", "PERCENT","AMPERSAND",
+        "COLON",  "SEMICOLON", "QUERY", "AT_SIGN","L_BRACKET",
+        "BACK_SLASH", "R_BRACKET", "CIRCUMFLEX",  "UNDERLINE", "GRAVE",
+        "LC_A", "LC_B", "LC_C",  "LC_D", "LC_E", "LC_F", "LC_G", "LC_H",
+	"LC_I", "LC_J", "LC_K",  "LC_L", "LC_M", "LC_N", "LC_O", "LC_P",
+	"LC_Q", "LC_R", "LC_S",  "LC_T", "LC_U", "LC_V", "LC_W", "LC_X",
+	"LC_Y", "LC_Z", "L_BRACE","BAR", "R_BRACE",      "TILDE","DEL"
+		   ];
+
+    char_values := [0..31] + [33..38] + [58,59,63,64] + [91..127] ;
+
+    for c = char_names(i) loop 
+	declared("ASCII")(c) := c ;
+	ST(c) := 
+	    ["constant", "CHARACTER", ["ivalue", char_values(i)], "ASCII", om];
+    end loop;
+
+
+    popscope();  -- Leave ASCII, back to STANDARD
+ 
+-- For the enumeration type BOOLEAN
+ 
+    booleans := ["FALSE", "TRUE"] ;
+    for i in [1..2] loop 
+        chain_overloads(booleans(i), ["literal","BOOLEAN",[] ]) ;
+    end loop;
+ 
+    ST("BOOLEAN") := ["enum", "BOOLEAN",
+			["range", ["ivalue", 0], ["ivalue", 1]] ,
+			  { ["FALSE", 0], ["TRUE", 1]},
+			standard, om] ;
+
+     
+--   The only predefined aggregate is the one for string literals. 
+     new_aggregate_or_access("aggregate", "STRING");
+ 
+ 
+-- Initialize the scope map for all identifiers in standard packages.
+
+    for [scop,decl] in declared loop 
+        for [-,id] in decl loop
+	    ST(id).scope_of := scop ; 
+        end loop;
+    end loop;
+
+    for t in predefined_types loop 
+	ST(t).root_type := t ;
+    end loop;
+-- except for...
+ST("NATURAL").root_type    := ST("POSITIVE").root_type := "INTEGER" ;
+ST("DURATION").root_type   := "$FIXED" ;
+
+-- Set root_type for certain predefined types that are not supported but
+-- appear in the symbol table so that better error messages can be emitted
+ST("SHORT_INTEGER").root_type   := "SHORT_INTEGER" ;
+ST("LONG_INTEGER").root_type    := "LONG_INTEGER" ;
+
+    initialize_representation_info("BOOLEAN","enum");
+    initialize_representation_info("CHARACTER","enum");
+    initialize_representation_info("INTEGER","int_type");
+    initialize_representation_info("FLOAT","float_type");
+    initialize_representation_info("LONG_FLOAT","float_type");
+    --initialize_representation_info("DURATION","fixed_type");
+    initialize_representation_info("$FIXED","fixed_type");
+
+     for t in  
+        {"BOOLEAN", "CHARACTER", "DURATION", "FLOAT", "LONG_FLOAT",
+	 "INTEGER", "$FIXED"}  loop
+       force_representation(t);
+    end loop;
+    choose_representation("POSITIVE");
+    choose_representation("NATURAL");
+
+--$  ST('array_type').root_type := 'any' ;
+    base_declared := declared;
+    visible("ASCII") := declared("ASCII");
+    comp_units := 0 ;
+    newtypes with:= [] ;
+
+    sem_trace_proc_exit(5, "Init_Sem");
+end init_sem;
+
+--T+ ADASEM : Grammar rules for semantic processing 
+procedure adasem(node) ;
+
+-- This is the driver routine for all semantic processing. It is called
+-- by the parser whenever the syntax tree for a compilation unit has
+-- been built. The input to this routine is an AST node, on which two
+-- maps are defined : AST, and SPANS. These maps are global to the front
+-- end.
+
+var tree;
+
+tree := ast(node) ;
+if     is_string(node) or is_empty(node) then return node ;
+elseif is_string(tree) or is_empty(tree) then return tree ; 
+elseif tree = om then
+    warning("Probable System error : undefined node") ;
+    return [] ;
+end if;
+
+-- The current node is placed in a global variable, from which the error
+-- routines can extract its span.
+
+save_node := current_node ;
+current_node := node ;
+
+save_node_type := tree(1);
+if cdebug2 > 2  and save_node_type /= "simple_name" then 
+	printa(errfile, "ENTER   : ADASEM  -  node type: " +  save_node_type);
+end if;
+
+case lower_case_of(tree(1)) 
+
+--S+ Chapter 2. Lexical elements
+-- pragma  ->  ['pragma'  identifier argument_list]
+
+    when "pragma" => 
+	record_feature_use("pragma");
+	result := process_pragma(node) ;
+	if not is_empty(result) then 
+	   result := [result];
+	end if;
+
+
+-- argument_association  ->  ['arg'  identifier  expression]
+
+    when "arg" => 
+	record_feature_use("arg");
+	result := [sem(2), sem(3)] ;
+
+--S+ Chapter 3. Declarations and types
+-- Multiple declarations are converted into sequences of single declarations
+-- after parsing. Semantic actions are described for single declarations.
+-- object_declaration ->  ['obj_decl'  identifier subtype_indic 
+--							opt_expression]
+
+    when "obj_decl" => 
+	record_feature_use("obj_decl"); 
+	result := object_declaration(node) ;
+
+-- const_declaration  ->  ['const_decl' identifier subtype_indic 
+--							opt_expression]
+
+    when "const_decl" => 
+	record_feature_use("const_decl");
+        result := constant_declaration(node) ;
+
+
+-- num_declaration    ->  ['num_decl'  identifier expression]
+
+    when "num_decl" => 
+	record_feature_use("num_decl");
+        result := number_declaration(node);
+
+
+-- type_decl  ->  ['type_decl' identifier discriminant_list
+--							type_definition]
+
+    when "type_decl" => 
+	record_feature_use("type_decl");
+        discriminants := sem_list(3) ;    
+        result := [ais_type(type_declaration(sem(2), 
+			discriminants, tree(4)))];
+
+
+-- Subtype_decl ->  ['subtype_decl' identifier subtype_indic]
+
+    when "subtype_decl" => 
+	record_feature_use("subtype_decl");
+        subtype := make_subtype(sem(3)) ;
+        result := subtype_declaration(sem(2), subtype) ;
+
+
+-- subtype_indication  ->  ['subtype_indic', name opt_constraint]
+
+    when "subtype_indic" => 
+	record_feature_use("subtype_indic");
+        result := [sem(2), sem(3)] ;
+
+
+-- derived_type_definition  -> ['derived_type'  subtype_indication]
+
+    when "derived_type" => 
+	record_feature_use("derived_type");
+        result := ["new", make_subtype(sem(2))] ;
+ 
+
+-- discrete_range  ->  ['range' expression  expression]
+
+    when "range" => 
+	record_feature_use("range");
+	lo := sem(2) ;
+	hi := sem(3) ;
+	check_range_attribute(lo) ;
+	check_range_attribute(hi) ;
+        result := ["range", lo, hi] ;
+
+
+-- discrete_range  ->  ['range_expression'  expression]
+
+    when "range_expression" => 
+	record_feature_use("range_expression");
+        result := sem(2) ;
+
+
+-- constraint  ->  ['constraint'  general_aggregate]
+
+    when "constraint" => 
+	record_feature_use("constraint");
+	result := sem_list(2) ;
+
+
+-- enumeration_type  -> ['enum'  enumeration_literal_list]
+
+    when "enum" => 
+	record_feature_use("enum");
+	result := ["enum", sem_list(2)] ;
+
+
+    when "int_type" => 
+	record_feature_use("int_type");
+        result := ["int_type",   sem(2)] ;
+
+
+    when "float_type" => 
+	record_feature_use("float_type");
+        result := ["float_type", sem(2)] ;
+
+    when "fixed_type" => 
+	record_feature_use("fixed_type");
+        result := ["fixed_type", sem(2)] ;
+
+
+    when "digits" =>  
+	record_feature_use("digits");
+        result := ["digits", sem(2), sem(3)] ;
+
+
+    when "delta" => 
+	record_feature_use("delta");
+        result := ["delta", sem(2), sem(3)] ;
+
+
+-- array_type_definition  -> ['array_type' index_list subtype_indication]
+
+    when "array_type" => 
+	record_feature_use("array_type");
+        index_list := [make_index(adasem(i)) : i in tree(2)] ;
+        result := array_typedef(index_list, 
+				promote_subtype(make_subtype(sem(3)))) ;
+
+
+-- subtype_definition  ->  ['box'  identifier]
+
+    when "box" => 
+	record_feature_use("box");
+        result := ["box", sem(2)] ;
+
+
+--   discrete_range                 -> ['subtype' opt_name  range_constraint]
+--   general_component_association  -> ['subtype' opt_name  range-constraint]
+
+    when "subtype" => 
+	record_feature_use("subtype");
+        opt_name := if not is_empty(tree(2)) then find_old(sem(2))
+			else [] end if;
+        result := ["subtype", opt_name, sem(3)] ;
+
+
+-- record_decl  -> ['record' component_list]
+
+    when "record" => 
+	record_feature_use("record");
+         [components, variant] := sem(2) ;
+         result := ["record", components, variant] ;
+
+
+-- component_list  -> [ 'component_list'  component_decl_list variant]
+
+    when "component_list" => 
+	record_feature_use("component_list");
+	comps   := []+/sem_list(2) ;		
+	variant := sem(3) ;
+	result  := [comps, variant] ;
+
+
+-- component_declaration -> ['field' identifier subtype_indic
+--							 opt_expression]
+
+    when "field" => 
+	record_feature_use("field");
+        type_mark := promote_subtype(make_subtype(sem(3))) ;
+        result := component_declaration(sem(2),type_mark,sem(4)) ;
+
+
+-- discr_specification  ->  ['discr_spec' identifier_list name opt_expr]
+    
+    when "discr_spec" => 
+	record_feature_use("discr_spec");
+        result := [sem_list(2), sem(3), sem(4)] ;		
+
+
+-- variant_part -> ['variant_decl' simple_name variant_list]
+
+    when "variant_decl" => 
+ 	 record_feature_use("variant_decl");
+         result := variant_declaration(sem(2), tree(3)) ; 
+
+
+-- component_association -> ['choice_list'  choice_list  expression]
+
+    when "choice_list" => 
+    record_feature_use("choice_list");
+    result := ["choice_list", sem_list(2), sem(3)] ;
+
+    when "simple_choice" => 
+	record_feature_use("simple_choice");
+        result := ["simple_choice", sem(2), node] ;
+
+
+    when "range_choice" => 
+	record_feature_use("range_choice");
+   	result := ["range_choice",  sem(2), node] ;
+
+
+    when "others_choice" => 
+	record_feature_use("others_choice");
+        result := ["others_choice", "",     node] ;
+
+-- access_type_definition  -> ['access_type' subtype_indication]
+
+    when "access_type" => 
+        result := sem(2) ;
+
+-- incomplete_type_decl  -> ['incomplete_decl'  identifier  discriminant]
+
+    when "incomplete_decl" => 
+	record_feature_use("incomplete_decl");
+        discriminants := sem_list(3) ;
+        type_name := incomplete_type_declaration(sem(2),discriminants);
+        result := [["type", type_name, ["delayed"]]] ;		
+
+
+-- declarations -> ['declarations'  declaration_list]
+
+   when "declarations" => 
+	record_feature_use("declarations");
+        result := [] ;
+
+        for d in tree(2) loop 
+	    newtypes with:= [] ;	    -- To collect anonymous types
+            decl := adasem(d) ;
+            anon_types := new_type_list() ; -- generated by declaration.
+            f_reprs := collect_forcings();
+  	    marker := if spans(d) /= om then [["stmt", spans(d)(1)(1)]] 
+		      else [] end if;
+            decls := anon_types + decl ;
+            if f_reprs /= [] then
+		[[-, type_reprs]] := f_reprs ;
+		new_decls := [] ;
+		for d in decls loop 
+		    -- Insert repr after the corresponding type or subtype,
+		    -- either an anonymous type, or the one explicitly declared.
+		    [kind, nam, -] := d ;
+		    new_decls with:= d ;
+		    if type_reprs(nam) /= om then
+			 new_decls with:= ["repr", {[nam, type_reprs(nam)]}] ;
+			 type_reprs(nam) := om ;
+		    end if;
+	        end loop;
+	        -- The remaining reprs are forcings of previously declared types.
+                decls := [["repr", type_reprs]] + new_decls;
+	    end if;
+	    result +:= marker + decls + collect_delayed_reprs() ;  
+        end loop;
+
+--S+ Chapter 4. Names and expressions
+-- name  -> ['character_literal'   character]
+-- Character literals also appear as enumeration literals, and as 
+-- selectors.
+
+    when "character_literal" => 
+ 	 record_feature_use("character_literal");
+	 result := "'" + tree(2) + "'";
+ 
+
+-- name   ->  ['simple_name'  identifier]
+   
+    when "simple_name" => 
+	record_feature_use("simple_name");
+        result := tree(2) ;
+
+
+-- name   ->  ['call?'  name  general_aggregate] 
+
+    when "call?" => 
+	record_feature_use("call?");
+        if node_kind(tree(2)) = "string-node" then
+	    record_feature_use("string_node");
+            nam := lower_case_of(sem(2));
+	else nam := sem(2);
+	end if;
+
+        result := ["call?", nam, sem_list(3)] ;
+
+
+-- name ->  ['operator'  operator_symbol]
+
+    when "operator" => 
+	record_feature_use("operator");
+	result := tree(2) ;
+
+    when "string-node" => 
+	record_feature_use("string_node");
+	result := tree(2) ;
+
+
+
+-- name  ->  ['.' name selector]
+
+    when "." => 
+	record_feature_use(".");
+        result := [".", sem(2), sem(3) ] ;
+
+    when "@" => 
+	record_feature_use("@");
+        result := ["@", sem(2)] ;
+
+    when "'" => 
+	record_feature_use("'");
+        result := ["'", sem(2), sem(3), "I:1"] ;
+
+
+-- aggregate  ->  ['aggregate' expression_list]
+
+    when "aggregate" => 
+	record_feature_use("aggregate");
+        result := ["aggregate"] + sem_list(2) ;
+
+
+-- parenthesised_expression  ->  ['()', expression]
+
+    when "()" => 
+	record_feature_use("()");
+    	result := ["()", sem(2)] ;
+
+
+-- expression  ->  [operator_designator  expression  opt_expression]
+
+     when "and", "or",  "xor",  "mod",  "rem", "andthen",    "orelse",   
+          "=",   "/=",  "<",    "<=",   ">",   ">=", 
+          "+",   "-",   "&",    "*",    "/",   "**"  => 
+
+	record_feature_use(lower_case_of(tree(1)));
+    	op_name := find_old(tree(1)) ;
+    	arg1 := sem(2) ;
+    	arg2 := sem(3) ;
+	check_range_attribute(arg1) ;				
+	check_range_attribute(arg2) ;
+    	result := [op_name, arg1, arg2] ;
+
+    when "in",   "notin" => 
+	record_feature_use(lower_case_of(tree(1)));
+	op_name := tree(1) ;
+  	arg1 := sem(2) ;
+	arg2 := sem(3) ;
+
+	if arg2(1) = "range" then
+	    arg2 := ["subtype", [], arg2] ;
+        end if;
+
+	result := [op_name, arg1, arg2];
+
+    when "not", "abs" => 
+	record_feature_use(lower_case_of(tree(1)));
+	arg1 := sem(2) ;
+	check_range_attribute(arg1) ;				
+	result := [find_old(tree(1)), arg1] ;
+ 
+    when "+u", "-u" => 
+	record_feature_use(lower_case_of(tree(1)));
+
+        -- Recover user-defined functions with the same designator.
+        desig := tree(1)(1) ;
+	arg1 := sem(2) ;
+	check_range_attribute(arg1) ;				
+        result := [find_old(desig), arg1] ;
+
+
+    when "int_literal" => 
+	record_feature_use("int_literal");
+    	result := tree ;
+
+
+    when "real_literal" => 
+	record_feature_use("real_literal");
+	result := tree ;
+
+
+    when "string_literal" => 
+	record_feature_use("string_literal");
+	result := tree ;
+
+ 
+    when "null" => 
+	record_feature_use("null");
+    result := ["null"] ;					
+
+    when "name" => 
+        record_feature_use("name");
+        result := ["name", sem(2)] ;
+
+    when "qualify" => 
+	record_feature_use("qualify");
+        result := ["qualify", find_old(sem(2)), sem(3)] ;
+
+
+-- allocator  -> ['new_init' name aggregate]
+
+    when "new_init" => 
+	record_feature_use("new_init");
+        result := ["new_init", sem(2), sem(3)] ;
+
+
+-- allocator  ->  ['new'  name  constraint_list]
+
+    when "new" => 
+	record_feature_use("new");
+        constraint := sem_list(3) ;
+        result := ["new", sem(2), constraint] ;
+
+--S+ Chapter 5. Statements
+-- sequence_of_statements  ->  ['statements' statement_list, label_list]
+
+    when "statements" => 
+	record_feature_use("statements");
+	labs := {find_old(l) : l in sem_list(3)} ;	
+        for l in labs loop  
+	    if is_identifier(l) and ST(l).nature = "label" then
+	       ST(l).label_status := "reachable" ; 
+	    end if;
+	end loop;
+        stats := [] +/ sem_list(2) ;
+        result := [["labdef", l]: l in labs] + stats ;
+        for l in labs loop  
+	    if is_identifier(l) and ST(l).nature = "label" then
+	       ST(l).label_status := "unreachable" ; 
+	    end if;
+	end loop;
+
+-- statement  ->  ['statement'  label_list  statement]
+
+    when "statement" => 
+	record_feature_use("statement");
+	labs := {find_old(l) : l in sem_list(2)} ;	
+
+	-- Check for incorrect labels. These include 
+	-- 1) overloaded entities which are returned by find_old as a set 
+	--    rather than a single identifier.
+	-- 2) identifiers whose natures are not "label".
+
+	if exists l in labs | 
+	   not is_identifier(l) or ST(l).nature /= "label" then	
+	    errmsg(original_name(l), " is not a visible label", "8.3");
+	end if;
+	result := [["label", l]: l in labs] + [sem(3)] ;
+	if result /= [] then		-- Add line number for tracing.
+            result := [["stmt" , spans(current_node)(1)(1)]] +  result ;
+        end if;
+
+
+
+-- labels_declaration  ->  ['labels'  label_list]
+
+    when "labels" => 
+	record_feature_use("labels");
+	label_decl(sem_list(2)) ;
+        result := [] ;
+
+-- null_statement  -> [null_s']
+
+    when "null_s" => 
+	record_feature_use("null_s");
+	result := ["null"] ;					
+
+
+-- assignment  -> [':='  name  expression ]
+
+    when ":=" => 
+	record_feature_use(":=");
+        result := assign_statement(sem(2), sem(3)) ;
+
+
+-- if_statement  ->  ['if' if_part_list opt_else]
+
+    when "if" => 
+	record_feature_use("if");
+        if_part := [ [adasem(cond), adasem(stats)] : 
+					   [cond, stats] in tree(2)] ;
+        result := ["if", if_part, sem(3)] ;
+ 
+
+-- condition  ->  ['condition' expression]
+
+    when "condition" => 
+	record_feature_use("condition");
+        result := check_type("boolean_type", sem(2)) ;		
+
+
+-- case_statement  ->  ['case' expression alt_list]
+
+    when "case" => 
+	record_feature_use("case");
+	 result := case_statement(sem(2), tree(3)) ;
+
+
+-- loop_statement  ->  ['loop'  opt_loop_id iteration_rule statements]
+
+    when "loop" => 
+	record_feature_use("loop");
+	loop_id := sem(2) ;
+-- loop names are declared when procedure containing them is entered.
+--
+	loop_name := find_old(loop_id) ;
+	ST(loop_name) := ["block" , "loop", [false], current_scope, om] ;
+	newscope(loop_name) ;
+	iterator := if is_empty(tree(3)) then ["loop"] else sem(3) end if;
+  	result := loop_statement(iterator, sem(4)) ;
+
+
+-- iteration_rule  ->  ['while'  condition]
+
+    when "while" => 
+	record_feature_use("while");
+        result := ["while", sem(2)] ;
+
+
+-- iteration rule  ->  ['for'    identifier  discrete_range]
+
+    when "for" => 
+	record_feature_use("for");
+        result := ["for",    iter_var(sem(2), sem(3))] ;
+
+
+-- iteration_rule  ->  ['forrev' identifier  discrete_range]
+
+    when "forrev" => 
+	record_feature_use("forrev");
+        result := ["forrev", iter_var(sem(2), sem(3))] ;
+
+
+-- block  ->  ['block' identifier declarations statements exceptions]
+
+    when "block" => 
+	record_feature_use("block");
+        opt_id := sem(2) ;
+        new_block(if is_empty(opt_id) then newat_str() else opt_id end if) ;
+
+        decl_info := sem(3);
+        force_all_types();
+        result := ["block", block(decl_info+ collect_reprs(), sem(4), sem(5))] ;
+	popscope() ;
+
+-- exit_statement ->  ['exit' opt_name opt_expression]
+
+    when "exit" => 
+	record_feature_use("exit");
+        result := exit_statement(sem(2), sem(3)) ;
+
+
+-- return_statement  ->  ['return' opt_expression]
+
+    when "return" => 
+	record_feature_use("return");
+        result := return_statement(sem(2)) ;
+
+
+    when "goto" => 
+	record_feature_use("goto");
+        result := goto_statement(sem(2)) ;				
+
+--S+ Chapter 6. Subprograms
+-- subprogram_declaration  ->  ['subprogram_decl', subprogram_spec]
+
+    when "subprogram_decl" => 
+	record_feature_use("subprogram_decl");
+        result := subprogram_declaration(node) ;				
+
+-- subprogram_specification -> ['procedure' identifier formal_part]
+-- 			   -> ['function'  identifier formal_part type_mark]
+
+    when "procedure", "function" => 
+	record_feature_use(lower_case_of(tree(1)));
+        result := subprogram_specification(node) ;
+
+-- subprogram_body  ->  ['subprogram' subprogram_spec  declarations
+--					   statements opt_exceptions]
+
+    when "subprogram" => 
+        record_feature_use("subprogram");
+        result := subprogram_body(node) ;
+
+-- parameter_specification -> ['formal' id_list mode name opt_expression]
+
+    when "formal" => 
+	record_feature_use("formal");
+        result := [sem_list(2), sem(3), sem(4), sem(5)] ;		
+
+-- mode  -> ['mode'  identifier]
+    
+    when "mode" => 
+	record_feature_use("mode");
+	result := tree(2) ;
+ 
+
+-- call_statement -> ['call' name]
+    
+    when "call" => 
+	record_feature_use("call");
+        result := statement_name(sem(2)) ;
+--S+ Chapter 7. Packages
+-- package_specification  ->  ['package_spec' identifier declarations
+--						      opt_private_part]
+
+when "package_spec" => 
+    record_feature_use("package_spec");
+    result := package_specification(node) ;
+
+-- package_body  ->  ['package_body' identifier declarations 
+--				         opt_statements  opt_handler]
+
+    when "package_body" => 
+	record_feature_use("package_body");
+	module_body_id("package", sem(2)) ;
+	decl_info := sem(3);
+        force_all_types();
+	p_body := block(decl_info + collect_reprs(), sem(4), sem(5)) ;
+	result := package_body(p_body) ;
+
+
+-- private_type_declaration  ->  ['private_decl' identifier 
+--					  discriminant_list priv_kind]
+
+    when "private_decl" => 
+	record_feature_use("private_decl");
+	discriminants := sem_list(3) ;
+	type_name := private_decl(sem(2), discriminants, tree(4)) ;
+        result := [["type", type_name, ["delayed"]]] ;
+	
+--S+ Chapter 8. Visibility rules
+-- use_clause  -> [use' identifier_list] 
+
+    when "use" => 
+	record_feature_use("use");
+        use_clause(sem_list(2)) ;
+        result := [] ;
+
+
+-- renaming_declaration -> ['rename_ex' identifier name]
+
+    when "rename_ex" => 
+	record_feature_use("rename_ex");
+        result := rename_exception(sem(2), sem(3)) ;
+
+
+-- renaming_declaration  ->  ['rename_pack' identifier  name]
+
+    when "rename_pack" => 
+	record_feature_use("rename_pack");
+        result := rename_package(sem(2), sem(3)) ;
+
+
+-- renaming_declaration  ->  ['rename_obj' identifier type_mark name]
+
+    when "rename_obj" =>     
+	record_feature_use("rename_obj");
+        result := rename_object(sem(2), sem(3), sem(4)) ;
+
+
+-- renaming declarations  ->  ['rename_sub'  subprogam_spec  name]
+
+    when "rename_sub" => 
+	record_feature_use("rename_sub");
+        [kind, id, formals, ret_type] := new_specs := sem(2) ;
+        if kind = "procedure" then
+             result := rename_procedure(new_specs, sem(3)) ;
+        else
+             result := rename_function(new_specs, sem(3)) ;
+        end if;
+--S+ Chapter 9. Tasks
+-- task_specification  ->  [task_kind identifier opt_entry_declaration
+--						         opt_rep_clause]
+-- task_kind           ->  'task_spec' 
+--	              ->  'task_type_spec'
+
+    when "task_spec", "task_type_spec" => 
+	record_feature_use(lower_case_of(tree(1)));
+    	result := task_spec(node) ;
+
+
+-- task_body  ->  ['task' identifier declarations statements 
+--							opt_exceptions]
+
+    when "task" => 
+	record_feature_use("task");
+        module_body_id("task", sem(2)) ;    
+	t_body := block(sem(3), sem(4), sem(5)) ;
+	result := task_body(t_body) ;
+
+
+-- entry_declaration   ->  ['entry' identifier formal_part]
+
+    when "entry" => 
+	record_feature_use("entry");
+	id := sem(2) ;
+        formals := get_formals(tree(3), id) ;			
+        result := entry_decl(id, formals) ;
+
+
+-- entry_declaration   ->  ['entry_family' identifier discrete_range
+--							   formal_part]
+
+    when "entry_family" => 
+	record_feature_use("entry_family");
+	id := sem(2) ;
+        formals := get_formals(tree(4), id) ;			
+	discrete_range := sem(3);
+	invisible_designator(id,discrete_range);
+        result := entry_family_decl(id, discrete_range, formals) ;
+
+
+-- accept_statement  ->  ['accept' name opt_expression opt_formal_part
+--					              opt_statements]
+
+    when "accept" => 
+	record_feature_use("accept");
+	id := sem(2) ;
+	formals := get_formals(tree(4), id) ;
+        result := accept_statement(id, sem(3), formals, tree(5)) ;
+
+
+-- delay_statement  -> ['delay'  expression]
+
+    when "delay" => 
+	record_feature_use("delay");
+        result := ["delay", check_type("DURATION", sem(2))] ;
+
+
+-- selective_wait  ->  ['selective_wait' alternative_list else_part]
+
+    when "selective_wait" => 
+	record_feature_use("selective_wait");
+        result := select_statement(node) ;
+
+
+
+-- select_alternative  ->  ['guard' condition selective_wait_alternative]
+
+    when "guard" => 
+	record_feature_use("guard");
+    	result := ["guard", sem(2), sem(3)] ;
+
+-- selective_wait_alternative -> ['accept_alt' accept_statement opt_stats]
+--			     ->	['delay_alt'  delay_statement  opt_stats]
+
+    when "accept_alt" => 
+	record_feature_use("accept_alt");
+        alternative := sem(2) ;
+	opt_stats := sem(3) ;
+	result := alternative with opt_stats ;
+
+    when "delay_alt" => 
+	record_feature_use("delay_alt");
+	delay := sem(2) ;
+	opt_stats := sem(3) ;
+	result := delay with opt_stats ;
+
+
+-- selective_wait_alternative  -> ['terminate_alt' ]
+
+    when "terminate_alt" => 
+	record_feature_use("terminate_alt");
+     	result := terminate_statement() ;			
+
+
+-- conditional_entry_call -> ['conditional_entry_call' call_statement
+--						statements else_stat]
+
+    when "conditional_entry_call" => 
+	record_feature_use("conditional_entry_call");
+	call := check_entry_call(tree(2));			
+     	result := ["conditional_entry_call", call, sem(3), sem(4)] ;
+
+
+-- timed_entry_call -> ['timed_entry_call',call_statement statements
+--						   delay_alternative]
+
+    when "timed_entry_call" => 
+	record_feature_use("timed_entry_call");
+	call := check_entry_call(tree(2)) ;
+	[ -, delay_exp, opt_stats] := sem(4) ;	    		
+        result := ["timed_entry_call",call, sem(3), 		
+					["delay",delay_exp], opt_stats];
+
+
+-- abort_statement  -> ['abort'  task_name_list]
+
+    when "abort" => 
+	record_feature_use("abort");
+	result := abort_statement(tree(2)) ;
+
+--S+ Chapter 10. Program structure...
+--    ('compilation'):
+    -- This node is used for pragmas that precede a compilation unit.
+    -- TBSL
+-- This node is never created by the parser.
+--        result := [] ;
+
+
+-- unit_declaration  ->  ['unit' context_clause  unit_body]
+
+    when "unit" => 
+	record_feature_use("unit");
+        --context := [ []+/sem_list(2), top(tree(2))];
+        context := [ []+/sem_list(2), 
+		      if #tree(2) > 0 then top(tree(2)) else om end if];
+        result := compunit(sem(3));
+        if cdebug2 > 0 then
+            printa(errfile);
+            printa(errfile, "AIS: ");
+            printa(errfile, "=============");
+            printa(errfile);
+            pretty_print(errfile,  result);
+        end if;
+
+-- context_clause  -> ['with_use_list' [with_or_use...]]
+    when "with_use_list" => 
+	record_feature_use("with_use_list");
+        result := [] ;
+	for node in tree(2) loop 
+	    if (kind := node_kind(node)) in ["with", "use"] then
+		record_feature_use(kind);
+		[-,n_list] := ast(node);
+                result with:= [kind, [adasem(n) : n in n_list]] ;
+	    else				-- pragma ELABORATE
+		result with:= process_pragma(node) ;
+	    end if;
+	end loop;
+	-- TBSL: validate names in with clauses at this point.
+
+
+-- body_stub    ->  ['subprogam_stub' subprogram_specification]
+--	       ->  ['package_stub'  name]
+--	       ->  ['task_stub'     name]
+
+    when "subprogram_stub" => 
+	record_feature_use("subprogram_stub");
+	name := subprogram_stub(tree(2)) ;
+	result := save_stub("subprog", name) ;
+
+
+    when "package_stub" => 
+	record_feature_use("package_stub");
+     	name := stub_head("package", sem(2)) ;
+     	result := save_stub("body", name) ;
+
+    when "task_stub" => 
+	record_feature_use("task_stub");
+     	name := stub_head("task", sem(2)) ;
+     	result := save_stub("task_body", name) ;
+
+
+-- subunit  -> ['separate' parent_name unit]
+
+    when "separate" => 
+	record_feature_use("separate");
+	result := subunit(tree) ;
+
+--S+ Chapter 11. Exceptions
+
+-- Exception_declaration  ->  ['except_decl'  identifier_list]
+
+    when "except_decl" => 
+	record_feature_use("except_decl");
+     	result := except_decl(sem_list(2)) ;
+
+
+-- exceptions  -> ['exception' handler_list]
+
+    when "exception" => 
+	record_feature_use("exception");
+        result := exception_part(node) ;
+
+
+-- exception_handler  ->  ['handler'  exception_choice_list  statements]
+
+    when "handler" => 
+	record_feature_use("handler");
+        result := exception_handler(node) ;
+
+    when "others" => 
+	record_feature_use("others") ;
+	result := "others" ;
+
+
+-- raise_statement -> ['raise  opt_identifier]
+
+    when "raise" => 
+	record_feature_use("raise");
+        result := raise_statement(sem(2)) ;
+
+--S+ Chapter 12. Generics
+
+    when "generic_procedure","generic_function" => 
+	record_feature_use(lower_case_of(tree(1)));
+        result := generic_subprogram_specification(node)  ;
+
+
+    when "generic_package" => 
+	record_feature_use("generic_package");
+        result := generic_package_specification(node) ;
+
+
+-- Generic part  ->  ['generic_formals  generic_decl_list]
+  
+    when "generic_formals" => 
+	record_feature_use("generic_formals");
+     	newtypes with:= [] ;	-- Anonymous types may be created (???)
+     	generic_list := []+/sem_list(2) ;
+	misc_code := new_type_list() ;
+	-- if a generic subprogram parameter is an equality operator, we
+	-- emit the the spec. and body for the corresponding inequality.
+	for [equ, nat, -] in generic_list | 
+			nat = "function" and original_name(equ) = "=" loop 
+	    misc_code with:= new_not_equals(equ) ;
+        end loop;
+
+     	result := [generic_list, misc_code] ;
+
+-- Generic_formal  ->  ['generic_obj' id_list mode name opt_expression]
+
+    when "generic_obj" => 
+	record_feature_use("generic_obj");
+        result := generic_object_declaration(node) ;
+
+
+-- Generic formal  -> ['generic_type' identifier type_def]
+
+    when "generic_type" => 
+	record_feature_use("generic_type");
+        result := generic_type_declaration(node) ;
+
+
+-- Generic formal  -> ['gen_priv_type'  private_type_declaration]
+
+    when "gen_priv_type" => 
+	record_feature_use("gen_priv_type");
+        result := generic_private_declaration(node) ;
+
+
+-- Generic_formal   ->  ['generic_subp', subprogram_spec  opt_is]
+
+    when "generic_subp" => 
+	record_feature_use("generic_subp") ;
+        result := generic_subprogram_declaration(node) ;
+
+
+-- Generic_type_definition  ->  ['generic' identifier]
+
+    when "generic" => 
+	record_feature_use("generic");
+	return tree ;
+
+
+-- Package_instance  -> ['package_instance' identifier name generic_actual_part]
+
+    when "package_instance" => 
+	record_feature_use("package_instance");
+        new_id := sem(2) ;
+        new_compunit("spec instance", new_id) ;
+	new_package(new_id, "package_spec") ;
+        generic_name := find_old(sem(3)) ;
+	generic_actual_part := sem_list(4) ;
+	result := package_instance(generic_name, generic_actual_part) ;
+ 	instantiations with := new_id ;   -- an instantiated package
+
+-- subprogram_instance
+--	->  ['function_instance'  designator  name  generic_actual_part]
+--	->  ['procedure_instance' identifier  name  generic_actual_part]
+
+    when "function_instance", "procedure_instance" => 
+	record_feature_use(lower_case_of(tree(1)));
+
+        kind := tree(1) ;
+        new_id := sem(2) ;
+        new_compunit("subprog", new_id) ;				
+        generic_id := sem(3) ;
+        invisible_designator(new_id, generic_id) ;
+        generic_name := find_old(generic_id) ;
+        generic_actual_part := sem_list(4) ;
+        invisible_designator(new_id, generic_actual_part) ;
+        result := subprogram_instance(kind, new_id, 
+				  generic_name, generic_actual_part) ;
+
+
+-- generic_parameter_association -> ['instance' opt_identifier expression]
+
+    when "instance" => 
+	record_feature_use("instance");
+        result := [sem(2), sem(3)] ;
+
+--S+ Chapter 13. Representation specs...
+
+-- length_clause -> ['length_clause' attribute simple_expression ]
+
+  when "length_clause" => 
+	record_feature_use("length_clause");
+        [-, attr_type, attr_prefix, -] := sem(2);
+        result := length_clause (attr_type, attr_prefix, sem(3));
+
+
+-- enumeration_representation_clause -> ['enum_rep_clause'
+--                                         simple_name aggregate ]
+
+    when "enum_rep_clause" => 
+	record_feature_use("enum_rep_clause");
+        type_name := sem(2);
+        result := enum_rep_clause (type_name, tree(3));
+
+
+-- record_representation_clause -> 
+--    ['rec_rep_clause' simple_name opt_align_clause comp_clause_list ]
+
+    when "rec_rep_clause" => 
+	record_feature_use("rec_rep_clause");
+        type_name := sem(2);
+        align_clause := sem(3);
+        comp_clause_list := sem_list(4);
+        result :=rec_rep_clause(type_name, align_clause, comp_clause_list);
+
+
+-- component_clause -> ['compon_clause' name simple_expression range]
+
+    when "compon_clause" => 
+	record_feature_use("compon_clause");
+        result := [sem(2), sem(3), sem(4)];
+
+
+-- address_clause -> ['address_clause' simple_name simple_expression]
+
+    when "address_clause" => 
+	record_feature_use("address_clause");
+        result := [];
+
+
+otherwise =>
+    errmsg("System error: invalid node type ", tree(1), "none") ;
+
+end case;
+--S+
+
+if cdebug2 > 2  and save_node_type /= "simple_name" then 
+	printa(errfile, "EXIT    : ADASEM  -  node type: " +  save_node_type);
+end if;
+
+current_node := save_node ;
+
+return result;
+
+procedure sem(n); 
+  return adasem(tree(n));
+end sem;
+
+procedure sem_list(n);
+  return [adasem(i) : i in tree(n)];
+end sem_list;
+     
+end adasem;
+
+--T+ UTILITIES
+--S+ symbtab_enter
+procedure symbtab_enter(oprs, result) ;
+
+-- Enter into symbol table the names of all predefined operators.
+-- They have generic types which cover all types derived from the pre-
+-- defined ones, and overload themselves.
+
+standard := "STANDARD#0";
+sem_trace_proc_entry(5, "Symtab_Enter");
+
+    for op_name in oprs loop 
+
+	declared(standard)(op_name) := op_name ;
+	-- Each of the predefined operators overloads itself.
+	ST(op_name) := ["op", result, [], {op_name}, standard, om] ;
+  
+    end loop; 
+sem_trace_proc_exit(5, "Symtab_Enter");
+end symbtab_enter;
+--S+ new_arith_ops
+procedure new_arith_ops(oprs, result) ;
+sem_trace_proc_entry(5, "New_Arith_Ops");
+
+-- Arithmetic operators are introduced for integer, floating point and
+-- fixed point results. These operators are never accessed directly by
+-- name resolution routines, but rather by the type resolution routine
+-- valid_arith_args. As a result, they need not appear in declared(St.)
+-- and need not have nay overloading specified.
+
+    for op_name in oprs loop 
+	ST(op_name) := ["op", result, [], "", standard, om] ;
+    end loop; 
+sem_trace_proc_exit(5, "New_Arith_Ops");
+end new_arith_ops;
+
+--S+ ADA_SEMANTICS
+procedure ada_semantics(comp_unit) ;
+
+if cdebug2 > 1 then
+    printa(errfile, "ENTER   : Ada_Semantics");
+    printa(errfile);
+    printa(errfile, "AST");
+    printa(errfile, "=============");
+    printa(errfile);
+    pretty_print(errfile,  convert_ast([comp_unit]));
+end if;
+
+adasem(comp_unit);
+
+if cdebug2 > 1 then
+    printa(errfile, "EXIT    : Ada_Semantics");
+end if;
+
+end ada_semantics;
+--S+ end_sem
+procedure end_sem ;
+sem_trace_proc_entry(5, "End_Sem");
+
+--clean up and turn off the lights.
+
+    ST := om;
+    declared := base_declared := visible := om;
+    scope_st := newtypes := lab_scope_stk := om;
+    stmlabs := lab_scope_map := lab_seen := om;
+    goto_stmts := labhide := open_scopes := om;
+    used_mods := vis_mods := om;
+    sem_trace_proc_exit(5, "End_Sem");
+    return;
+end end_sem;
+
+--S+ errmsg 
+procedure errmsg(msg,obj,lrm_sec); 		-- Semantic errors
+    sem_trace_proc_entry(6, "Errmsg(msg,obj,lrm_sec)");
+ 
+    if is_string (msg) then
+	p_s := spans(current_node) ? [[1, 1, 1]] ;
+	err_list([p_s,"*** Semantic Error: " + expanderr(msg, obj, lrm_sec)]);
+    elseif not is_tuple(msg) then
+	err_list(msg);			-- << Should never happen
+	if cdebug2 > 1 then
+	    to_errfile("*** Bad Message in SEM: " ,str(msg) + type(msg));
+	end if;
+    elseif not is_string(msg) then
+	err_list(msg);			-- << Should never happen
+	if cdebug2 > 1 then
+	    to_errfile("*** Bad Message in SEM: " ,str(msg) + type(msg));
+	end if;
+    else
+	err_list([msg(1),"*** "+expanderr(msg(2),obj,lrm_sec)]);
+    end if;
+ 
+    errcount +:= 1;
+    sem_trace_proc_exit(6, "Errmsg(msg,obj,lrm_sec)");
+
+    procedure expanderr(msg,obj,lrm_sec);
+	return
+	((msg) + 
+         (if is_string(obj) then (obj) else str(obj) end if) +
+	 (if lrm_sec = "none" then "" else 
+             (" (RM " + lrm_sec + ")") end if));
+    end expanderr;
+
+end errmsg;
+
+
+procedure trace_and_return(level, name, return_value);
+
+-- In-line call of SEM_TRACE_PROC_EXIT:
+
+if cdebug2 > level then 
+    printa(errfile, "EXIT    :", name) ;
+end if;
+
+return return_value;
+
+end trace_and_return;
+
+end adasem1;

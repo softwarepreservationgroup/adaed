@@ -1,0 +1,68 @@
+Executing file  NYU Ada/Ed 1.11 SUN UNIX Version
+ADAfile:	calendar.ada
+ASTfile:	
+AISfile:	calendar.ais
+LIBfile:	predef.lib
+	
+	
+    1   package CALENDAR is
+    2   
+    3     type TIME is private ;
+    4   
+    5      subtype YEAR_NUMBER  is INTEGER  range 1901 .. 2099;
+    6      subtype MONTH_NUMBER is INTEGER  range 1 .. 12;
+    7      subtype DAY_NUMBER   is INTEGER  range 1 .. 31;
+    8      subtype DAY_DURATION is DURATION range 0.0 .. 86_400.0;
+    9   
+   10      function CLOCK return TIME;
+   11      pragma IO_interface(CLOCK, CLOCK);
+   12   
+   13      function YEAR   (DATE    : TIME) return YEAR_NUMBER;
+   14      pragma IO_interface(YEAR, YEAR);
+   15      function MONTH  (DATE    : TIME) return MONTH_NUMBER;
+   16      pragma IO_interface(MONTH, MONTH);
+   17      function DAY    (DATE    : TIME) return DAY_NUMBER;
+   18      pragma IO_interface(DAY, DAY);
+   19      function SECONDS(DATE    : TIME) return DAY_DURATION;
+   20      pragma IO_interface(SECONDS, SECONDS);
+   21   
+   22      procedure SPLIT (DATE    : in  TIME;
+   23                       YEAR    : out YEAR_NUMBER;
+   24                       MONTH   : out MONTH_NUMBER;
+   25                       DAY     : out DAY_NUMBER;
+   26                       SECONDS : out DAY_DURATION);
+   27      pragma IO_interface(SPLIT, SPLIT);
+   28   
+   29      function TIME_OF(YEAR    : YEAR_NUMBER;
+   30                       MONTH   : MONTH_NUMBER;
+   31                       DAY     : DAY_NUMBER;
+   32                       SECONDS : DAY_DURATION := 0.0) return TIME;
+   33      pragma IO_interface(TIME_OF, TIME_OF);
+   34   
+   35      function "+"  (LEFT : TIME;     RIGHT : DURATION) return TIME;
+   36      pragma IO_interface("+", ADD_TIME_DUR);
+   37      function "+"  (LEFT : DURATION; RIGHT : TIME)     return TIME;
+   38      pragma IO_interface("+", ADD_DUR_TIME);
+   39      function "-"  (LEFT : TIME;     RIGHT : DURATION) return TIME;
+   40      pragma IO_interface("-", SUB_TIME_DUR);
+   41      function "-"  (LEFT : TIME;     RIGHT : TIME)     return DURATION;
+   42      pragma IO_interface("-", SUB_TIME_TIME);
+   43   
+   44      function "<"  (LEFT, RIGHT : TIME) return BOOLEAN;
+   45      pragma IO_interface("<", LT_TIME);
+   46      function "<=" (LEFT, RIGHT : TIME) return BOOLEAN;
+   47      pragma IO_interface("<=", LE_TIME);
+   48      function ">"  (LEFT, RIGHT : TIME) return BOOLEAN;
+   49      pragma IO_interface(">", GT_TIME);
+   50      function ">=" (LEFT, RIGHT : TIME) return BOOLEAN;
+   51      pragma IO_interface(">=", GE_TIME);
+   52   
+   53      TIME_ERROR : exception;   --   can be raised by TIME_OF, "+", "-"
+   54   
+   55   private
+   56      type TIME is array (1 .. 4) of INTEGER;
+   57   end CALENDAR;
+   58   
+   59   package body CALENDAR is end CALENDAR ;
+   
+  No translation errors detected

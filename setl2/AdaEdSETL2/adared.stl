@@ -1,0 +1,3263 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adared.stl,v 1.1 90/12/05 16:15:34 ada Exp $
+--
+package body adared;
+
+  use globals;
+  use adautil;
+  use adaio; 
+  use adasem1;
+
+  var
+    labels,
+    pre_errcount,
+    pragma_list_sw := true;
+
+  procedure top(x); 
+    return x(#x);
+  end top;
+
+  procedure token_span(rhs, i);
+      return rhs(i)(3);
+  end token_span;
+
+  procedure right_span(i);
+      return spans(i)(2);
+  end right_span;
+
+-------------------------------------------------------------------------
+
+procedure reduce(pno, rhs, l_token, r_token);
+
+--
+-- Labels, loop names, and block names are implicitly declared at the
+-- end of the declarative part of the innermost block statement,
+-- subprogram body, package body, task body, or generic body that
+-- encloses the labeled statement, the named loop, or the named block
+-- statement.  RRM 5.1
+--
+-- A new map "LABELS" defined on statement nodes was introduced to help
+-- propagate the labels upward to the declaration part of the nearest
+-- enclosing block.
+-- 
+
+const
+    overloadable_operators  := 
+		{"+", "-",  "*",  "/",  "**",  "&",  "=",
+	         "<", ">",  "<=", ">=", "abs", "or", "/=",
+	         "and", "not", "xor", "mod", "rem"},
+    body_nodes := {"subprogram_stub",
+                   "package_stub",
+                   "task_stub",
+                   "subprogram",
+                   "package_body",
+                   "task"},
+    later_declarative_items := {"subprogram_stub",
+                   "package_stub",
+                   "task_stub",
+                   "subprogram",
+                   "package_body",
+                   "task",
+                   "subprogram_decl",
+                   "package_spec",
+                   "task_spec",
+                   "task_type_spec",
+                   "generic_procedure",
+                   "generic_function",
+                   "generic_package",
+                   "package_instance",
+                   "function_instance",
+                   "procedure_instance",
+                   "use",
+                   "pragma"},
+
+-- 
+-- The pragma PRIORITY is allowed to occur anywhere pragmas are allowed.
+--
+--
+-- The immediate_decl_pragmas are allowed immediately within a
+-- declarative_part or package_specification. Note that we also include
+-- the pragmas PACK, and PRIORITY in this category, though the rule for
+-- their use does not explicitly states that they can always occur in
+-- such contexts.  However, there are cases where such occurences may
+-- be legal.
+--
+
+    immediate_decl_pragmas := {"controlled", "inline", "interface",
+                  "optimize","suppress", "shared",
+                  "pack", "priority"},
+
+--
+-- The elaborate pragma can only occur immediately after a context_clause
+--
+
+    context_pragmas        := {"elaborate"},
+
+--
+-- The compilation_pragmas can only be placed at the start of a
+-- compilation.
+--
+
+    compilation_pragmas    := {"memory_size", "storage_unit",
+                            "system_name"},
+
+--
+-- The after_libunit_pragmas are pragmas that can appear immediately
+-- after a library unit.
+--
+    after_libunit_pragmas := {"inline", "interface"},
+
+--
+-- The priority pragma is only allowed within a specification of a task
+-- unit or immediately within the declarative part of a main program.
+--
+
+    task_pragmas       := {"priority"},
+
+--
+-- The allowed positions for the pack pragma are given by the same rule
+-- as for a representation clause.
+--
+
+    repr_pragmas           := {"pack"};
+
+-------------------------------------------------------------------------
+
+  rh := [x(2) : x in rhs];
+
+  l_span := l_token(3); -- ultimatly, the pt_node will contain the
+  r_span := r_token(3); -- spans themselves, and this will not be needed
+
+if cdebug1 > 3 then
+    to_errfile("Reducing by rule " + str (pno), "");
+end if;
+
+case pno
+
+--
+-- Rules for which no actions are defined return the value OM.
+-- See else part of this case statement.
+--
+        
+ 
+ -- pragma ::= PRAGMA identifier [(argument_association{,argument_associa
+   when 1 =>
+        [-, id, arg_assoc_list] := rh;
+
+--
+-- Pragmas LIST and PAGE are processed as soon as they are encountered.
+--
+-- Pragma list takes one argument ON or OFF which suspends or resumes
+-- listing of the source program following the occurence of the pragma.
+-- If the listing is already in a particular state and the pragma
+-- attempts to put it in the same state, a warning is printed and no
+-- action is taken.  The actions specified by pragma list are controlled
+-- by a global switch PRAGMA_LIST_SW which indicates the current state 
+-- of the listing.   The position in the text where listing actions start
+-- taking effect are placed in a global map LIST_CONTROL which maps line
+-- numbers of the text to a tuple of columns in that line where change
+-- of states are to occur.  We note that in any case, all occurrences
+-- of pragma list are always printed.
+--
+-- Pragma page takes no argument.  The action taken for an occurence of
+-- pragma page is to skip to a new page on the output listing.  Such
+-- an action is controlled by a global map PAGE_CONTROL which maps line
+-- numbers in the text to a tuple of column numbers where a pragma page
+-- started.
+--
+ 
+    case lower_case_of(name_list(id))
+
+        when "list" =>
+            node := [];
+            name_id := om;
+            if #arg_assoc_list /= 1 then
+               if #arg_assoc_list /= 0 then
+                  l_span := spans(arg_assoc_list(1))(1);
+                  r_span := spans(top(arg_assoc_list))(2);
+               else
+                  l_span := r_span;
+               end if;
+               current_node := newat();
+               spans(current_node) := [l_span, r_span];
+                   warning
+                      ("Pragma list takes one argument: ON or OFF"
+                          );
+            else
+                arg := arg_assoc_list(1);
+                [-, opt_id, expression] := ast(arg);
+                [kind, name] := ast(expression);
+                current_node := arg;
+                if opt_id /= [] then
+                    warning
+                        ("Named argument is invalid for pragma list"
+                                );
+                 elseif kind /= "name" then
+                     warning
+                       ("Argument passed to pragma list is invalid"
+                           );
+                 else
+                     [kind, actual_name_id] := ast(name);
+                     if kind /= "simple_name" then
+                        warning
+                            ("Name argument passed to pragma LIST" +
+                              " is invalid"
+                                );
+                     else
+                        name_id :=  lower_case_of(actual_name_id);
+                        if name_id /= "on" and name_id /= "off"  then 
+                           warning
+                             ("Identifier "
+                                 + if actual_name_id = "" then
+                                    "\"?\""
+                                     else  actual_name_id  end if
+                                  + " is an invalid argument passed"
+                                         + " to pragma LIST."
+                                );
+                        end if;
+                     end if;
+                 end if;
+            end if;
+            if list_option then
+                [line_no1, col1, -] := l_span;
+                [line_no2, -, col2] := r_span;
+                if name_id = "on" then 
+                   if not pragma_list_sw then
+                      list_control(line_no1) :=
+                          list_control(line_no1) ? []
+                             with (col1 - 1);
+                                   pragma_list_sw := true;
+                   else
+                      current_node := newat();
+                      spans(current_node) :=
+                                  [l_span, r_span];
+                      warning("Pragma LIST is currently on");
+                   end if;
+                elseif name_id = "off" then
+                   if pragma_list_sw then
+                      list_control(line_no2) :=
+                      list_control(line_no2) ? [] with col2;
+                      pragma_list_sw := false;
+                   else
+                      current_node := newat();
+                      spans(current_node) :=
+                             [l_span, r_span];
+                      warning("Pragma LIST is currently off");
+                      list_control(line_no2) :=
+                           list_control(line_no2) ? [] 
+                           + [col1 - 1, col2];
+                   end if;
+                end if;
+            end if;
+        when "page" =>
+            node := [];
+            if arg_assoc_list /= [] then
+              l_span := spans(arg_assoc_list(1))(1);
+              r_span := spans(top(arg_assoc_list))(2);
+              current_node := newat();
+              spans(current_node) := [l_span, r_span] ;
+              warning
+                ("Pragma page takes no argument"
+                    );
+            else
+               [line_no2, -, col2] := r_span;
+               page_control(line_no2) :=
+               page_control(line_no2) ? [] with col2;
+            end if;
+
+        otherwise =>    -- create node for pragma
+
+            node := newat();
+
+            id_node := newat();
+            ast(id_node) := ["simple_name", name_list(id)];
+            spans(id_node) := [token_span(rhs, 2)];
+
+            ast(node) := ["pragma", id_node, arg_assoc_list];
+
+    end case;
+
+ 
+--$ argument_association ::= [argument_identifier=>]expression
+--$ (2):
+ 
+--$ basic_declaration ::= object_declaration
+--$ (3):
+ 
+--$ basic_declaration ::= number_declaration
+--$ (4):
+ 
+--$ basic_declaration ::= type_declaration
+--$ (5):
+ 
+--$ basic_declaration ::= subtype_declaration
+--$ (6):
+ 
+--$ basic_declaration ::= subprogram_declaration
+--$ (7):
+ 
+--$ basic_declaration ::= package_declaration
+--$ (8):
+ 
+--$ basic_declaration ::= task_declaration
+--$ (9):
+ 
+--$ basic_declaration ::= generic_declaration
+--$ (10):
+ 
+--$ basic_declaration ::= exception_declaration
+--$ (11):
+ 
+--$ basic_declaration ::= generic_instantiation
+--$ (12):
+ 
+--$ basic_declaration ::= renaming_declaration
+--$ (13):
+ 
+ -- object_declaration ::= identifier_list : subtype_indication [:=expres
+   when 14 =>
+    node := newat();
+    [id_list, -, subtype_indic, opt_init] := rh;
+    ast(node) := ["obj_decl", id_list, subtype_indic, opt_init];
+ 
+ -- object_declaration ::= identifier_list : CONSTANT subtype_indication 
+   when 15 =>
+    node := newat();
+    [id_list, -, -, subtype_indic, opt_init] := rh;
+    ast(node) := ["const_decl", id_list, subtype_indic, opt_init];
+ 
+ -- object_declaration ::= identifier_list : [CONSTANT] constrained_array
+   when 16 =>
+    node := newat();
+    [id_list, -, constant, array_def, opt_init] := rh;
+    if constant = [] then
+        kind := "obj_decl";
+    else
+        kind := "const_decl";
+    end if;
+    ast(node) := [kind, id_list, array_def, opt_init];
+ 
+ -- number_declaration ::= identifier_list : CONSTANT := universal_static
+   when 17 =>
+    node := newat();
+    [id_list, -, -, -, expression] := rh;
+    ast(node) := ["num_decl", id_list, expression];
+ 
+ -- identifier_list ::= identifier {,identifier}
+   when 18 =>
+    [id, id_list] := rh;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 1)];
+
+    id_list := [id_node] + id_list ;
+    node := id_list;
+ 
+--$ type_declaration ::= full_type_declaration
+--$ (19):
+ 
+--$ type_declaration ::= incomplete_type_declaration
+--$ (20):
+ 
+--$ type_declaration ::= private_type_declaration
+--$ (21):
+ 
+ -- full_type_declaration ::= TYPE identifier [discriminant_part]IS type_
+   when 22 =>
+    node := newat();
+    [-, id, opt_discr, type_def] := rh;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 2)];
+
+    ast(node) := ["type_decl", id_node, opt_discr, type_def];
+ 
+--$ type_definition ::= enumeration_type_definition
+--$ (23):
+ 
+--$ type_definition ::= integer_type_definition
+--$ (24):
+ 
+--$ type_definition ::= real_type_definition
+--$ (25):
+ 
+--$ type_definition ::= array_type_definition
+--$ (26):
+ 
+--$ type_definition ::= record_type_definition
+--$ (27):
+ 
+--$ type_definition ::= access_type_definition
+--$ (28):
+ 
+--$ type_definition ::= derived_type_definition
+--$ (29):
+ 
+ -- subtype_declaration ::= SUBTYPE identifier IS subtype_indication ;
+   when 30 =>
+    node := newat();
+    [-, id, -, subtype_indic] := rh;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 2)];
+
+    ast(node) := ["subtype_decl", id_node, subtype_indic];
+ 
+ -- subtype_indication ::= type_mark [onstraint]
+   when 31 =>
+    node := newat();
+    [type_mark, opt_constraint] := rh;
+    ast(node) := ["subtype_indic", type_mark, opt_constraint];
+ 
+--$ constraint ::= range_constraint
+--$ (32):
+ 
+--$ constraint ::= floating_point_constraint
+--$ (33):
+ 
+--$ constraint ::= fixed_point_constraint
+--$ (34):
+ 
+ -- constraint ::= general_aggregate
+   when 35 =>
+    node := newat();
+    ast(node) := ["constraint", rh(1)];
+ 
+ -- derived_type_definition ::= NEW subtype_indication
+   when 36 =>
+    node := newat();
+    [-, subtype_indic] := rh;
+    ast(node) := ["derived_type", subtype_indic];
+ 
+ -- range_constraint ::= RANGE range
+   when 37 =>
+    node := rh(2);
+ 
+ -- range ::= range_attribute
+   when 38 =>
+    node := newat();
+    ast(node) := ["range_expression", rh(1)];
+ 
+ -- range ::= simple_expression .. simple_expression
+   when 39 =>
+    node := newat();
+    [simple_expr1, -, simple_expr2] := rh;
+    ast(node) := ["range", simple_expr1, simple_expr2];
+ 
+ -- enumeration_type_definition ::= ( enumeration_literal_specification {
+   when 40 =>
+    node := newat();
+    [-, enum_lit, enum_lit_list] := rh;
+    enum_lit_list := [enum_lit] + enum_lit_list;
+    ast(node) := ["enum", enum_lit_list];
+ 
+--$ enumeration_literal_specification ::= enumeration_literal
+--$ (41):
+ 
+ -- enumeration_literal ::= identifier
+   when 42 =>
+    node := newat();
+    ast(node) := ["simple_name", name_list(rh(1))];
+ 
+ -- enumeration_literal ::= character_literal
+   when 43 =>
+    node := newat();
+    char_lit := name_list(rh(1));
+    ast(node) := ["character_literal", char_lit(2)];
+ 
+ -- integer_type_definition ::= range_constraint
+   when 44 =>
+    node := newat();
+    ast(node) := ["int_type", rh(1)];
+ 
+ -- real_type_definition ::= floating_point_constraint
+   when 45 =>
+    node := newat();
+    ast(node) := ["float_type", rh(1)];
+ 
+ -- real_type_definition ::= fixed_point_constraint
+   when 46 =>
+    node := newat();
+    ast(node) := ["fixed_type", rh(1)];
+ 
+ -- floating_point_constraint ::= floating_accuracy_definition [range_con
+   when 47 =>
+    [node, opt_range_constraint] := rh;
+    ast(node) with:= opt_range_constraint;
+ 
+ -- floating_accuracy_definition ::= DIGITS static_simple_expression
+   when 48 =>
+    node := newat();
+    [-, simple_expr] := rh;
+    ast(node) := ["digits", simple_expr];
+ 
+ -- fixed_point_constraint ::= fixed_accuracy_definition [range_constrain
+   when 49 =>
+    [node, opt_range_constraint] := rh;
+    ast(node) with:= opt_range_constraint;
+ 
+ -- fixed_accuracy_definition ::= DELTA static_simple_expression
+   when 50 =>
+    node := newat();
+    [-, simple_expr] := rh;
+    ast(node) := ["delta", simple_expr];
+ 
+--$ array_type_definition ::= unconstrained_array_definition
+--$ (51):
+ 
+--$ array_type_definition ::= constrained_array_definition
+--$ (52):
+ 
+ -- unconstrained_array_definition ::= ARRAY ( index_subtype_definition {
+   when 53 =>
+    node := newat();
+    [-, -, index, index_list, -, -, subtype_indic] := rh;
+    index_list := [index] + index_list;
+    ast(node) := ["array_type", index_list, subtype_indic];
+ 
+ -- constrained_array_definition ::= ARRAY index_constraint OF component_
+   when 54 =>
+    node := newat();
+    [-, opt_index_constraint, -, subtype_indic] := rh;
+    ast(node) := ["array_type", opt_index_constraint,
+                        subtype_indic];
+ 
+ -- index_subtype_definition ::= name RANGE <>
+   when 55 =>
+    node := newat();
+    [name] := rh;
+    ast(node) := ["box", name];
+ 
+ -- index_constraint ::= ( discrete_range {,discrete_range} )
+   when 56 =>
+    [-, discrete_range, discrete_range_list] := rh;
+    discrete_range_list := [discrete_range] + discrete_range_list;
+    node := discrete_range_list;
+ 
+ -- discrete_range ::= name range_constraint
+   when 57 =>
+    node := newat();
+    [name, range_constraint] := rh;
+
+      --
+      -- Semantic check for type_mark in discrete_subtype-indication
+      --
+    if not check_expanded_name(name) then    -- not a type_mark ?
+        report_error
+        (spans(name),
+             "discrete_subtype_indication must be a type_mark"
+            );
+    end if;
+
+    ast(node) := ["subtype", name, range_constraint];
+ 
+ -- discrete_range ::= range
+   when 58 =>
+    [ast_range] := rh;
+    if ast(ast_range)(1) = "range" then
+        node := newat();
+        ast(node) := ["subtype", [], ast_range];
+    else
+        node := ast_range;
+    end if;
+ 
+ -- record_type_definition ::= RECORD component_list END RECORD
+   when 59 =>
+    node := newat();
+    [-, component_list] := rh;
+    ast(node) := ["record", component_list] ;
+ 
+ -- component_list ::= {pragma} {component_declaration} component_declara
+   when 60 =>
+    [pragma_list1, comp_dec_list, comp_dec, pragma_list2] := rh;
+    check_pragmas(pragma_list1, {});
+    comp_dec_list +:= normalize_declaration(comp_dec);
+    check_pragmas(pragma_list2, {});
+    node := newat() ;
+    ast(node) := ["component_list",
+                 pragma_list1 + comp_dec_list + pragma_list2, [], []];
+ 
+ -- component_list ::= {pragma} {component_declaration} variant_part {pra
+   when 61 =>
+    [pragma_list1, comp_dec_list, variant, pragma_list2] := rh;
+    check_pragmas(pragma_list1, {});
+    check_pragmas(pragma_list2, {});
+    node := newat() ;
+    ast(node) := ["component_list", pragma_list1 + comp_dec_list,
+                    variant, pragma_list2];
+ 
+ -- component_list ::= {pragma} NULL ; {pragma}
+   when 62 =>
+    [pragma_list1, -, -, pragma_list2] := rh;
+        pragma_list := pragma_list1 + pragma_list2;
+    check_pragmas(pragma_list, {});
+    node := newat() ;
+    ast(node) := ["component_list", [], [], pragma_list];
+ 
+ -- component_declaration ::= identifier_list : component_subtype_definit
+   when 63 =>
+    node := newat();
+    [id_list, -, subtype_indic, opt_init] := rh;
+    ast(node) := ["field", id_list, subtype_indic, opt_init];
+ 
+ -- discriminant_part ::= ( discriminant_specification {;discriminant_spe
+   when 64 =>
+    [-, discr_spec, discr_spec_list] := rh;
+    discr_spec_list := [discr_spec] + discr_spec_list;
+    node := discr_spec_list;
+ 
+ -- discriminant_specification ::= identifier_list : type_mark [:=express
+   when 65 =>
+    node := newat();
+    [id_list, -, type_mark, opt_init] := rh;
+    ast(node) := ["discr_spec", id_list, type_mark, opt_init];
+ 
+ -- variant_part ::= CASE discriminant_simple_name IS {pragma} variant {v
+   when 66 =>
+    node := newat();
+    [-, simple_name, -, pragma_list1, variant, variant_list] := rh;
+    check_pragmas(pragma_list1, {});
+    variant_list := pragma_list1 + [variant] + variant_list;
+    ast(node) := ["variant_decl", simple_name, variant_list];
+ 
+ -- variant ::= WHEN choice {|choice} => component_list
+   when 67 =>
+    [-, choice, choice_list, -, component_list] := rh;
+    choice_list := [choice] + choice_list;
+    node := [choice_list, component_list];
+ 
+ -- choice ::= discrete_range
+   when 68 =>
+    node := newat();
+    [discrete_range] := rh;
+    if ast(discrete_range)(1) in {"range", "subtype"} then
+        kind := "range_choice";
+    else
+        kind := "simple_choice";
+    end if;
+    ast(node) := [kind, discrete_range];
+ 
+ -- choice ::= OTHERS
+   when 69 =>
+    node := newat();
+    ast(node) := ["others_choice"];
+ 
+ -- access_type_definition ::= ACCESS subtype_indication
+   when 70 =>
+    node := newat();
+    [-, subtype_indic] := rh;
+    ast(node) := ["access_type", subtype_indic];
+ 
+ -- incomplete_type_declaration ::= TYPE identifier [discriminant_part];
+   when 71 =>
+    node := newat();
+    [-, id, opt_discr_part] := rh;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 2)];
+
+    ast(node) := ["incomplete_decl", id_node, opt_discr_part];
+ 
+ -- declarative_part ::= {basic_declarative_item}
+   when 72 =>
+    node := newat();
+    [decl_list] := rh;
+
+    if exists n in [1..#decl_list] |
+        ast(decl_list(n))(1) in body_nodes then
+        for decl in decl_list(n+1..) |
+        ast(decl)(1) notin later_declarative_items loop 
+        report_error
+            (spans(decl),
+             "Misplaced basic_declarative_item");
+        end loop;
+    end if;
+
+    ast(node) := ["declarations", decl_list];
+ 
+--$ basic_declarative_item ::= basic_declaration
+--$ (73):
+ 
+--$ basic_declarative_item ::= representation_clause
+--$ (74):
+ 
+--$ basic_declarative_item ::= use_clause
+--$ (75):
+ 
+--$ basic_declarative_item ::= body
+--$ (76):
+ 
+--$ body ::= proper_body
+--$ (77):
+ 
+--$ body ::= body_stub
+--$ (78):
+ 
+--$ proper_body ::= subprogram_body
+--$ (79):
+ 
+--$ proper_body ::= package_body
+--$ (80):
+ 
+--$ proper_body ::= task_body
+--$ (81):
+ 
+--$ name ::= simple_name
+--$ (82):
+ 
+ -- name ::= character_literal
+   when 83 =>
+    node := newat();
+    char_lit := name_list(rh(1));
+    ast(node) := ["character_literal", char_lit(2)];
+    spans(node) := [token_span(rhs, 1)];
+ 
+ -- name ::= operator_symbol
+   when 84 =>
+    [node] := rh;
+    ast(node)(1) := "string-node";
+ 
+--$ name ::= indexed_component
+--$ (85):
+ 
+--$ name ::= selected_component
+--$ (86):
+ 
+--$ name ::= attribute
+--$ (87):
+ 
+ -- simple_name ::= identifier
+   when 88 =>
+    node := newat();
+    ast(node) := ["simple_name", name_list(rh(1))];
+ 
+ -- indexed_component ::= prefix general_aggregate
+   when 89 =>
+    node := newat();
+    [prefix, general_aggregate] := rh;
+    ast(node) := ["call?", prefix, general_aggregate];
+ 
+ -- selected_component ::= prefix . selector
+   when 90 =>
+    node := newat();
+    [prefix, -, selector] := rh;
+    if selector = "@" then
+        ast(node) := ["@", prefix];
+    else
+        ast(node) := [".", prefix, selector];
+    end if;
+ 
+--$ selector ::= simple_name
+--$ (91):
+ 
+ -- selector ::= character_literal
+   when 92 =>
+    node := newat();
+    char_lit := name_list(rh(1));
+    ast(node) := ["character_literal", char_lit(2)];
+ 
+ -- selector ::= operator_symbol
+   when 93 =>
+    [node] := rh;
+    [-, op_symbol] := ast(node);
+    symb := lower_case_of(op_symbol) ;
+    ast(node) := ["operator", symb] ;
+    if symb notin overloadable_operators then
+        report_error
+        ([l_span, r_span],
+         op_symbol + " is not a valid operator_symbol"
+        );
+    end if;
+ 
+ -- selector ::= ALL
+   when 94 =>
+    node := "@";
+ 
+ -- attribute ::= prefix " attribute_designator
+   when 95 =>
+    node := newat();
+    [prefix, -, attr_desig] := rh;
+    ast(node) := ["'", attr_desig, prefix];
+ 
+--$ attribute_designator ::= simple_name
+--$ (96):
+ 
+ -- attribute_designator ::= DIGITS
+   when 97 =>
+    node := newat();
+    ast(node) := ["simple_name", "DIGITS"];
+ 
+ -- attribute_designator ::= DELTA
+   when 98 =>
+    node := newat();
+    ast(node) := ["simple_name", "DELTA"];
+ 
+ -- attribute_designator ::= RANGE
+   when 99 =>
+    node := newat();
+    ast(node) := ["simple_name", "RANGE"];
+ 
+ -- aggregate ::= ( component_association {,component_association} )
+   when 100 =>
+    node := newat();
+    [-, comp_assoc, comp_assoc_list] := rh;
+    if comp_assoc_list = [] and
+        ast(comp_assoc)(1) /= "choice_list" then
+        ast(node) := ["()", comp_assoc];
+    else
+        comp_assoc_list  := [comp_assoc] + comp_assoc_list;
+        ast(node) := ["aggregate", comp_assoc_list];
+    end if;
+ 
+--$ component_association ::= [choice{|choice}=>]expression
+--$ (101):
+ 
+ -- general_aggregate ::= ( general_component_association {,general_compo
+   when 102 =>
+    [-, gen_comp_assoc, gen_comp_assoc_list] := rh;
+    gen_comp_assoc_list  := [gen_comp_assoc] + gen_comp_assoc_list;
+    node := gen_comp_assoc_list;
+ 
+--$ general_component_association ::= component_association
+--$ (103):
+ 
+ -- general_component_association ::= simple_expression .. simple_express
+   when 104 =>
+    node := newat();
+    [simple_expr1, -, simple_expr2] := rh;
+    ast(node) := ["range", simple_expr1, simple_expr2];
+ 
+ -- general_component_association ::= name range_constraint
+   when 105 =>
+    node := newat();
+    [name, range_constraint] := rh;
+    if not check_expanded_name(name) then    -- not a type_mark ?
+        report_error
+            (spans(name),
+         "subtype_indication must be a type_mark"
+            );
+    end if;
+    ast(node) := ["subtype", name, range_constraint];
+ 
+--$ expression ::= relation
+--$ (106):
+ 
+--$ expression ::= relation{AND__relation}
+--$ (107):
+ 
+--$ expression ::= relation{OR__relation}
+--$ (108):
+ 
+--$ expression ::= relation{XOR__relation}
+--$ (109):
+ 
+--$ expression ::= relation{AND__THEN__relation}
+--$ (110):
+ 
+--$ expression ::= relation{OR__ELSE__relation}
+--$ (111):
+ 
+ -- relation ::= simple_expression [relational_operator__simple_expressio
+   when 112 =>
+    [simple_expr1, opt_expr] := rh;
+    if opt_expr = [] then
+        node := simple_expr1;
+    else
+        node := newat();
+        [rel_op, simple_expr2] := opt_expr;
+        ast(node) := [rel_op, simple_expr1, simple_expr2];
+    end if;
+ 
+ -- relation ::= simple_expression [NOT] IN range
+   when 113 =>
+    node := newat();
+    [simple_expr, opt_not, optr, ast_range] := rh;
+    if opt_not /= [] then
+        kind := "notin";
+    else
+        kind := lower_case_of(name_list(optr));
+    end if;
+    ast(node) := [kind, simple_expr, ast_range];
+ 
+--$ simple_expression ::= [unary_adding_operator]term{binary_adding_opera
+--$ (114):
+ 
+--$ term ::= factor{multiplying_operator__factor}
+--$ (115):
+ 
+ -- factor ::= primary [**__primary]
+   when 116 =>
+    [primary1, opt_factor] := rh;
+    if opt_factor = [] then
+        node := primary1;
+    else
+        node := newat();
+        [exp_op, primary2] := opt_factor;
+        ast(node) := [exp_op, primary1, primary2];
+    end if;
+ 
+ -- factor ::= ABS primary
+   when 117 =>
+    [-, primary] := rh;
+    node := newat();
+    ast(node) := ["abs", primary];
+ 
+ -- factor ::= NOT primary
+   when 118 =>
+    [-, primary] := rh;
+    node := newat();
+    ast(node) := ["not", primary];
+ 
+ -- primary ::= numeric_literal
+   when 119 =>
+    node := newat();
+    tok := name_list(rh(1));
+    if exists achar in tok | achar = "." then
+        kind := "real_literal";
+    else
+        kind := "int_literal";
+    end if;
+    ast(node) := [kind, tok];
+ 
+ -- primary ::= NULL
+   when 120 =>
+    node := newat();
+    ast(node) := ["null"];
+ 
+--$ primary ::= aggregate
+--$ (121):
+ 
+ -- primary ::= name
+   when 122 =>
+    [name_node] := rh;
+    if ast(name_node)(1) = "string-node" then
+        ast(name_node)(1) := "string_literal";
+        node := name_node;
+    else
+        node := newat();
+        ast(node) := ["name", name_node];
+    end if;
+ 
+--$ primary ::= allocator
+--$ (123):
+ 
+--$ primary ::= qualified_expression
+--$ (124):
+ 
+ -- relational_operator ::= =
+   when 125 =>
+    [optr] := rh;
+    node := name_list(optr);
+ 
+ -- relational_operator ::= /=
+   when 126 =>
+    [optr] := rh;
+    node := name_list(optr);
+ 
+ -- relational_operator ::= <
+   when 127 =>
+    [optr] := rh;
+    node := name_list(optr);
+ 
+ -- relational_operator ::= <=
+   when 128 =>
+    [optr] := rh;
+    node := name_list(optr);
+ 
+ -- relational_operator ::= >
+   when 129 =>
+    [optr] := rh;
+    node := name_list(optr);
+ 
+ -- relational_operator ::= >=
+   when 130 =>
+    [optr] := rh;
+    node := name_list(optr);
+ 
+ -- binary_adding_operator ::= +
+   when 131 =>
+    [optr] := rh;
+    node := name_list(optr);
+ 
+ -- binary_adding_operator ::= -
+   when 132 =>
+    [optr] := rh;
+    node := name_list(optr);
+ 
+ -- binary_adding_operator ::= &
+   when 133 =>
+    [optr] := rh;
+    node := name_list(optr);
+ 
+ -- unary_adding_operator ::= +
+   when 134 =>
+    node := "+u";
+ 
+ -- unary_adding_operator ::= -
+   when 135 =>
+    node := "-u";
+ 
+ -- multiplying_operator ::= *
+   when 136 =>
+    [optr] := rh;
+    node := name_list(optr);
+ 
+ -- multiplying_operator ::= /
+   when 137 =>
+    [optr] := rh;
+    node := name_list(optr);
+ 
+ -- multiplying_operator ::= MOD
+   when 138 =>
+    [optr] := rh;
+    node := lower_case_of(name_list(optr));
+ 
+ -- multiplying_operator ::= REM
+   when 139 =>
+    [optr] := rh;
+    node := lower_case_of(name_list(optr));
+ 
+ -- qualified_expression ::= name " aggregate
+   when 140 =>
+    node := newat();
+    [name, -, aggregate] := rh;
+
+      --
+      -- Semantic check for type_mark in qualified_expression.
+      --
+    if not check_expanded_name(name) then    -- not a type_mark ?
+        report_error
+        (spans(name),
+             "Invalid type_mark found in qualified_expression"
+            );
+    end if;
+
+    if ast(aggregate)(1) = "()" then
+        -- The aggregate was in fact an expression, returned as a
+        -- parenthesised expression by the corresponding production.
+        -- In the case of a qualified expression, the parenthesis are
+        -- an artifact of the parse, and must be removed.
+
+        [-, aggregate] := ast(aggregate);
+    end if;
+
+    ast(node) := ["qualify", name, aggregate];
+ 
+ -- allocator ::= NEW type_mark
+   when 141 =>
+    node := newat();
+    [-, type_mark] := rh;
+    ast(node) := ["new", type_mark, []];
+ 
+ -- allocator ::= NEW type_mark general_aggregate
+   when 142 =>
+    node := newat();
+    [-, type_mark, general_aggregate] := rh;
+    ast(node) := ["new", type_mark, general_aggregate];
+ 
+ -- allocator ::= NEW type_mark " aggregate
+   when 143 =>
+    node := newat();
+    [-, type_mark, -, aggregate] := rh;
+    ast(node) := ["new_init", type_mark, aggregate] ;
+ 
+ -- sequence_of_statements ::= {pragma} statement {statement}
+   when 144 =>
+    node := newat();
+    [pragma_list, stmt, stmt_list] := rh;
+    check_pragmas(pragma_list, {});
+    stmt_list := pragma_list + [stmt] + stmt_list;
+--$PC2 (
+    label_list := [];   -- build list of labels found on highest
+                -- level of statement sequence.
+    for stmt in stmt_list | ast(stmt)(1) = "statement" loop 
+        [-, labs, -] := ast(stmt);
+        label_list +:= labs;
+        end loop;
+--$PC2 )
+    labels(node) := +/[labels(stmt) ? []: stmt in stmt_list]; --$PC1
+--
+-- The "?" is necessary, because the LABELS map is not defined on 
+-- the pragma nodes.
+--
+    ast(node) := ["statements", stmt_list, label_list];        --$PC2
+ 
+ -- statement ::= {label} simple_statement
+   when 145 =>
+    [label_list, stmt] := rh;
+    node := newat();
+        labels(node) := label_list;
+    ast(node) := ["statement", label_list, stmt];
+ 
+ -- statement ::= {label} compound_statement
+   when 146 =>
+    [label_list, stmt] := rh;
+    node := newat();
+        labels(node) := label_list + labels(stmt);
+    ast(node) := ["statement", label_list, stmt] ;
+ 
+--$ simple_statement ::= null_statement
+--$ (147):
+ 
+--$ simple_statement ::= assignment_statement
+--$ (148):
+ 
+--$ simple_statement ::= exit_statement
+--$ (149):
+ 
+--$ simple_statement ::= return_statement
+--$ (150):
+ 
+--$ simple_statement ::= goto_statement
+--$ (151):
+ 
+--$ simple_statement ::= delay_statement
+--$ (152):
+ 
+--$ simple_statement ::= abort_statement
+--$ (153):
+ 
+--$ simple_statement ::= raise_statement
+--$ (154):
+ 
+--$ simple_statement ::= code_statement
+--$ (155):
+ 
+--$ simple_statement ::= call_statement
+--$ (156):
+ 
+--$ compound_statement ::= if_statement
+--$ (157):
+ 
+--$ compound_statement ::= case_statement
+--$ (158):
+ 
+--$ compound_statement ::= loop_statement
+--$ (159):
+ 
+--$ compound_statement ::= block_statement
+--$ (160):
+ 
+--$ compound_statement ::= accept_statement
+--$ (161):
+ 
+--$ compound_statement ::= select_statement
+--$ (162):
+ 
+ -- label ::= << label_simple_name >>
+   when 163 =>
+    [-, label_simple_name] := rh;
+    node := label_simple_name;
+ 
+ -- null_statement ::= NULL ;
+   when 164 =>
+    node := newat();
+    ast(node) := ["null_s"];
+ 
+ -- assignment_statement ::= variable_name := expression ;
+   when 165 =>
+    node := newat();
+    [name, -, expression] := rh;
+    ast(node) := [":=", name, expression];
+ 
+ -- if_statement ::= IF condition THEN sequence_of_statements {ELSIF__con
+   when 166 =>
+    node := newat();
+    [-, expression, -, stmts, if_list, opt_else] := rh;
+    if_list := [[expression, stmts]] + if_list;
+--$PC1 (
+    labels(node) := +/[labels(stmts) : [-, stmts] in if_list];
+    if opt_else /= [] then
+        labels(node) +:= labels(opt_else);
+    end if;
+--$PC1 )
+    ast(node) := ["if", if_list, opt_else];
+ 
+ -- condition ::= boolean_expression
+   when 167 =>
+    node := newat();
+    ast(node) := ["condition", rh(1)];
+ 
+ -- case_statement ::= CASE expression IS {pragma} case_statement_alterna
+   when 168 =>
+    node := newat();
+    [-, expression, -, pragma_list, alt, alt_list] := rh;
+    check_pragmas(pragma_list, {});
+    alt_list := pragma_list + [alt] + alt_list;
+    labels(node) :=
+        +/[labels(stmts) : [-, stmts] in alt_list];            --$PC1
+    ast(node) := ["case", expression, alt_list];
+ 
+ -- case_statement_alternative ::= WHEN choice {|choice} => sequence_of_s
+   when 169 =>
+    [-, choice, choice_list, -, stmts] := rh;
+    choice_list := [choice] + choice_list;
+    node := [choice_list, stmts];
+ 
+ -- loop_statement ::= [loop_simple_name:] [iteration_scheme] LOOP sequen
+   when 170 =>
+    node := newat();
+    [simple_name1, iteration_scheme, -, stmts, -, -, simple_name2]
+                                  := rh;
+    if simple_name1 /= [] then
+        [-, id1] := ast(simple_name1);
+        if simple_name2 /= [] then
+            [-, id2] := ast(simple_name2);
+            if id1 /= id2 then
+                match_error(id1, id2, "loop_statement",
+                        [l_span, r_span]);
+            end if;
+        else
+            match_error(id1, "[loop_simple_name]", "loop_statement",
+                              [l_span, r_span]);
+        end if;
+    elseif simple_name2 /= [] then
+        [-, id2] := ast(simple_name2);
+        match_error("[loop_simple_name:]", id2, "loop_statement",
+                             [l_span, r_span]);
+    end if;
+
+--
+-- If there is no label for block, we make one up !
+--
+    if simple_name1 = [] then
+        simple_name1 := newat();
+        id1 := newat_str();
+        ast(simple_name1) := ["simple_name", id1];
+    end if;
+
+    labels(node) := [simple_name1] + labels(stmts);        --$PC1
+    ast(node) := ["loop", id1, iteration_scheme, stmts];
+ 
+ -- iteration_scheme ::= WHILE condition
+   when 171 =>
+    node := newat();
+    [-, expression] := rh;
+    ast(node) := ["while", expression];
+ 
+ -- iteration_scheme ::= FOR loop_parameter_specification
+   when 172 =>
+    [-, loop_parm_spec] := rh;
+    node := loop_parm_spec;
+ 
+ -- loop_parameter_specification ::= identifier IN [REVERSE] discrete_ran
+   when 173 =>
+    node := newat();
+    [id, -, opt_rev, discrete_range] := rh;
+    if opt_rev = [] then
+        kind := "for";
+    else
+        kind := "forrev";
+    end if;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 1)];
+
+    ast(node) := [kind, id_node, discrete_range];
+ 
+ -- block_statement ::= [block_simple_name:] [DECLARE__declarative_part] 
+   when 174 =>
+    node := newat();
+    [simple_name1, decl_part, -, stmts, opt_except_list, -,
+                         simple_name2] := rh;
+    if simple_name1 /= [] then
+        [-, id1] := ast(simple_name1);
+        if simple_name2 /= [] then
+            [-, id2] := ast(simple_name2);
+        else
+            id2 := "[block_simple_name]" ;
+        end if;
+        if id1 /= id2 then
+            match_error(id1, id2, "block_statement",
+                        [l_span, r_span]);
+        end if;
+    elseif simple_name2 /= [] then
+        [-, id2] := ast(simple_name2);
+        match_error("[block_simple_name:]", id2, "block_statement",
+                              [l_span, r_span]);
+    end if;
+
+--$PC1 (
+
+--
+-- If there is no label for the block, we make one up !
+--$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+-- Labels introduced within a block are not propagated upward, even 
+-- though label_names have to be unique within a program unit. This
+-- additional check is left up to the semantic pass.
+--$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+--
+    if simple_name1 = [] then
+        simple_name1 := newat();
+        id1 := newat_str();
+        ast(simple_name1) := ["simple_name", id1];
+    end if;
+    labels(node) := [simple_name1] ;
+
+    label_node := newat();
+    label_list := labels(stmts) +
+                if opt_except_list = [] then
+                    []
+                else labels(opt_except_list)
+                end if;
+    ast(label_node) := ["labels", label_list];
+    spans(label_node) := [right_span(decl_part)];
+    [-, decl_list] := ast(decl_part);
+    decl_list  with:= label_node;
+    ast(decl_part) := ["declarations", decl_list];
+--$PC1 )
+
+    ast(node) := ["block", id1, decl_part, stmts, opt_except_list];
+ 
+ -- exit_statement ::= EXIT [loop_name] [WHEN__condition] ;
+   when 175 =>
+    node := newat();
+    [-, name, opt_expression] := rh;
+    ast(node) := ["exit", name, opt_expression];
+ 
+ -- return_statement ::= RETURN [expression] ;
+   when 176 =>
+    node := newat();
+    [-, opt_expression] := rh;
+    ast(node) := ["return", opt_expression];
+ 
+ -- goto_statement ::= GOTO label_name ;
+   when 177 =>
+    node := newat();
+    [-, name] := rh;
+    ast(node) := ["goto", name];
+ 
+ -- subprogram_declaration ::= subprogram_specification ;
+   when 178 =>
+    node := newat();
+    ast(node) := ["subprogram_decl", rh(1)];
+ 
+ -- subprogram_specification ::= PROCEDURE identifier [formal_part]
+   when 179 =>
+    node := newat();
+    [-, id, opt_formal] := rh;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 2)];
+
+    ast(node) := ["procedure", id_node, opt_formal];
+ 
+ -- subprogram_specification ::= FUNCTION designator [formal_part] RETURN
+   when 180 =>
+    node := newat();
+    [-, desig, opt_formal, -, type_mark] := rh;
+    ast(node) := ["function", desig, opt_formal, type_mark];
+ 
+ -- designator ::= identifier
+   when 181 =>
+    node := newat();
+    ast(node) := ["simple_name", name_list(rh(1))];
+ 
+ -- designator ::= operator_symbol
+   when 182 =>
+    [node] := rh;
+    [-, op_symbol] := ast(node);
+    symb := lower_case_of(op_symbol) ;
+    ast(node) := ["operator", symb] ;
+    if symb notin overloadable_operators then
+        report_error
+            ([l_span, r_span],
+             op_symbol + " is not a valid operator_symbol"
+            );
+    end if;
+ 
+ -- operator_symbol ::= string_literal
+   when 183 =>
+    node := newat();
+    string_lit := name_list(rh(1));
+    lit_len := #string_lit - 1;
+    ast(node) := ["operator", string_lit(2 .. lit_len)];
+ 
+ -- formal_part ::= ( parameter_specification {;parameter_specification} 
+   when 184 =>
+    [-, parm_spec, parm_spec_list] := rh;
+    parm_spec_list := [parm_spec] + parm_spec_list;
+    node := parm_spec_list;
+ 
+ -- parameter_specification ::= identifier_list : mode type_mark [:=expre
+   when 185 =>
+    node := newat();
+    [id_list, -, ast_mode, type_mark, opt_init] := rh;
+    ast(node) := ["formal", id_list, ast_mode, type_mark, opt_init];
+ 
+--$ mode ::= [IN]
+--$ (186):
+ 
+ -- mode ::= IN OUT
+   when 187 =>
+    node := newat();
+    ast(node) := ["mode", "inout"];
+ 
+ -- mode ::= OUT
+   when 188 =>
+    node := newat();
+    ast(node) := ["mode", "out"];
+ 
+ -- subprogram_body ::= subprogram_specification IS declarative_part BEGI
+   when 189 =>
+    node := newat();
+    [sub_spec, -, decl_part, -, stmts, opt_except_list, -,
+                          opt_desig] := rh;
+    if opt_desig /= [] then
+        [-, desig_node] := ast(sub_spec);
+        [-, desig1] := ast(desig_node);
+        [-, desig2] := ast(opt_desig);
+        if desig1 /= desig2 then
+        match_error(desig1, desig2, "subprogram_body",
+                        [l_span, r_span]);
+        end if;
+    end if;
+
+--$PC1 (
+    label_node := newat();
+        label_list := labels(stmts) +
+                if opt_except_list = [] then
+                    []
+                else labels(opt_except_list)
+                end if;
+    ast(label_node) := ["labels", label_list];
+    spans(label_node) := [right_span(decl_part)];
+        [-, decl_list] := ast(decl_part);
+        decl_list  with:= label_node;
+        ast(decl_part) := ["declarations", decl_list];
+--$PC1 )
+
+    ast(node) := ["subprogram", sub_spec, decl_part, stmts,
+                            opt_except_list];
+--
+-- Note that a tuple containing all the labels declared in the subprogram
+-- has been placed in the node for the subprogram.  These labels should
+-- be declared at the end of the declarative part for that block.
+--
+ 
+ -- call_statement ::= name ;
+   when 190 =>
+    node := newat();
+    ast(node) := ["call", rh(1)];
+ 
+ -- package_declaration ::= package_specification ;
+   when 191 =>
+    [node] := rh;
+ 
+ -- package_specification ::= PACKAGE identifier IS {basic_declarative_it
+   when 192 =>
+    node := newat();
+    [-, id, -, decl_list, opt_private_part, -, opt_simple_name]
+                                 := rh;
+    id1 := name_list(id);
+    if opt_simple_name /= [] then
+        [-, id2] := ast(opt_simple_name);
+        if id1 /= id2 then
+        match_error(id1, id2, "package_specification",
+                        [l_span, r_span]);
+        end if;
+    end if;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", id1];
+    spans(id_node) := [token_span(rhs, 2)];
+
+    for decl in decl_list | ast(decl)(1) in body_nodes loop 
+        report_error
+            (spans(decl),
+             "Body declaration not allowed in package_specification"
+            );
+    end loop;
+
+    decl_node := newat();
+    ast(decl_node) := ["declarations", decl_list];
+
+    ast(node) := ["package_spec", id_node, decl_node,
+                        opt_private_part];
+ 
+ -- package_body ::= PACKAGE BODY package_simple_name IS declarative_part
+   when 193 =>
+    node := newat();
+    [-, -, simple_name1, -, decl_part, -, opt_simple_name2]
+                            := rh;
+    [-, id1] := ast(simple_name1);
+    if opt_simple_name2 /= [] then
+        [-, id2] := ast(opt_simple_name2);
+        if id1 /= id2 then
+        match_error(id1, id2, "package_body",
+                        [l_span, r_span]);
+        end if;
+    end if;
+    ast(node) := ["package_body", id1, decl_part, [], []];
+--
+-- See the production below for a description of the empty tuples.
+--
+ 
+ -- package_body ::= PACKAGE BODY package_simple_name IS declarative_part
+   when 194 =>
+    node := newat();
+    [-, -, simple_name1, -, decl_part, -, stmts, opt_except_list, -,
+                       opt_simple_name2] := rh;
+    [-, id1] := ast(simple_name1);
+    if opt_simple_name2 /= [] then
+        [-, id2] := ast(opt_simple_name2);
+        if id1 /= id2 then
+            match_error(id1, id2, "package_body",
+                         [l_span, r_span]);
+        end if;
+    end if;
+
+--$PC1 (
+    label_node := newat();
+        label_list := labels(stmts) +
+                if opt_except_list = [] then
+                    []
+                else labels(opt_except_list)
+                end if;
+    ast(label_node) := ["labels", label_list];
+    spans(label_node) := [right_span(decl_part)];
+        [-, decl_list] := ast(decl_part);
+        decl_list  with:= label_node;
+        ast(decl_part) := ["declarations", decl_list];
+--$PC1 )
+
+    ast(node) := ["package_body", simple_name1, decl_part, stmts,
+                            opt_except_list];
+ 
+ -- private_type_declaration ::= TYPE identifier [discriminant_part]IS [L
+   when 195 =>
+    node := newat();
+    [-, id, opt_discr_part, opt_limited] := rh;
+    if opt_limited = [] then
+        kind := "private";
+    else
+        kind := "limited private";
+    end if;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 2)];
+
+    ast(node) := ["private_decl", id_node, opt_discr_part, kind];
+ 
+ -- use_clause ::= USE package_name {,package_name} ;
+   when 196 =>
+    node := newat();
+    [-, pack_name, pack_name_list] := rh;
+    pack_name_list := [pack_name] + pack_name_list;
+    ast(node) := ["use", pack_name_list];
+ 
+ -- renaming_declaration ::= identifier:type_mark RENAMES object_name ;
+   when 197 =>
+    node := newat();
+    [[id, type_mark], -, name] := rh;
+    ast(node) := ["rename_obj", id, type_mark, name];
+ 
+ -- renaming_declaration ::= identifier:EXCEPTION RENAMES exception_name 
+   when 198 =>
+    node := newat();
+    [id, -, name] := rh;
+    ast(node) := ["rename_ex", id, name];
+ 
+ -- renaming_declaration ::= PACKAGE identifier RENAMES package_name ;
+   when 199 =>
+    node := newat();
+    [-, id, -, name] := rh;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 2)];
+
+    ast(node) := ["rename_pack", id_node, name];
+ 
+ -- renaming_declaration ::= subprogram_specification RENAMES subprogram_
+   when 200 =>
+    node := newat();
+    [sub_spec, -, name] := rh;
+    ast(node) := ["rename_sub", sub_spec, name];
+ 
+ -- task_declaration ::= task_specification ;
+   when 201 =>
+    [node] := rh;
+ 
+ -- task_specification ::= TASK [TYPE] identifier
+   when 202 =>
+    node := newat();
+    [-, opt_type, id] := rh;
+    if opt_type = [] then
+        task_kind := "task_spec";
+    else
+        task_kind := "task_type_spec";
+    end if;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 3)];
+
+    ast(node) := [task_kind, id_node, [], []];
+ 
+ -- task_specification ::= TASK [TYPE] identifier IS {entry_declaration} 
+   when 203 =>
+    node := newat();
+    [-, opt_type, id, -, entry_decl_list, repr_clause_list, -,
+                        opt_simple_name] := rh;
+    if opt_type = [] then
+        task_kind := "task_spec";
+    else
+        task_kind := "task_type_spec";
+    end if;
+
+    id1 := name_list(id);
+    if opt_simple_name /= [] then
+        [-, id2] := ast(opt_simple_name);
+        if id1 /= id2 then
+        match_error(id1, id2, "task_specification",
+                        [l_span, r_span]);
+        end if;
+    end if;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", id1];
+    spans(id_node) := [token_span(rhs, 3)];
+
+    ast(node) := [task_kind, id_node, entry_decl_list,
+                        repr_clause_list];
+ 
+ -- task_body ::= TASK BODY task_simple_name IS declarative_part BEGIN se
+   when 204 =>
+    node := newat();
+    [-, -, simple_name1, -, decl_part, -, stmts, opt_except_list, -,
+                       opt_simple_name2] := rh;
+    [-, id1] := ast(simple_name1);
+    if opt_simple_name2 /= [] then
+        [-, id2] := ast(opt_simple_name2);
+        if id1 /= id2 then
+        match_error(id1, id2, "task_body",
+                        [l_span, r_span]);
+        end if;
+    end if;
+
+--$PC1 (
+    label_node := newat();
+        label_list := labels(stmts) +
+                if opt_except_list = [] then
+                    []
+                else labels(opt_except_list)
+                end if;
+    ast(label_node) := ["labels", label_list];
+    spans(label_node) := [right_span(decl_part)];
+        [-, decl_list] := ast(decl_part);
+        decl_list  with:= label_node;
+        ast(decl_part) := ["declarations", decl_list];
+--$PC1 )
+
+    ast(node) := ["task", simple_name1, decl_part, stmts,
+                            opt_except_list];
+ 
+ -- entry_declaration ::= ENTRY identifier [(discrete_range)][formal_part
+   when 205 =>
+    node := newat();
+    [-, id, [opt_discrete_range, opt_formal]] := rh;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 2)];
+
+    if opt_discrete_range = [] then
+        ast(node) := ["entry", id_node, opt_formal];
+    else
+        ast(node) := ["entry_family", id_node,
+                    opt_discrete_range, opt_formal];
+    end if;
+ 
+ -- accept_statement ::= ACCEPT entry_simple_name [(entry_index)][formal_
+   when 206 =>
+    node := newat();
+    [-, simple_name, [opt_entry_index, opt_formal]] := rh;
+        labels(node) := [];
+    ast(node) := ["accept", simple_name, opt_entry_index,
+                        opt_formal, []];
+ 
+ -- accept_statement ::= ACCEPT entry_simple_name [(entry_index)][formal_
+   when 207 =>
+    node := newat();
+    [-, simple_name1, [opt_entry_index, opt_formal], -, stmts, -,
+                          opt_simple_name2] := rh;
+    [-, id1] := ast(simple_name1);
+    if opt_simple_name2 /= [] then
+        [-, id2] := ast(opt_simple_name2);
+        if id1 /= id2 then
+            match_error(id1, id2, "accept_statement",
+                        [l_span, r_span]);
+        end if;
+    end if;
+
+    labels(node) := labels(stmts);                 --$PC1
+
+    ast(node) := ["accept", simple_name1, opt_entry_index,
+                            opt_formal, stmts ];
+ 
+--$ entry_index ::= expression
+--$ (208):
+ 
+ -- delay_statement ::= DELAY simple_expression ;
+   when 209 =>
+    node := newat();
+    [-, simple_expr] := rh;
+    ast(node) := ["delay", simple_expr];
+ 
+--$ select_statement ::= selective_wait
+--$ (210):
+ 
+--$ select_statement ::= conditional_entry_call
+--$ (211):
+ 
+--$ select_statement ::= timed_entry_call
+--$ (212):
+ 
+ -- selective_wait ::= SELECT {pragma} select_alternative {OR__select_alt
+   when 213 =>
+    node := newat();
+    [-, pragma_list, alt, alt_list, opt_stmts] := rh;
+    check_pragmas(pragma_list, {});
+    alt_list := pragma_list + [alt] + alt_list;
+
+--$PC1 (
+    labels(node) := +/[labels(alt) : alt in alt_list] ;
+    if opt_stmts /= [] then
+        labels(node) +:= labels(opt_stmts);
+    end if;
+--$PC1 )
+
+    ast(node) := ["selective_wait", alt_list, opt_stmts];
+ 
+ -- select_alternative ::= [WHEN__condition=>] selective_wait_alternative
+   when 214 =>
+    [condition, alt] := rh;
+    if condition = [] then
+        node := alt;
+    else
+        node := newat();
+        labels(node) := labels(alt);
+        ast(node) := ["guard", condition, alt];
+    end if;
+ 
+--$ selective_wait_alternative ::= accept_alternative
+--$ (215):
+ 
+--$ selective_wait_alternative ::= delay_alternative
+--$ (216):
+ 
+--$ selective_wait_alternative ::= terminate_alternative
+--$ (217):
+ 
+ -- accept_alternative ::= accept_statement [sequence_of_statements]
+   when 218 =>
+    node := newat();
+    [accept_stmt, opt_stmts] := rh;
+    labels(node) := labels(accept_stmt);
+    if opt_stmts /= [] then
+        labels(node) +:= labels(opt_stmts);
+    end if;
+    ast(node) := ["accept_alt", accept_stmt, opt_stmts];
+ 
+ -- delay_alternative ::= delay_statement [sequence_of_statements]
+   when 219 =>
+    node := newat();
+    [delay_stmt, opt_stmts] := rh;
+    if opt_stmts /= [] then
+         labels(node) := labels(opt_stmts);
+    else labels(node) := [];
+    end if;
+    ast(node) := ["delay_alt", delay_stmt, opt_stmts];
+ 
+ -- terminate_alternative ::= TERMINATE ; {pragma}
+   when 220 =>
+    node := newat();
+    [-, -, pragma_list] := rh;
+    check_pragmas(pragma_list, {});
+        labels(node) := [];                                        --$PC1
+    ast(node) := ["terminate_alt", pragma_list];               --$PC1
+ 
+ -- conditional_entry_call ::= SELECT {pragma} call_statement [sequence_o
+   when 221 =>
+    node := newat();
+    [-, pragma_list, call_stmt, opt_stmts, -, else_stmts] := rh;
+    check_pragmas(pragma_list, {});
+    for current_node in pragma_list loop 
+        [-, id_node] := ast(current_node);
+        [-, id] := ast(id_node);
+        warning("Pragma " + id + " is ignored");
+    end loop;
+    labels(node) := if opt_stmts = [] then
+                             []
+                        else labels(opt_stmts)
+                        end if
+              + labels(else_stmts);            --$PC1
+    ast(node) := ["conditional_entry_call", call_stmt, opt_stmts,
+                                else_stmts];
+ 
+ -- timed_entry_call ::= SELECT {pragma} call_statement [sequence_of_stat
+   when 222 =>
+    node := newat();
+    [-, pragma_list1, call_stmt, opt_stmts, -, pragma_list2,
+                          delay_alt] := rh;
+    check_pragmas(pragma_list1, {});
+    check_pragmas(pragma_list2, {});
+    for current_node in pragma_list1 + pragma_list2 loop 
+        [-, id_node] := ast(current_node);
+        [-, id] := ast(id_node);
+        warning("Pragma " + id + " is ignored");
+    end loop;
+    labels(node) := if opt_stmts = [] then
+                             []
+                        else labels(opt_stmts)
+                        end if
+                      + labels(delay_alt);             --$PC1
+    ast(node) := ["timed_entry_call", call_stmt, opt_stmts,
+                                delay_alt];
+ 
+ -- abort_statement ::= ABORT task_name {,task_name} ;
+   when 223 =>
+    node := newat();
+    [-, name, ast_name_list] := rh;
+    ast_name_list := [name] + ast_name_list;
+    ast(node) := ["abort", ast_name_list];
+ 
+--$ compilation ::= {compilation_unit}
+--$ (224):
+ 
+ -- compilation_unit ::= context_clause library_unit
+   when 225 =>
+    node := newat();
+    [context_clause, library_unit] := rh;
+    ast(node) := ["unit", context_clause, library_unit];
+ 
+ -- compilation_unit ::= context_clause secondary_unit
+   when 226 =>
+    node := newat();
+    [context_clause, secondary_unit] := rh;
+    ast(node) := ["unit", context_clause, secondary_unit];
+ 
+--$ library_unit ::= subprogram_declaration
+--$ (227):
+ 
+--$ library_unit ::= package_declaration
+--$ (228):
+ 
+--$ library_unit ::= generic_declaration
+--$ (229):
+ 
+--$ library_unit ::= generic_instantiation
+--$ (230):
+ 
+--$ library_unit ::= subprogram_body
+--$ (231):
+ 
+--$ secondary_unit ::= library_unit_body
+--$ (232):
+ 
+--$ secondary_unit ::= subunit
+--$ (233):
+ 
+--$ library_unit_body ::= package_body
+--$ (234):
+ 
+ -- context_clause ::= {with_clause{use_clause}}
+   when 235 =>
+    [with_use_list] := rh;
+    [context_clause, pragma_list] := with_use_list;
+
+    if context_clause /= [] then
+        check_pragmas(pragma_list, context_pragmas);
+
+        -- context_clause
+        -- has the form: [with_use_list...]
+        -- each with_use_list
+            -- has the form: [with_clause, use_clause...]
+
+        [kind, clause_list] := ast(top(context_clause));
+        clause_list +:= pragma_list;
+        ast(top(context_clause)) := [kind, clause_list];
+    end if;
+
+    node := context_clause;
+ 
+ -- with_clause ::= WITH unit_simple_name {,unit_simple_name} ;
+   when 236 =>
+    node := newat();
+    [-, simple_name, simple_name_list] := rh;
+    simple_name_list := [simple_name] + simple_name_list;
+    ast(node) := ["with", simple_name_list];
+ 
+ -- body_stub ::= subprogram_specification IS SEPARATE ;
+   when 237 =>
+    node := newat();
+    [sub_spec] := rh ;
+    ast(node) := ["subprogram_stub", sub_spec];
+ 
+ -- body_stub ::= PACKAGE BODY package_simple_name IS SEPARATE ;
+   when 238 =>
+    node := newat();
+    [-, -, simple_name] := rh;
+    ast(node) := ["package_stub", simple_name];
+ 
+ -- body_stub ::= TASK BODY task_simple_name IS SEPARATE ;
+   when 239 =>
+    node := newat();
+    [-, -, simple_name] := rh;
+    ast(node) := ["task_stub", simple_name];
+ 
+ -- subunit ::= SEPARATE ( parent_unit_name ) proper_body
+   when 240 =>
+    node := newat();
+    [-, -, name, -, proper_body] := rh;
+    ast(node) := ["separate", name, proper_body];
+ 
+ -- exception_declaration ::= identifier_list : EXCEPTION ;
+   when 241 =>
+    node := newat();
+    [id_list] := rh;
+    ast(node) := ["except_decl", id_list];
+ 
+ -- exception_handler ::= WHEN exception_choice {|exception_choice} => se
+   when 242 =>
+    node := newat();
+    [-, choice, choice_list, -, stmts] := rh;
+    choice_list := [choice] + choice_list;
+    labels(node) := labels(stmts);              --$PC1
+    ast(node) := ["handler", choice_list, stmts];
+ 
+--$ exception_choice ::= exception_name
+--$ (243):
+ 
+ -- exception_choice ::= OTHERS
+   when 244 =>
+    node := newat();
+    ast(node) := ["others"];
+ 
+ -- raise_statement ::= RAISE [exception_name] ;
+   when 245 =>
+    node := newat();
+    [-, opt_name] := rh;
+    ast(node) := ["raise", opt_name];
+ 
+ -- generic_declaration ::= generic_specification ;
+   when 246 =>
+    [node] := rh;
+ 
+ -- generic_specification ::= generic_formal_part subprogram_specificatio
+   when 247 =>
+    node := newat();
+    [generic_part, sub_spec] := rh;
+    [kind, id, formals, ret] := ast(sub_spec) ;
+    if kind = "function" then
+        if ast(id)(1) /= "simple_name" then
+        report_error
+            (spans(id),
+             "Operator symbol invalid in Generic specification"
+                    );
+                ast(id)(1) := "simple_name";
+        end if;
+    end if;
+    ast(node) := ["generic_" + kind, id, generic_part, formals,ret];
+ 
+ -- generic_specification ::= generic_formal_part package_specification
+   when 248 =>
+    node := newat();
+    [generic_part, pack_spec] := rh;
+    [-, id, decls, opt_priv_part] := ast(pack_spec) ;
+    ast(node) := ["generic_package", id, generic_part, 
+                        decls, opt_priv_part] ;
+ 
+ -- generic_formal_part ::= GENERIC {generic_parameter_declaration}
+   when 249 =>
+    node := newat();
+    [-, parm_decl_list] := rh;
+    ast(node) := ["generic_formals", parm_decl_list];
+ 
+ -- generic_parameter_declaration ::= identifier_list : [IN[OUT]] type_ma
+   when 250 =>
+    node := newat();
+    [id_list, -, ast_mode, type_mark, opt_init] := rh;
+    ast(node) := ["generic_obj", id_list, ast_mode, type_mark,
+                            opt_init];
+ 
+ -- generic_parameter_declaration ::= TYPE identifier IS generic_type_def
+   when 251 =>
+    node := newat();
+    [-, id, -, type_def] := rh;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 2)];
+
+    ast(node) := ["generic_type", id_node, type_def];
+ 
+ -- generic_parameter_declaration ::= private_type_declaration
+   when 252 =>
+    [node] := rh;
+    ast(node)(1) := "gen_priv_type";
+ 
+ -- generic_parameter_declaration ::= WITH subprogram_specification [IS__
+   when 253 =>
+    node := newat();
+    [-, sub_spec, opt_is_part] := rh;
+    ast(node) := ["generic_subp", sub_spec, opt_is_part];
+ 
+ -- generic_type_definition ::= ( <> )
+   when 254 =>
+    node := newat();
+    ast(node) := ["generic", "discrete_type"];
+ 
+ -- generic_type_definition ::= RANGE <>
+   when 255 =>
+    node := newat();
+    ast(node) := ["generic", "integer_type"];
+ 
+ -- generic_type_definition ::= DIGITS <>
+   when 256 =>
+    node := newat();
+    ast(node) := ["generic", "floating_type"];
+ 
+ -- generic_type_definition ::= DELTA <>
+   when 257 =>
+    node := newat();
+    ast(node) := ["generic", "fixed_type"];
+ 
+--$ generic_type_definition ::= array_type_definition
+--$ (258):
+ 
+--$ generic_type_definition ::= access_type_definition
+--$ (259):
+ 
+ -- generic_instantiation ::= PACKAGE identifier IS NEW generic_package_n
+   when 260 =>
+    node := newat();
+    [-, id, -, -, pack_name, actual_part] := rh;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 2)];
+
+    ast(node) := ["package_instance", id_node, pack_name,
+                            actual_part];
+ 
+ -- generic_instantiation ::= FUNCTION designator IS NEW generic_function
+   when 261 =>
+    node := newat();
+    [-, desig, -, -, func_name, actual_part] := rh;
+    ast(node) := ["function_instance", desig, func_name,
+                            actual_part];
+ 
+ -- generic_instantiation ::= subprogram_specification IS NEW generic_pro
+   when 262 =>
+    node := newat();
+    [sub_spec, -, -, proc_name, actual_part] := rh;
+    [kind, id, opt_formal] := ast(sub_spec);
+    if kind /= "procedure" then
+        report_error
+            (spans(sub_spec),
+             "Bad generic procedure instantiation"
+            );
+    end if;
+    if opt_formal /= [] then
+        report_error
+            (spans(sub_spec),
+             "formal_part not allowed in procedure instantiation"
+            );
+    end if;
+    ast(node) := ["procedure_instance", id, proc_name, actual_part];
+ 
+ -- generic_actual_part ::= ( generic_association {,generic_association} 
+   when 263 =>
+    [-, assoc, assoc_list] := rh;
+    assoc_list := [assoc] + assoc_list;
+    node := assoc_list;
+ 
+ -- generic_association ::= [generic_formal_parameter=>]generic_actual_pa
+   when 264 =>
+    node := newat();
+    [[opt_name, expression]] := rh;
+    ast(node) := ["instance", opt_name, expression];
+ 
+--$ generic_formal_parameter ::= parameter_simple_name
+--$ (265):
+ 
+ -- generic_formal_parameter ::= operator_symbol
+   when 266 =>
+    [node] := rh;
+    [-,op_symbol] := ast(node) ;
+    symb := lower_case_of(op_symbol) ;
+    ast(node) := ["operator", symb] ;
+    if symb notin overloadable_operators then
+        report_error
+            ([l_span, r_span],
+             node + " is not a valid operator_symbol"
+            );
+    end if;
+ 
+--$ generic_actual_parameter ::= expression
+--$ (267):
+ 
+ -- representation_clause ::= type_representation_clause
+   when 268 =>
+    [node] := rh;
+ 
+ -- representation_clause ::= address_clause
+   when 269 =>
+    [node] := rh;
+        report_error( spans(node), "address_clause not supported.");
+ 
+--$ type_representation_clause ::= length_clause
+--$ (270):
+ 
+--$ type_representation_clause ::= enumeration_representation_clause
+--$ (271):
+ 
+--$ type_representation_clause ::= record_representation_clause
+--$ (272):
+ 
+ -- length_clause ::= FOR attribute USE simple_expression ;
+   when 273 =>
+    node := newat();
+    [-, attribute, -, simple_expr] := rh;
+    ast(node) := ["length_clause", attribute, simple_expr];
+ 
+ -- enumeration_representation_clause ::= FOR type_simple_name USE aggreg
+   when 274 =>
+    node := newat();
+    [-, simple_name, -, aggregate] := rh;
+    ast(node) := ["enum_rep_clause", simple_name, aggregate];
+ 
+ -- record_representation_clause ::= FOR type_simple_name USE RECORD [ali
+   when 275 =>
+    node := newat();
+    [-, simple_name, -, -, opt_align_clause, comp_clause_list]
+                                := rh;
+    ast(node) := ["rec_rep_clause", simple_name, opt_align_clause,
+                            comp_clause_list];
+ 
+ -- alignment_clause ::= AT MOD static_simple_expression ;
+   when 276 =>
+    [-, -, simple_expr] := rh;
+    node := simple_expr;
+ 
+ -- component_clause ::= component_name AT static_simple_expression RANGE
+   when 277 =>
+    node := newat();
+    [name, -, simple_expr, -, ast_range] := rh;
+    ast(node) := ["compon_clause", name, simple_expr,
+                            ast_range];
+ 
+ -- address_clause ::= FOR simple_name USE AT simple_expression ;
+   when 278 =>
+    node := newat();
+    [-, simple_name, -, -, simple_expression] := rh;
+    ast(node) := ["address_clause", simple_name, simple_expression];
+ 
+ -- code_statement ::= name " record_aggregate ;
+   when 279 =>
+    node := [];
+    [name, -, -] := rh;
+      --
+      -- Semantic check for type_mark in code_statement
+      --
+    if not check_expanded_name(name) then    -- not a type_mark ?
+        report_error
+        (spans(name),
+             "Invalid type_mark in code statement"
+            );
+    end if;
+
+ 
+ -- {pragma} ::= %empty
+   when 280 =>
+    node := [];
+ 
+ -- {pragma} ::= {pragma} pragma
+   when 281 =>
+    [node, pragma] := rh;
+    if pragma /= [] then
+        node with:= pragma;
+    end if;
+ 
+ -- [(argument_association{,argument_association})] ::= %empty
+   when 282 =>
+    node := [];
+ 
+ -- [(argument_association{,argument_association})] ::= ( argument_associ
+   when 283 =>
+    node := rh(2);
+ 
+ -- argument_association_list ::= argument_association
+   when 284 =>
+    node := [rh(1)];
+ 
+ -- argument_association_list ::= argument_association_list , argument_as
+   when 285 =>
+    [node, -, arg_assoc] := rh;
+    node with:= arg_assoc;
+ 
+ -- [argument_identifier=>]expression ::= expression
+   when 286 =>
+    node := newat();
+    ast(node) := ["arg", [], rh(1)];
+ 
+ -- [argument_identifier=>]expression ::= argument_identifier => expressi
+   when 287 =>
+    node := newat();
+    [id, -, expression] := rh;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 1)];
+
+    ast(node) := ["arg", id_node, expression];
+ 
+ -- [:=expression] ::= %empty
+   when 288 =>
+    node := [];
+ 
+ -- [:=expression] ::= := expression
+   when 289 =>
+    [-, node] := rh;
+ 
+ -- [CONSTANT] ::= %empty
+   when 290 =>
+    node := [];
+ 
+ -- [CONSTANT] ::= CONSTANT
+   when 291 =>
+    node := "constant";
+ 
+ -- {,identifier} ::= %empty
+   when 292 =>
+    node := [];
+ 
+ -- {,identifier} ::= {,identifier} , identifier
+   when 293 =>
+    [id_list, -, id] := rh;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 3)];
+
+    id_list with:= id_node;
+    node := id_list;
+ 
+ -- [discriminant_part]IS ::= IS
+   when 294 =>
+    node := [];
+ 
+ -- [discriminant_part]IS ::= discriminant_part IS
+   when 295 =>
+    [node] := rh;
+ 
+ -- [constraint] ::= %empty
+   when 296 =>
+    node := [];
+ 
+--$ [constraint] ::= constraint
+--$ (297):
+ 
+ -- expanded_name ::= identifier
+   when 298 =>
+    node := newat();
+    ast(node) := ["simple_name", name_list(rh(1))];
+ 
+ -- expanded_name ::= expanded_name . identifier
+   when 299 =>
+    node := newat();
+    [expanded_name, -, id] := rh;
+
+    id_node := newat();
+    ast(id_node) := ["simple_name", name_list(id)];
+    spans(id_node) := [token_span(rhs, 3)];
+
+    ast(node) := [".", expanded_name, id_node];
+ 
+ -- {,enumeration_literal_specification} ::= %empty
+   when 300 =>
+    node := [];
+ 
+ -- {,enumeration_literal_specification} ::= {,enumeration_literal_specif
+   when 301 =>
+    [enum_lit_list, -, enum_lit] := rh;
+    enum_lit_list with:= enum_lit;
+    node := enum_lit_list;
+ 
+ -- [range_constraint] ::= %empty
+   when 302 =>
+    node := [];
+ 
+--$ [range_constraint] ::= range_constraint
+--$ (303):
+ 
+ -- {,index_subtype_definition} ::= %empty
+   when 304 =>
+    node := [];
+ 
+ -- {,index_subtype_definition} ::= {,index_subtype_definition} , index_s
+   when 305 =>
+    [index_list, -, index] := rh;
+    index_list with := index;
+    node := index_list;
+ 
+ -- {,discrete_range} ::= %empty
+   when 306 =>
+    node := [];
+ 
+ -- {,discrete_range} ::= {,discrete_range} , discrete_range
+   when 307 =>
+    [discrete_range_list, -, discrete_range] := rh;
+    discrete_range_list with:= discrete_range;
+    node := discrete_range_list;
+ 
+ -- {component_declaration} ::= %empty
+   when 308 =>
+    node := [];
+ 
+ -- {component_declaration} ::= {component_declaration} component_declara
+   when 309 =>
+    [comp_dec_list, comp_dec, pragma_list] := rh;
+    check_pragmas(pragma_list, {});
+    node := comp_dec_list + normalize_declaration(comp_dec)
+                            + pragma_list;
+ 
+ -- {;discriminant_specification} ::= %empty
+   when 310 =>
+    node := [];
+ 
+ -- {;discriminant_specification} ::= {;discriminant_specification} ; dis
+   when 311 =>
+    [discr_spec_list, -, discr_spec] := rh;
+    discr_spec_list with:= discr_spec;
+    node := discr_spec_list;
+ 
+ -- {variant} ::= %empty
+   when 312 =>
+    node := [];
+ 
+ -- {variant} ::= {variant} variant
+   when 313 =>
+    [variant_list, variant] := rh;
+    node := variant_list with variant;
+ 
+ -- {|choice} ::= %empty
+   when 314 =>
+    node := [];
+ 
+ -- {|choice} ::= {|choice} "|" choice
+   when 315 =>
+    [choice_list, -, choice] := rh;
+    choice_list with:= choice;
+    node := choice_list;
+ 
+ -- [discriminant_part]; ::= ;
+   when 316 =>
+    node := [];
+ 
+ -- [discriminant_part]; ::= discriminant_part ;
+   when 317 =>
+    [node] := rh;
+ 
+ -- {basic_declarative_item} ::= {pragma}
+   when 318 =>
+    [pragma_list] := rh;
+    check_pragmas(pragma_list, immediate_decl_pragmas);
+    node := pragma_list;
+ 
+ -- {basic_declarative_item} ::= {basic_declarative_item} basic_declarati
+   when 319 =>
+    [basic_decl_list, basic_decl, pragma_list] := rh;
+    check_pragmas(pragma_list, immediate_decl_pragmas);
+    node := basic_decl_list + normalize_declaration(basic_decl) 
+                            + pragma_list;
+ 
+ -- {,component_association} ::= %empty
+   when 320 =>
+    node := [];
+ 
+ -- {,component_association} ::= {,component_association} , component_ass
+   when 321 =>
+    [comp_assoc_list, -, comp_assoc] := rh;
+    comp_assoc_list with:= comp_assoc;
+    node := comp_assoc_list;
+ 
+--$ [choice{|choice}=>]expression ::= expression
+--$ (322):
+ 
+ -- [choice{|choice}=>]expression ::= choice {|choice} => expression
+   when 323 =>
+    [choice, choice_list, -, expression] := rh;
+    choice_list := [choice] + choice_list;
+    node := newat();
+    ast(node) := ["choice_list", choice_list, expression];
+ 
+ -- {,general_component_association} ::= %empty
+   when 324 =>
+    node := [];
+ 
+ -- {,general_component_association} ::= {,general_component_association}
+   when 325 =>
+    [gen_comp_assoc_list, -, gen_comp_assoc] := rh;
+    gen_comp_assoc_list with:= gen_comp_assoc;
+    node := gen_comp_assoc_list;
+ 
+ -- relation{AND__relation} ::= relation AND relation
+   when 326 =>
+    node := newat();
+    [relation1, optr, relation2] := rh;
+    ast(node) :=
+        [lower_case_of(name_list(optr)), relation1, relation2];
+ 
+ -- relation{AND__relation} ::= relation{AND__relation} AND relation
+   when 327 =>
+    node := newat();
+    [expression, optr, relation] := rh;
+    ast(node) :=
+        [lower_case_of(name_list(optr)), expression, relation];
+ 
+ -- relation{OR__relation} ::= relation OR relation
+   when 328 =>
+    node := newat();
+    [relation1, optr, relation2] := rh;
+    ast(node) :=
+        [lower_case_of(name_list(optr)), relation1, relation2];
+ 
+ -- relation{OR__relation} ::= relation{OR__relation} OR relation
+   when 329 =>
+    node := newat();
+    [expression, optr, relation] := rh;
+    ast(node) :=
+        [lower_case_of(name_list(optr)), expression, relation];
+ 
+ -- relation{XOR__relation} ::= relation XOR relation
+   when 330 =>
+    node := newat();
+    [relation1, optr, relation2] := rh;
+    ast(node) :=
+        [lower_case_of(name_list(optr)), relation1, relation2];
+ 
+ -- relation{XOR__relation} ::= relation{XOR__relation} XOR relation
+   when 331 =>
+    node := newat();
+    [expression, optr, relation] := rh;
+    ast(node) :=
+        [lower_case_of(name_list(optr)), expression, relation];
+ 
+ -- relation{AND__THEN__relation} ::= relation AND THEN relation
+   when 332 =>
+    node := newat();
+    [relation1, -, -, relation2] := rh;
+    ast(node) := ["andthen", relation1, relation2];
+ 
+ -- relation{AND__THEN__relation} ::= relation{AND__THEN__relation} AND T
+   when 333 =>
+    node := newat();
+    [expression, -, -, relation] := rh;
+    ast(node) := ["andthen", expression, relation];
+ 
+ -- relation{OR__ELSE__relation} ::= relation OR ELSE relation
+   when 334 =>
+    node := newat();
+    [relation1, -, -, relation2] := rh;
+    ast(node) := ["orelse", relation1, relation2];
+ 
+ -- relation{OR__ELSE__relation} ::= relation{OR__ELSE__relation} OR ELSE
+   when 335 =>
+    node := newat();
+    [expression, -, -, relation] := rh;
+    ast(node) := ["orelse", expression, relation];
+ 
+ -- [relational_operator__simple_expression] ::= %empty
+   when 336 =>
+    node := [];
+ 
+ -- [relational_operator__simple_expression] ::= relational_operator simp
+   when 337 =>
+    node := rh;
+ 
+ -- [NOT] ::= %empty
+   when 338 =>
+    node := [];
+ 
+ -- [NOT] ::= NOT
+   when 339 =>
+    node := "not";
+ 
+--$ [unary_adding_operator]term{binary_adding_operator__term} ::= term
+--$ (340):
+ 
+ -- [unary_adding_operator]term{binary_adding_operator__term} ::= unary_a
+   when 341 =>
+    node := newat();
+    [unary_op, ast_term] := rh;
+    ast(node) := [unary_op, ast_term];
+ 
+ -- [unary_adding_operator]term{binary_adding_operator__term} ::= [unary_
+   when 342 =>
+    node := newat();
+    [expression, add_op, ast_term] := rh;
+    ast(node) := [add_op, expression, ast_term];
+ 
+--$ factor{multiplying_operator__factor} ::= factor
+--$ (343):
+ 
+ -- factor{multiplying_operator__factor} ::= factor{multiplying_operator_
+   when 344 =>
+    node := newat();
+    [ast_term, mul_op, factor] := rh;
+    ast(node) := [mul_op, ast_term, factor];
+ 
+ -- [**__primary] ::= %empty
+   when 345 =>
+    node := [];
+ 
+ -- [**__primary] ::= ** primary
+   when 346 =>
+    [optr, primary] := rh;
+    node := [name_list(optr), primary];
+ 
+ -- {statement} ::= {pragma}
+   when 347 =>
+    [pragma_list] := rh;
+    check_pragmas(pragma_list, {});
+    node := pragma_list;
+ 
+ -- {statement} ::= {statement} statement {pragma}
+   when 348 =>
+    [stmt_list, stmt, pragma_list] := rh;
+    check_pragmas(pragma_list, {});
+    node := stmt_list + [stmt] + pragma_list;
+ 
+ -- {label} ::= %empty
+   when 349 =>
+    node := [];
+ 
+ -- {label} ::= {label} label
+   when 350 =>
+    [label_list, label] := rh;
+    label_list with:= label;
+    node := label_list;
+ 
+ -- {ELSIF__condition__THEN__sequence_of_statements} ::= %empty
+   when 351 =>
+    node := [];
+ 
+ -- {ELSIF__condition__THEN__sequence_of_statements} ::= {ELSIF__conditio
+   when 352 =>
+    [if_list, -, expression, -, stmts] := rh;
+    if_list with:= [expression, stmts];
+    node := if_list;
+ 
+ -- [ELSE__sequence_of_statements] ::= %empty
+   when 353 =>
+    node := [];
+ 
+ -- [ELSE__sequence_of_statements] ::= ELSE sequence_of_statements
+   when 354 =>
+    [-, stmts] := rh;
+    node := stmts;
+ 
+ -- {case_statement_alternative} ::= %empty
+   when 355 =>
+    node := [];
+ 
+ -- {case_statement_alternative} ::= {case_statement_alternative} case_st
+   when 356 =>
+    [alt_list, alt] := rh;
+    alt_list with:= alt;
+    node := alt_list;
+ 
+ -- [simple_name:] ::= %empty
+   when 357 =>
+    node := [];
+ 
+ -- [simple_name:] ::= simple_name :
+   when 358 =>
+    [node] := rh;
+ 
+ -- [simple_name] ::= %empty
+   when 359 =>
+    node := [];
+ 
+--$ [simple_name] ::= simple_name
+--$ (360):
+ 
+ -- [iteration_scheme] ::= %empty
+   when 361 =>
+    node := [];
+ 
+--$ [iteration_scheme] ::= iteration_scheme
+--$ (362):
+ 
+ -- [REVERSE] ::= %empty
+   when 363 =>
+    node := [];
+ 
+ -- [REVERSE] ::= REVERSE
+   when 364 =>
+    node := "reverse";
+ 
+ -- [DECLARE__declarative_part] ::= %empty
+   when 365 =>
+    node := newat();
+    ast(node) := ["declarations", []];
+ 
+ -- [DECLARE__declarative_part] ::= DECLARE declarative_part
+   when 366 =>
+    [-, decl_part] := rh;
+    node := decl_part;
+ 
+ -- [EXCEPTION__exception_handler{exception_handler}] ::= %empty
+   when 367 =>
+    node := [];
+ 
+ -- [EXCEPTION__exception_handler{exception_handler}] ::= EXCEPTION {prag
+   when 368 =>
+    [-, pragma_list, except_list] := rh;
+    check_pragmas(pragma_list, {});
+    node := newat();
+    labels(node) := +/[labels(except) : except in except_list];
+    ast(node) := ["exception", pragma_list + except_list];
+ 
+ -- exception_handler_list ::= exception_handler
+   when 369 =>
+    node := [rh(1)];
+ 
+ -- exception_handler_list ::= exception_handler_list exception_handler
+   when 370 =>
+    [except_list, except] := rh;
+    except_list with:= except;
+    node := except_list;
+ 
+ -- [expanded_name] ::= %empty
+   when 371 =>
+    node := [];
+ 
+--$ [expanded_name] ::= expanded_name
+--$ (372):
+ 
+ -- [WHEN__condition] ::= %empty
+   when 373 =>
+    node := [];
+ 
+ -- [WHEN__condition] ::= WHEN condition
+   when 374 =>
+    [-, expression] := rh;
+    node := expression;
+ 
+ -- [expression] ::= %empty
+   when 375 =>
+    node := [];
+ 
+--$ [expression] ::= expression
+--$ (376):
+ 
+ -- [formal_part] ::= %empty
+   when 377 =>
+    node := [];
+ 
+--$ [formal_part] ::= formal_part
+--$ (378):
+ 
+ -- {;parameter_specification} ::= %empty
+   when 379 =>
+    node := [];
+ 
+ -- {;parameter_specification} ::= {;parameter_specification} ; parameter
+   when 380 =>
+    [parm_spec_list, -, parm_spec] := rh;
+    parm_spec_list with:= parm_spec;
+    node := parm_spec_list;
+ 
+ -- [IN] ::= %empty
+   when 381 =>
+    node := newat();
+    ast(node) := ["mode", ""];
+ 
+ -- [IN] ::= IN
+   when 382 =>
+    node := newat();
+    ast(node) := ["mode", "in"];
+ 
+ -- [designator] ::= %empty
+   when 383 =>
+    node := [];
+ 
+--$ [designator] ::= designator
+--$ (384):
+ 
+ -- [PRIVATE{basic_declarative_item}] ::= %empty
+   when 385 =>
+    node := [];
+ 
+ -- [PRIVATE{basic_declarative_item}] ::= PRIVATE {basic_declarative_item
+   when 386 =>
+    [-, decl_list] := rh;
+
+    for decl in decl_list | ast(decl)(1) in body_nodes loop 
+            report_error
+            (spans(decl),
+             "Body declaration not allowed in private part of " +
+            "package_specification"
+            );
+    end loop;
+
+    node := newat();
+    ast(node) := ["declarations", decl_list];
+ 
+ -- [LIMITED] ::= %empty
+   when 387 =>
+    node := [];
+ 
+ -- [LIMITED] ::= LIMITED
+   when 388 =>
+    node := "limited";
+ 
+ -- {,package_name} ::= %empty
+   when 389 =>
+    node := [];
+ 
+ -- {,package_name} ::= {,package_name} , package_name
+   when 390 =>
+    [pack_name_list, -, pack_name] := rh;
+    pack_name_list with:= pack_name;
+    node := pack_name_list;
+ 
+ -- identifier:type_mark ::= identifier_list : type_mark
+   when 391 =>
+    [id_list, -, type_mark] := rh;
+    if #id_list > 1 then
+        report_error
+            ([l_span, r_span],
+             "Only one identifer is allowed in this context"
+            );
+    end if;
+    node := [id_list(1), type_mark];
+ 
+ -- identifier:EXCEPTION ::= identifier_list : EXCEPTION
+   when 392 =>
+    [id_list] := rh;
+    if #id_list > 1 then
+        report_error
+            ([l_span, r_span],
+             "Only one identifer is allowed in this context"
+            );
+    end if;
+    node := id_list(1);
+ 
+ -- [TYPE] ::= %empty
+   when 393 =>
+    node := [];
+ 
+ -- [TYPE] ::= TYPE
+   when 394 =>
+    node := "type";
+ 
+ -- {entry_declaration} ::= {pragma}
+   when 395 =>
+    [pragma_list] := rh;
+    check_pragmas(pragma_list, task_pragmas);
+    node := pragma_list;
+ 
+ -- {entry_declaration} ::= {entry_declaration} entry_declaration {pragma
+   when 396 =>
+    [entry_decl_list, entry_decl, pragma_list] := rh;
+    check_pragmas(pragma_list, task_pragmas);
+    node := entry_decl_list + [entry_decl] + pragma_list;
+ 
+ -- {representation_clause} ::= %empty
+   when 397 =>
+    node := [];
+ 
+ -- {representation_clause} ::= {representation_clause} representation_cl
+   when 398 =>
+    [repr_clause_list, repr_clause, pragma_list] := rh;
+    check_pragmas(pragma_list, task_pragmas + repr_pragmas);
+    node := repr_clause_list + [repr_clause] + pragma_list;
+ 
+ -- [(discrete_range)][formal_part] ::= [formal_part]
+   when 399 =>
+    node := [[], rh(1)];
+ 
+ -- [(discrete_range)][formal_part] ::= ( discrete_range ) [formal_part]
+   when 400 =>
+    [-, discrete_range, -, formal_part] := rh;
+    node := [discrete_range, formal_part];
+ 
+ -- [(entry_index)][formal_part] ::= [formal_part]
+   when 401 =>
+    node := [[], rh(1)];
+ 
+ -- [(entry_index)][formal_part] ::= ( entry_index ) [formal_part]
+   when 402 =>
+    [-, entry_index, -, formal_part] := rh;
+    node := [entry_index, formal_part];
+ 
+ -- {OR__select_alternative} ::= %empty
+   when 403 =>
+    node := [];
+ 
+ -- {OR__select_alternative} ::= {OR__select_alternative} OR {pragma} sel
+   when 404 =>
+    [alt_list, -, pragma_list, alt] := rh;
+    check_pragmas(pragma_list, {});
+    node := alt_list + pragma_list + [alt];
+ 
+ -- [WHEN__condition=>] ::= %empty
+   when 405 =>
+    node := [];
+ 
+ -- [WHEN__condition=>] ::= WHEN condition => {pragma}
+   when 406 =>
+    [-, condition, -, pragma_list] := rh;
+    check_pragmas(pragma_list, {});
+    for current_node in pragma_list loop 
+        [-, id_node] := ast(current_node);
+        [-, id] := ast(id_node);
+        warning("Pragma " + id + " is ignored");
+    end loop;
+    node := condition;
+ 
+ -- [sequence_of_statements] ::= {pragma}
+   when 407 =>
+    [pragma_list] := rh;
+    check_pragmas(pragma_list, {});
+    node := pragma_list;
+ 
+--$ [sequence_of_statements] ::= sequence_of_statements
+--$ (408):
+ 
+ -- {,task_name} ::= %empty
+   when 409 =>
+    node := [];
+ 
+ -- {,task_name} ::= {,task_name} , task_name
+   when 410 =>
+    [ast_name_list, -, task_name] := rh;
+    ast_name_list with:= task_name;
+    node := ast_name_list;
+ 
+ -- {compilation_unit} ::= {pragma}
+   when 411 =>
+    [pragma_list] := rh;
+
+    comp_node := newat();
+    check_pragmas(pragma_list, compilation_pragmas);
+    ast(comp_node) := ["compilation", pragma_list];
+    spans(comp_node) := [l_span, r_span];
+
+    if cdebug1>0 then
+        pretty_print(errfile, convert_ast( pragma_list ) );
+        printa(errfile," ");
+        pretty_print(errfile, pragma_list );
+        printa(errfile," ");
+        pretty_print(errfile, ast );
+        printa(errfile," ");
+    end if;
+
+    --$ if UPPER_CASE_OF(CNAME) /= "ADAP" then
+    --$    ADA_SEMANTICS(node);
+    --$ end if;
+    --$
+    --$ Commented out until I know what to do with these pragmas.
+    --$
+
+    ast := {};
+    spans := {};
+    labels := {};                                              --$PC1
+    pre_errcount := 0;
+    node := [];
+
+ 
+ -- {compilation_unit} ::= {compilation_unit} compilation_unit {pragma}
+   when 412 =>
+    [comp_list, comp_unit, pragma_list] := rh;
+
+    check_pragmas(pragma_list, after_libunit_pragmas);
+    for current_node in pragma_list loop 
+        [-, id_node] := ast(current_node);
+        [-, id] := ast(id_node);
+        warning("Pragma " + id + " is ignored");
+    end loop;
+
+    if cdebug1>0 then
+        pretty_print(errfile,
+        convert_ast( [comp_unit, pragma_list] ) );
+        printa(errfile," ");
+        pretty_print(errfile, [comp_unit, pragma_list] );
+        printa(errfile," ");
+        pretty_print(errfile, ast);
+        printa(errfile," ");
+    end if;
+
+    -- Print AST from here, instead of adamain, 
+    -- since we reinitialize AST to {} after each comp_unit. 
+    -- (See just below here.)
+    -- This helps avoid excess garbage collection, but could be changed.
+
+    --if ast_option then
+	--pretty_print(astfile,  convert_ast([comp_unit, pragma_list]) );
+        --puta(astfile," ");
+    --end if;
+
+
+    --if upper_case_of(cname) /= "ADAP" then
+        ada_semantics(comp_unit);
+    --end if;
+
+    ast := {};
+    spans := {};
+    labels := {};                                              --$PC1
+    node := [];
+
+--
+-- OK_TO_EXECUTE is initially false.  It should be set to true if at
+-- least one of the compilation units that makes up this compilation
+-- is error-free.
+--
+
+        ok_to_execute or:= (pre_errcount = errcount);
+        pre_errcount := errcount;
+
+ 
+ -- {with_clause{use_clause}} ::= %empty
+   when 413 =>
+    node := [[], []];
+ 
+ -- {with_clause{use_clause}} ::= {with_clause{use_clause}} with_clause u
+   when 414 =>
+    [[with_use_list, pragma_list1], with_clause,
+                [use_clause_list, pragma_list2]] := rh;
+    check_pragmas(pragma_list1, {});
+
+    if with_use_list /= [] then
+
+        -- node in with_use_list 
+        -- has the form: [-, [with_clause] + use_clause_list]
+
+        [kind, clause_list] := ast(top(with_use_list));
+        clause_list +:= pragma_list1;
+        ast(top(with_use_list)) := [kind, clause_list];
+
+    end if;
+
+    with_node := newat();
+    ast(with_node) := ["with_use_list", [with_clause] +
+                        use_clause_list];
+    spans(with_node) := [spans(with_clause)(1), r_span];
+
+    node := [with_use_list with with_node, pragma_list2];
+ 
+ -- use_clause_list ::= {pragma}
+   when 415 =>
+    [pragma_list] := rh;
+    node := [[], pragma_list];
+ 
+ -- use_clause_list ::= use_clause_list use_clause {pragma}
+   when 416 =>
+    [[use_clause_list, pragma_list1], use_clause, pragma_list2]
+                                := rh;
+    check_pragmas(pragma_list1, {});
+    node := [use_clause_list + pragma_list1 + [use_clause],
+                            pragma_list2];
+ 
+ -- {,unit_simple_name} ::= %empty
+   when 417 =>
+    node := [];
+ 
+ -- {,unit_simple_name} ::= {,unit_simple_name} , unit_simple_name
+   when 418 =>
+    [simple_name_list, -, simple_name] := rh;
+    simple_name_list with:= simple_name;
+    node := simple_name_list;
+ 
+ -- {|exception_choice} ::= %empty
+   when 419 =>
+    node := [];
+ 
+ -- {|exception_choice} ::= {|exception_choice} "|" exception_choice
+   when 420 =>
+    [choice_list, -, choice] := rh;
+    choice_list with:= choice;
+    node := choice_list;
+ 
+ -- {generic_parameter_declaration} ::= %empty
+   when 421 =>
+    node := [];
+ 
+ -- {generic_parameter_declaration} ::= {generic_parameter_declaration} g
+   when 422 =>
+    [parm_decl_list, parm_decl] := rh;
+    parm_decl_list with:= parm_decl;
+    node := parm_decl_list;
+ 
+--$ [IN[OUT]] ::= [IN]
+--$ (423):
+ 
+ -- [IN[OUT]] ::= IN OUT
+   when 424 =>
+    node := newat();
+    ast(node) := ["mode", "inout"];
+ 
+ -- [IS__name__or__<>] ::= %empty
+   when 425 =>
+    node := [];
+ 
+ -- [IS__name__or__<>] ::= IS name
+   when 426 =>
+    node := rh(2);
+ 
+ -- [IS__name__or__<>] ::= IS <>
+   when 427 =>
+    node := "box";
+ 
+ -- [generic_actual_part] ::= %empty
+   when 428 =>
+    node := [];
+ 
+--$ [generic_actual_part] ::= generic_actual_part
+--$ (429):
+ 
+ -- {,generic_association} ::= %empty
+   when 430 =>
+    node := [];
+ 
+ -- {,generic_association} ::= {,generic_association} , generic_associati
+   when 431 =>
+    [assoc_list, -, assoc] := rh;
+    assoc_list with:= assoc;
+    node := assoc_list;
+ 
+ -- [generic_formal_parameter=>]generic_actual_parameter ::= generic_actu
+   when 432 =>
+    node := [[], rh(1)];
+ 
+ -- [generic_formal_parameter=>]generic_actual_parameter ::= generic_form
+   when 433 =>
+    [formal, -, actual] := rh;
+    node := [formal, actual];
+ 
+ -- [alignment_clause] ::= {pragma}
+   when 434 =>
+    [pragma_list] := rh;
+    check_pragmas(pragma_list, {});
+    for current_node in pragma_list loop 
+        [-, id_node] := ast(current_node);
+        [-, id] := ast(id_node);
+        warning("Pragma " + id + " is ignored");
+    end loop;
+    node := [];
+ 
+ -- [alignment_clause] ::= {pragma} alignment_clause {pragma}
+   when 435 =>
+    [pragma_list1, align_clause, pragma_list2] := rh;
+    check_pragmas(pragma_list1, {});
+    check_pragmas(pragma_list2, {});
+    for current_node in pragma_list1 + pragma_list2 loop 
+        [-, id_node] := ast(current_node);
+        [-, id] := ast(id_node);
+        warning("Pragma " + id + " is ignored");
+    end loop;
+    node := align_clause;
+ 
+ -- {component_clause} ::= %empty
+   when 436 =>
+    node := [];
+ 
+ -- {component_clause} ::= {component_clause} component_clause {pragma}
+   when 437 =>
+    [compon_clause_list, compon_clause, pragma_list] := rh;
+    check_pragmas(pragma_list, {});
+    for current_node in pragma_list loop 
+        [-, id_node] := ast(current_node);
+        [-, id] := ast(id_node);
+        warning("Pragma " + id + " is ignored");
+    end loop;
+    node := compon_clause_list with compon_clause;
+ 
+
+   otherwise => node := om;
+
+end case;
+
+if is_atom(node) and spans(node) = om then
+    spans(node) := [l_span, r_span];
+end if;
+
+if cdebug1 > 0 then
+    to_errfile("Node:",node) ;
+    --$to_errfile(AST) ;
+end if;
+return node;
+
+end reduce;
+
+procedure match_error(id1, id2, construct, span_of_node);
+    report_error
+       (span_of_node,
+        id1 + " at beginning of " + construct + " does not match " + id2
+       );
+end match_error;
+
+procedure check_pragmas(rw pragma_list, allowed);
+
+const
+     predefined := 
+    	{"controlled", "elaborate", "inline", "interface", 
+     	"memory_size", "optimize", "pack", "priority", 
+     	"storage_unit", "suppress", "system_name"} ,
+
+    implementation_defined := 
+    	{"edump", "tdump", "trace_on", "trace_off", "trace_tables_off",
+        "debug", "trace_tables_on", "include_code", "io_interface"};
+
+    new_pragma_list := [];
+    
+    for i in [1 .. #pragma_list] loop 
+    current_node := pragma_list(i);
+
+    [-, id_node, arg_list] := ast(current_node);
+    [-, actual_id] := ast(id_node);
+    actual_id := if actual_id = "" then
+             "\"?\""
+             else
+             actual_id
+             end if;
+    id := lower_case_of(actual_id);
+
+    if id in allowed then
+        if id notin ["elaborate", "priority", "pack"] then
+           warning("Pragma " + actual_id + " is ignored");
+	elseif id = "pack" then
+	   null ;
+        else
+           new_pragma_list with:= current_node;
+        end if;
+    elseif id in predefined then
+        warning
+        ("Pragma " + actual_id + " is not valid in this context"
+            );
+    elseif id notin implementation_defined then
+        warning("Pragma " + actual_id + " is ignored");
+    else
+        new_pragma_list with:= current_node;
+    end if;
+    end loop;
+
+    pragma_list := new_pragma_list;
+
+end check_pragmas;
+
+procedure check_expanded_name(name);
+    [kind, sub_name] := ast(name);
+    if kind = "simple_name" then
+         return true;
+    elseif kind = "." then
+        return check_expanded_name(sub_name);
+    else return false;
+    end if;
+end check_expanded_name;
+
+procedure report_error(span_of_node, mess);
+    errcount +:= 1;
+    err_list( [span_of_node, "*** Error: " + mess] );
+end report_error;
+
+
+procedure copy_tree(tree,node);
+
+-- Since the node may itself be a tuple, we must first 
+-- check this and then loop over all the elements of the node.
+if is_atom(node) 
+then 
+    return copy_tree1(tree,node) ;
+else 
+    new_tree := [] ;
+    for i in [1..#node] loop 
+        new_tree with:= copy_tree1(tree,node(i));
+    end loop;
+    return new_tree ;
+end if;
+end copy_tree;
+
+procedure copy_tree1(tree,node);
+-- This procedure copies an arbitrary tree structure rooted at node.
+-- The tree is stored as a SETL map
+
+new_tree := [] ;
+for i in [1..#tree(node)] loop 
+    -- If the current node is in the domain of the tree(map), 
+    -- then copy it recursively
+    
+    if tree(node)(i) = [] then
+        new_tree with:= [] ;
+    elseif is_tuple(tree(node)(i)) then 
+        for j in [1..#tree(node)(i)] loop 
+            new_tree with:= copy_tree(tree,tree(node)(i)) ;
+        end loop;
+    elseif tree(node)(i) in domain tree then 
+        new_tree with:= copy_tree(tree,tree(node)(i)) ;
+    else
+        new_tree with:= tree(node)(i) ;
+    end if;
+end loop;
+
+temp_node := newat();
+ast(temp_node) := new_tree ;
+return temp_node ;
+end copy_tree1;
+
+procedure normalize_declaration(decl) ;
+    -- Object_declarations, constant_ component_, 
+    -- and number_declarations,
+    -- that introduce multiple identifiers are converted into 
+    -- a series of single declarations. 
+    
+    new_decl_list := [decl];
+    kind := ast(decl)(1) ;
+    if kind in ["obj_decl" , "const_decl", "field"] then   -- Normalize 
+        [-,id_list, subtype_indic, opt_init] := ast(decl) ;
+
+        -- Change the original decl to include only the first id. 
+        ast(decl) := [kind, id_list(1), subtype_indic, opt_init];     
+        -- If the declaration introduces several identifiers, 
+        -- then make new declaration nodes for all the others. 
+        if #id_list /= 1 then
+
+            for id in id_list(2..) loop 
+                    type_node := copy_tree(ast,subtype_indic) ;
+                    init_node := copy_tree(ast,opt_init); 
+                             
+                    d_node := newat() ;
+                    ast(d_node) := [kind,id,type_node,init_node];
+                    new_decl_list with:= d_node ;
+            end loop;
+        end if;
+
+    elseif kind = "num_decl" then       -- Normalize numbers
+        [-,id_list,expression] := ast(decl);
+        ast(decl) := [kind, id_list(1), expression];
+
+        if #id_list /= 1 then
+            for id in id_list(2..) loop 
+                    expr_node := copy_tree(ast,expression) ;
+                    d_node := newat() ;
+                    ast(d_node) := [kind,id,expr_node];
+                    new_decl_list with:= d_node ;
+            end loop;
+        end if;
+    end if;
+
+    return new_decl_list ;
+end normalize_declaration;
+end adared;

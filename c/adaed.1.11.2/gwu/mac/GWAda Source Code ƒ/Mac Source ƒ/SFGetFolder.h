@@ -1,0 +1,1 @@
+/* SFGetFolder.h */#pragma once#ifdef __cplusplusextern "C" {#endif	/* Two routines */Boolean SFGetFolder(FSSpec *fSpec, Str255 prompt, Str255 newFolder);Boolean GetFullPath(FSSpec fSpec, Str255 *fullPath);#ifdef __cplusplus}#endif

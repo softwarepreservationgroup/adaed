@@ -1,0 +1,761 @@
+--*
+--* $Header: /cs.a/ada/ada/src/ada9x/adasem10.stl,v 1.2 91/01/02 14:35:21 banner Exp $
+--*
+--T+ 10. Program structure and Compilation issues.
+package body adasem10;
+
+use globals;
+use adasem1;
+use adasem2;
+use adasem3;
+use adasem4;
+use adasem5;
+use adasem6;
+use adasem7;
+use adasem8;
+use adasem9;
+use adasem11;
+use adasem12;
+use adasem13;
+use evalstat;
+use adaio;
+use adalib;
+
+--S+ init_compunit
+procedure init_compunit;
+    lib_trace_proc_entry(3, "Init_Compunit");
+    -- Initialize global maps for a new compilation unit.
+
+    comp_units := 0;
+    newtypes with:= [];
+    all_vis := {} ;
+    lib_trace_proc_exit(3, "Init_Compunit");
+    return;
+
+end init_compunit;
+
+--S+ new_compunit
+procedure new_compunit(typ, name);
+lib_trace_proc_entry(3, "New_Compunit");
+
+  -- Establish global name and library name for new compilation unit.  
+  if is_comp_unit() then
+
+      unit_type := typ;
+      unit_name := [unit_type, name];
+
+      if unit_name in predef_units then		-- Overrides predefined .
+	  predef_units less:= unit_name;
+      end if;
+
+      new_stubs := {};
+      -- Remove any stubs that might have be contained in a unit with name.
+      --
+        for stub in stubs(unit_name) loop 
+         lib_stub(stub) := om; 
+         stub_parent(stub) := om;
+       end loop;
+
+      establish_context(name) ;
+
+   end if;
+   lib_trace_proc_exit(3, "New_Compunit");
+   return unit_name;
+
+end new_compunit;
+--S+ compunit 
+procedure compunit(u);
+lib_trace_proc_entry(3, "Compunit");
+
+-- Collect global maps and library information after completion of 
+-- a compilation unit. If no errors were detected in the unit, add it
+-- to program library.
+
+comp_units +:= 1;
+t_def := new_type_list() ;		-- discard anonymous types here.
+
+if (errcount = pre_errcount) then 	-- No errors detected.
+    --vis_units := {v in all_vis | v(2..) /= unit_name(3..)} ;
+    vis_units := all_vis;
+    obsolete_units := remove_same_name(unit_name);
+    if (#obsolete_units > 0) then
+       to_list("Following unit(s) have been deleted by compilation of "+
+               formatted_name(unit_name));
+        for obs_unit in obsolete_units loop
+            to_list(formatted_name(obs_unit));
+	    pre_comp(obs_unit) := {};
+	    predef_units less:= obs_unit;
+	    generic_units less:= obs_unit;
+	    lib_unit(obs_unit) := om;
+       end loop;
+    end if;
+
+    pre_comp(unit_name) := vis_units ;
+    compilation_order := [x : x in compilation_order 
+			    | x notin obsolete_units] with unit_name;
+
+    for v in vis_units loop 
+	versions_used(v) :=  if comp_date(v) = om then om
+	    			       else comp_date(v)(v) end if;
+    end loop;
+
+    code_units(unit_name) :=  u ;
+    lib_unit(unit_name) := aisfile;
+
+    if pre_errcount /= errcount then
+        to_list("   ");
+        to_list(" *** WARNING: error(s) were detected in above unit"
+                + ".  Unit not inserted in library.");
+    end if;
+
+    -- If the unit was succesfully compiled, remove possible obsolete
+    -- stubs of it from library, and install current stubs.
+    for stub in domain lib_stub | stub(3..) = unit_name(2..) loop 
+	lib_stub(stub) := om ;
+    end loop;
+
+    for stub in new_stubs loop  lib_stub(stub) := aisfile; end loop;
+
+    time_now := date;
+    comp_date(unit_name) := {};
+    for vers_date = versions_used(vers) loop 
+	comp_date(unit_name)(vers) := vers_date;
+    end loop;
+
+    time_now := "0123456789012345678901234567";
+    comp_date(unit_name)(unit_name) :=
+	[time_now(9..17), time_now(20..27), comp_units];
+    if unit_decl(unit_name) = om then
+        unit_decl(unit_name) := [] ;
+    end if;
+    unit_decl(unit_name) with:= context;
+
+  -- Due to the fact that exceptions declared in the predefined packages
+  -- other than STANDARD are compiled externally, their unique names are
+  -- not the literal names of the exceptions.  In order for the
+  -- interpreter to process exception handlers for these exceptions
+  -- raised by the compiler the unique names of the exceptions are
+  -- needed.  These are extracted from the predefined library units and
+  -- placed in the map EXCEPT_UNAMES for use by ADAPREDEF and ADAI.
+ 
+    if unit_name = ["spec", "IO_EXCEPTIONS"] then
+       io_excpt_map := declared("IO_EXCEPTIONS");
+ 
+       for name in {"STATUS_ERROR", "MODE_ERROR", "NAME_ERROR", "USE_ERROR", 
+		    "DEVICE_ERROR", "END_ERROR", "DATA_ERROR", 
+		    "LAYOUT_ERROR"} loop
+          except_unames(name)  := io_excpt_map(name);
+       end loop;
+
+    elseif unit_name = ["spec", "SYSTEM"] then
+       except_unames("SYSTEM_ERROR")  :=
+              declared("SYSTEM")("SYSTEM_ERROR");
+       except_unames("PRIORITY")      :=
+              declared("SYSTEM")("PRIORITY");
+
+    elseif unit_name = ["spec", "CALENDAR"] then
+       except_unames("TIME_ERROR")    :=
+              declared("CALENDAR")("TIME_ERROR");
+    end if;
+ 
+else
+    --to_list(" ") ;
+    [kind, nam] := unit_name ;
+    --to_list("*** WARNING: error(s) detected in " + kind + " " + nam +
+				    --". Unit no inserted in library");
+    pragma_elab(unit_name) := om;
+end if;
+
+-- Reinitialize compilation environment.
+unit_name := ["",""];
+visible := {};
+all_vis := {} ;
+versions_used := {};
+newtypes  with:= [];
+declared := base_declared;
+visible("ASCII") := declared("ASCII");
+
+  [current_scope, name_prefix, open_scopes, used_mods, vis_mods, suffix] :=  
+  ["STANDARD#0", "", ["STANDARD#0", "UNMENTIONABLE#0"], [], ["ASCII"], "" ];
+
+scope_st   := [] ;
+
+lib_trace_proc_exit(3, "Compunit");
+
+-- We return u, the code_unit, only in order to 
+-- print it when doing a trace of semantics.
+return u;
+
+end compunit;
+--S+ unit_symbtab
+procedure unit_symbtab(unit_unam) ;
+
+-- Collect symbol table entries for all entities declared in a compila-
+-- tion  unit, including inner units  and blocks. We iterate  over  the
+-- symbol table, and save all objects that are declared in the unit and
+-- in inner scopes.  For non-generic package bodies, we omit the  decl-
+-- arations that appear in the visible part, and are already saved with 
+-- the package spec, except for declarations of generic units, whose bodies
+-- appear in enclosing package bodies and not their specs.
+
+lib_trace_proc_entry(3, "Unit_Symbtab");
+symb_map := {} ;
+ignore := if ST(unit_unam).nature = "package"
+	then {nam: [-, nam] in visible(unit_unam) | not is_generic(nam)} 
+        else {} end if;
+
+seen := scopes := {unit_unam} ;
+
+while scopes /= {} loop 
+    sc from scopes ;
+    for [-, u_name] in declared(sc) ? {} loop 			
+	if u_name notin ignore then		-- save its info.
+            symb_map(u_name) := ST(u_name) ;
+	end if;
+
+	if declared(u_name) /= om and u_name notin seen then
+	    -- collect local declarations of inner scope.
+	    scopes with:= u_name ;
+	    seen   with:= u_name ;
+	end if;
+    end loop;
+end loop;	
+
+-- We include in symb_map the information for the unit itself, which is
+-- declared in STANDARD.
+symb_map(unit_unam) := ST(unit_unam) ;
+lib_trace_proc_exit(3, "Unit_Symbtab");
+return symb_map ;
+
+  procedure is_generic(scope);
+    nat := ST(scope).nature;
+    return nat /= om and (match(nat, "generic_") /= "");
+  end is_generic;
+
+end unit_symbtab;
+--S+ predef_scopes
+procedure predef_scopes ;
+
+-- Return the set of names  of predefined scopes,  whose declarations do
+-- not need to be saved in library files. These are STANDARD, ASCII, and
+-- those predefined packages that have not been redefined.
+
+p_s := {"STANDARD#0", "UNMENTIONABLE#0", "ASCII"}
+	+ {u(2): u in predef_units | u(1) in ["spec", "subprog spec"]} ;
+if cdebug2 > 2 then
+    to_errfile("predefined scopes: ", p_s) ;
+end if;
+return p_s ;
+
+end predef_scopes;
+--S+ save_subprog_info
+procedure save_subprog_info(unit_unam) ;				
+
+-- Save declarations for a subprogram specification or body which is a
+-- compilation unit.
+lib_trace_proc_entry(3, "Save_Subprog_Info");
+if is_comp_unit() then
+
+   -- For subprograms, UNIT_DECL has 4 fields:
+   --    1.  unique name of subprogram
+   --	2.  symbol table entries
+   --	3.  declared map for subprogram's scope
+   --	4.  context (supplied in compunit)
+
+   unit_decl(unit_name) := 
+        [unit_unam, unit_symbtab(unit_unam), declared(unit_unam) ? {}];
+end if;
+lib_trace_proc_exit(3, "Save_Subprog_Info");
+end save_subprog_info;
+--S+ save_spec_info
+procedure save_spec_info(unit_unam, old_vis) ;
+
+-- Build UNIT_DECL for a package spec. that is a compilation unit.
+lib_trace_proc_entry(3, "Save_Spec_Info");
+
+if ST(unit_unam).nature = "generic_package_spec" then
+    -- save name within its own declarations, to simplify retrieval at
+    -- instantiation time.
+    declared(unit_unam)(original_name(unit_unam)) := unit_unam ;
+end if;
+
+-- For package specifications, UNIT_DECL has 6 fields
+--	1.  unique name of compilation unit
+--	2.  symbol table entries
+--	3.  declared maps for program defined scopes
+--	4.  vis_mods
+--	5.  difference between declared and visible
+--	6.  context (supplied in comp_unit)
+
+ignore := predef_scopes() ;
+decmap := {[sn, dsn] : dsn = declared(sn) | sn notin ignore} ;
+
+-- Notvis keeps track of things declared but not visible
+notvis := {[sn, {dec : dec in dsn | dec notin (visible(sn) ?{}) }] :
+		dsn = decmap(sn) };
+
+unit_decl(unit_name) := 
+        [unit_unam, unit_symbtab(unit_unam), decmap, old_vis, notvis];
+lib_trace_proc_exit(3, "Save_Spec_Info");
+end save_spec_info;
+--S+ save_body_info
+procedure save_body_info(nam) ;
+
+-- For a package body, only the  symbol table  information  needs to be
+-- saved, for purposes of generic instantiation. Visibility information
+-- is not kept.
+
+if is_comp_unit() then
+    unit_decl(unit_name) := [nam, unit_symbtab(nam)] ;
+end if;
+lib_trace_proc_exit(3, "Save_Subprog_Info");
+end save_body_info;
+--S+ establish_context 
+procedure establish_context(name);
+
+-- Called  after seeing the  name of a compilation  unit, this  procedure
+-- processes the unit's context specification (and  if the unit is a body
+-- or a subunit, any inherited context  specification).
+
+if not is_comp_unit() then 
+   return; 
+end if;
+
+lib_trace_proc_entry(3, "Establish_Context");
+-- Get any inherited context specification.
+save_node := current_node ;
+current_node frome context ;			-- For error reporting
+
+if separate then
+    check_separate(name);
+else
+    if unit_type = "body" then -- package body, retrieve spec
+	get_specs(name);
+	spec_decl := unit_decl(["spec", name]) ? [];
+	context +:= (spec_decl(6) ? []);
+    elseif unit_type = "subprog" then -- see if there was a spec
+
+	spec_name := ["subprog spec", name];
+
+	if retrieve(spec_name) then
+	    versions_used(spec_name) :=
+		if comp_date(spec_name) = om then om
+		    else comp_date(spec_name)(spec_name) end if;
+
+	end if;
+
+	spec_decl := unit_decl(spec_name) ? [];
+	context +:= (spec_decl(4) ? []);
+    end if;
+
+end if;
+
+lib_trace(3, "Context: "+str(context) );
+-- Process the complete context specification (including inherited specs)
+
+lib_units := (domain lib_unit) + {unit in predef_units |
+   		unit(1) /= "subprog" or
+	        (unit(1) = "subprog" and not 
+			(exists other in predef_units |
+	    		   other = (["subprog spec"] + unit(2..)) )) };
+
+lib_trace(3, "lib_units: " + str(lib_units) );
+
+-- The flag -current- distinguishes between the context clause attached 
+-- the current (sub)unit, and the clauses that appeared in its spec. or
+-- in its parent unit.
+current := true;
+
+for clause_list in context loop 
+    lib_trace(3, "clause_list: "+str(clause_list) ); 
+  
+    for [clause, nam_list] in clause_list loop 
+      if  clause = "with" then
+	for nam in nam_list loop 
+	    if is_tuple(nam) then	-- Qualified name.
+		nam := find_old(nam) ;
+	    end if;
+
+	    if (exists unit in lib_units |
+		unit = ["subprog spec", nam] or
+		unit = ["subprog instance", nam] or
+		unit = ["spec instance", nam] or
+		unit = ["spec", nam])
+	        or (exists unit in lib_units | 
+			unit = ["subprog", nam]) -- prefer 'subprog spec'
+	    then
+		if current then
+		    all_vis with:= unit;
+		end if;
+
+		if unit(1) in {"spec", "spec instance"} 
+		then
+		    -- avoid multiple retrievals.
+		    if nam in vis_mods and not current then 
+			continue; 
+		    end if;
+		    get_specs(nam);
+		    if ST(nam).nature /= "generic_package" then
+			vis_mods with:= nam;
+		    end if;
+
+		else	-- unit(1) = subprog... or instance
+		    if retrieve(unit) then
+			[unit_unam, s_info, decls] := unit_decl(unit) ;
+
+			for [unam, entry] in s_info loop 
+				ST(unam) := entry;
+			 end loop;
+			 declared(unit_unam) := decls;
+		     end if;
+
+		     declared("STANDARD#0")(nam) := unit_unam ;
+		end if;
+	    else
+		if current then
+		    all_vis with:= ["spec", nam];
+		end if;
+
+		errmsg("Unknown unit in with clause: ",nam ,"10.1.1");
+
+		if check_old(nam) = "?" then -- safe to add it.
+		    n := find_new(nam) ;     	     -- To avoid error
+		    visible(n) := {} ;       	     -- in subsequent USE
+		end if;		    
+
+	    end if;
+	end loop;
+      elseif clause = "use" then
+        use_clause(nam_list) ;
+	if exists nam in nam_list | 
+				(not (exists [-, n, -] in all_vis | n = nam))
+        then
+	   errmsg(nam," does not appear in previous with clauses", "10.1.1(3)");
+        end if;
+      elseif clause = "elaborate" then
+	elaborate_pragma(nam_list) ;
+      end if;							
+
+    end loop;
+end loop;
+
+current_node := save_node ;					
+lib_trace_proc_exit(3, "Establish_Context");
+end establish_context;
+--S+ elaborate_pragma
+procedure elaborate_pragma(nam_list) ;
+
+-- The names of the units in the elaborate list must have appeared in the
+-- current context clause. the unit names of the corresponding bodies are
+-- added to the set all_vis.
+
+if pragma_elab(unit_name) = om then
+   pragma_elab(unit_name) := {};
+end if;
+for nam in nam_list loop 
+    if ["spec", nam] in all_vis then
+	pragma_elab(unit_name) with:= ["body", nam];    -- package body needed.
+    elseif ["subprog spec", nam] in all_vis then
+	pragma_elab(unit_name) with:= ["subprog", nam]; -- subprogam body needed.
+    elseif ["subprog",nam] in all_vis then	-- already listed.
+	null ;
+    else
+	if is_tuple(nam) then -- syntactic error
+             nam := nam(2); 
+        end if; 
+	warning("unknown unit name in ELABORATE pragma: "+ nam) ;
+    end if;
+end loop;
+end elaborate_pragma;
+--S+ subprogram_stub
+procedure subprogram_stub(spec_node) ;
+
+-- Find the previous specification, if given, of a subprogram stub. If
+-- it is the stub for a generic subprogram the previous declaration must
+-- exist. Otherwise process as a subprogram specification.
+
+lib_trace_proc_entry(3, "Subprogram_Stub");
+
+[-,id_node, formal_part, -] := ast(spec_node) ;
+id := adasem(id_node) ;
+name := check_old(id) ;				   -- might be visible.
+
+if name /= "?" and         -- no previous specification given for name
+   is_identifier(name) and -- non-overloaded subprogram
+   ST(name).nature in  ["generic_procedure_spec", "generic_function_spec"]
+then		
+    newscope(name) ;		-- To make generic types visible
+
+    -- Check conformance with previous generic specification.
+    formals := get_formals(formal_part, id) ;
+    -- signature of generic has different format.see gen_Sub_body
+    popscope() ;
+else
+    -- must be overloadable entity.
+    name := new_subprogram(adasem(spec_node)) ;		
+    lib_trace(3,"name=" + str(name) ) ;
+    ST(name).nature +:= "_spec" ;
+    lib_trace(3,"NATURE("+str(name) +")=" + str(ST(name).nature) ) ;
+end if;
+if id in op_designators then
+    errmsg("Name of separately compiled unit cannot be ",
+				"an operator designator", "10.1") ;
+end if;
+lib_trace_proc_exit(3, "Subprogram_Stub");
+return name ;
+
+end subprogram_stub;
+--S+ stub_head
+
+procedure stub_head(nat, id) ;
+lib_trace_proc_entry(3, "Stub_Head");
+
+-- Find unique name of package or task stub, and verify that it occurs
+-- in the proper scope.
+
+stub_name := find_old(id) ;
+
+if ST(stub_name).scope_of /= current_scope then
+    errmsg("specification and stub for "+ id,
+                           "are in different scopes", "7.1, 9.1") ;
+end if;
+
+-- Nature of specification must match that of stub.
+
+if  (nat = "package" and ST(stub_name).nature 
+			notin {"package_spec","generic_package_spec"})
+or  (nat = "task"    and ST(stub_name).nature 
+			notin {"task_type_spec", "task_obj_spec"})
+then
+   errmsg("Matching specification not found for stub ", id, "7.1, 9.1");
+   declared(stub_name) ?:= {} ;
+end if;
+lib_trace_proc_exit(3, "Stub_Head");
+return stub_name ;
+
+end stub_head;
+
+--S+ save_stub
+procedure save_stub(kind, name) ;
+lib_trace_proc_entry(3, "Save_Stub");
+ 
+-- Save current state of compilation : scope stack and related declared
+-- maps, for a subprogram or module stub.  
+-- In order to uniquely identify the stub, we create for it a name which
+-- includes the names of all surrounding scopes, with the exception of
+-- the ever-present standard environment and its enclosing scope.
+
+-- for compatibility with previous versions, task stubs are still saved
+-- as "body".
+k := if kind = "task_body" then "body" else kind end if;
+ 
+defined_scopes := [name] + open_scopes(1..#open_scopes-2) ;
+stub_name := [k] + [original_name(d_s) : d_s in defined_scopes] ;
+
+-- Allow up to 6 levels of stub nesting
+
+if #stub_name > 9 then 
+    errmsg("Implementation stub level nesting exceeded","","non");
+end if;
+
+-- Ada requires that the identifiers of all subunits of a given library 
+-- unit (as well as the name of the library unit itself) be unique.
+
+stubs_in_this_unit := {s: s in new_stubs};
+
+if exists other_unit in (domain lib_stub) + stubs_in_this_unit |
+    other_unit(2) = stub_name(2) and	-- have same identifier
+    other_unit(#other_unit) = stub_name(#stub_name) -- same eldest ancestor
+then
+    errmsg("Subunit identifier not unique:  ", original_name(name),
+                                                            "10.2");
+end if;
+-- Verify that the stub appears immediately within a compilation unit.
+if original_name(current_scope) /= unit_name(2) then
+    errmsg( "stubs can only appear in the outermost scope of a ",
+		"compilation unit", "10.2") ;
+end if;
+
+new_stubs with:= stub_name ;
+stub_parent(stub_name) := unit_name;
+
+-- Save stub environment.
+open_decls := {};
+ignore := predef_scopes() ;	    -- No need to save their contents
+for decl = declared(os) | os notin ignore loop 
+    open_decls(os) := {[nam, decl(nam), ST(decl(nam))] :
+			       nam in domain decl};
+end loop;
+unit_unam := declared("STANDARD#0")(stub_name(#stub_name));
+stub_env(stub_name) := 
+    [ (scope_st + 
+      [[current_scope, name_prefix, open_scopes, 
+        used_mods, vis_mods, suffix]]),
+      defined_scopes,
+      open_decls,
+      {[vm, visible(vm)] : vm in vis_mods | vm notin ignore},
+      unit_unam,
+      ST(unit_unam),
+      context
+     ] ;
+if cdebug2 > 1 then
+    to_errfile("scope_st saved: ", stub_env(stub_name)(1)) ;
+    to_errfile("current scope_st: ", scope_st);
+end if;
+
+if kind = "subprog" then
+    nat := ST(name).nature ;
+    rmatch(nat, "_spec") ;
+    stub_spec := [nat, name, build_signature(name)];
+elseif kind = "task_body" then
+   -- The stub is for the task type, not the object.
+    stub_spec := [kind, ST(name).type_of] ;
+else
+    stub_spec := [kind, name] ;
+end if;
+
+lib_trace_proc_exit(3, "Save_Stub");
+return  [["SEPARATE", stub_name, stub_spec]] ;
+ 
+end save_stub;
+ 
+--S+ subunit
+procedure subunit(tree) ;
+
+-- Process the proper body of a subunit. We first recover the names of
+-- the enclosing scopes of the subunit, to install the proper compila-
+-- tion environment. After the body is processed, we update one library
+-- map for the subunit. The others are updated in proc. compunit.
+
+lib_trace_proc_entry(3, "Subunit");
+
+[-, parent_scopes, unit] := tree ;
+
+-- Process the name of the enclosing unit of a subunit. The result is
+-- left in global variable ENCLOSING_SCOPE, for processing when the full
+-- context is established.
+
+separate := true ;
+enclosing_scope:= [] ;
+names := adasem(parent_scopes) ;
+
+while is_tuple(names) loop 				-- can be qualified
+   enclosing_scope with:= names(3) ;
+   names := names(2) ;
+end loop;
+enclosing_scope with:= names ;
+
+proper_body := adasem(unit) ;
+
+-- Recover unique name of subunit, in order to collect its symbol table
+-- declarations. After processing its body, the current scope is that of
+-- its parent unit.
+
+[-, subunit_id, -] := unit_name ;
+
+-- (Possibly incomplete,if there are overloaded procedures (not subunits)
+-- with the same name in the scope).
+
+subunit_name := declared(current_scope)(subunit_id) ;
+if subunit_name /= om then		-- No retrieval errors.
+    unit_decl(unit_name) := 
+    [subunit_name, unit_symbtab(subunit_name), declared(subunit_name)] ;
+end if;
+
+lib_trace_proc_exit(3, "Subunit");
+return proper_body ;
+end subunit;
+
+--S+ check_separate
+procedure check_separate(name);
+lib_trace_proc_entry(3, "Check_Separate");
+
+-- This procedure restores the environment saved for a stub,
+-- including the original scope stack.
+ 
+[unit_name, scope_st, defined_scopes, decl, vis,
+	     	u_decl, u_symbtab, old_con] := retrieve_env(name) ;
+if unit_name /= [] then
+     
+    -- Remove any stubs that might have be contained in a subunit with this name.
+     
+     for stub in stubs(unit_name) loop 
+       lib_stub(stub) := om; 
+       stub_parent(stub) := om;
+    end loop;
+
+    -- The context clause of the subunit is added to the implicit context
+    -- inherited from the parent.
+    context +:= old_con ;
+
+    if exists parent_unit in domain lib_unit |
+      parent_unit(1) in {"subprog", "body"} and
+      parent_unit(2..) = unit_name(3..)
+    then
+	retrieve(parent_unit);
+	versions_used(parent_unit) :=
+	if comp_date(parent_unit) = om then om 
+	    else comp_date(parent_unit)(parent_unit) end if;
+
+	all_vis with:= parent_unit;
+	-- put name of outer-most scope in standard
+	outer_most := parent_unit(#parent_unit);
+    	declared("STANDARD#0")(outer_most) := u_decl;
+	ST(u_decl) := u_symbtab;
+    end if;
+    -- Reestablish scope of the parent unit, in which compilation of the
+    -- subunit will take palce.
+    popscope();
+
+    -- Initialize visibility information.
+    for vis_vm = vis(vm) loop 
+	visible(vm) := vis_vm;
+	declared(vm) := vis_vm;
+    end loop;
+
+    for decls = decl(os) loop 
+	scope_decl := {};
+	for [nam, u_nam, info] in decls loop 
+	    scope_decl(nam) := u_nam;
+	    ST(u_nam) := info;
+	end loop;
+  	declared(os) := scope_decl;
+    end loop;
+else				-- stub was not found in library.
+    unit_name := ["", ""];
+end if;
+	
+separate := false ;
+lib_trace_proc_exit(3, "Check_Separate");
+end check_separate;
+
+--S+ retrieve_env 
+procedure retrieve_env(name) ;
+
+lib_trace_proc_entry(3, "Retrieve_Env");
+ 
+-- retrieve from library the environment in which a stub was 
+-- first seen. 
+ 
+stub_names := {stub_nam : stub_nam in domain lib_stub | 
+		stub_nam(2) = original_name(name) and
+		stub_nam(3..) = enclosing_scope and
+		stub_nam(1) in {"subprog", "body"} };
+ 
+if #stub_names /= 1 then
+	errmsg("cannot find stub for subunit ", name,"10.2") ;
+        lib_trace_proc_exit(3, "Retrieve_Env");
+	return [ [], [], [], [], [], [], [], [] ] ;
+end if;
+stub_name := arb stub_names ;
+if stub_retrieve(stub_name) = false then
+	errmsg("cannot find stub for subunit ",name,"10.2") ;
+        lib_trace_proc_exit(3, "Retrieve_Env");
+	return [ [], [], [], [], [], [], [], [] ] ;
+end if;
+lib_trace_proc_exit(3, "Retrieve_Env");
+return [stub_name] + stub_env(stub_name) ;
+ 
+end retrieve_env;
+ 
+end adasem10;

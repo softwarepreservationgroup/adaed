@@ -1,0 +1,78 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adautil_.stl,v 1.1 90/12/05 16:17:21 ada Exp $
+--
+-- Copyright 1990. Ada Project, Courant Institute, New York University
+package adautil;
+ 
+        ------------------------------------------
+        --                                       -
+        --       A D A - U T I L I T I E S       -
+        --                                       -
+        --                                       -
+        --               written by              -
+        --                                       -
+        --              Ada Project              -
+        --           Courant Institute           -
+        --          New York University          -
+        --           251 Mercer Street           -
+        --        New York, New York 10012       -
+        --                                       -
+        ------------------------------------------
+ 
+   procedure scan_identifier(s);
+
+   procedure scan_number(s, typ);
+
+   procedure lower_case_of(s);
+
+   procedure upper_case_of(s);
+
+   procedure image_float(num_string, fore, aft, expnt);
+
+   procedure image_fixed(item, small, fract);
+
+--
+--
+-- The utilities module contains procedures to perform duties common
+-- to many other Ada modules.  These are:
+--
+--	SCAN_IDENTIFIER	scan a lexical identifier from a string,
+--			returning a tuple of any errors found with
+--			their location within the string.
+--
+--	SCAN_NUMBER	scan a lexical numeric literal from a string,
+--			returning a tuple of any errors found with
+--			their location within the string.
+--
+--	IMAGE_FLOAT	convert a real type to its string image based 
+--                       upon its requested lengths for the integer part,
+--                       fractional part and exponent.
+--
+--	IMAGE_FIXED	convert a fixed point type to its string image
+--			based upon the requested length for its
+--			fractional part.
+--
+--	LOWER_CASE_OF	convert a string to lower case.
+--
+--	UPPER_CASE_OF	convert a string to upper case.
+--
+--
+
+
+--
+-- SCAN_ERRORS is a tuple of error messages which may be returned by 
+-- a utility routine for use by the lexical analyzer.
+-- Each error message is a tuple of the form:
+--	[LOCATION, MESSAGE]
+-- where LOCATION is a tuple giving the starting and ending indices 
+-- of the error within the argument string S; and MESSAGE is the actual
+-- error message.
+-- (Note that for the lexical analyzer, LOCATION must be converted
+-- to an address within the source text as follows:
+-- 	[LINENUM, START, END]
+-- where START and END are offset from the values given in LOCATION by
+-- the number of characters already scanned off the current source
+-- line).
+
+end adautil;
+

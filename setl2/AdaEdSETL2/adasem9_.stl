@@ -1,0 +1,16 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem9_.stl,v 1.1 90/12/05 16:17:15 ada Exp $
+--
+package adasem9;
+  procedure task_spec(task_node) ;
+  procedure task_body(blk) ;
+  procedure accept_statement(id, indx, formals, body_node) ;
+  procedure entry_decl(id, formals) ;
+  procedure entry_family_decl(id, opt_range, formals) ;
+  procedure entry_call(obj, arg_list) ;
+  procedure check_entry_call(stat_node) ;
+  procedure find_entry_name(obj) ;
+  procedure select_statement(node) ;
+  procedure terminate_statement ;
+  procedure abort_statement(node_list) ;
+end adasem9;

@@ -1,0 +1,8 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_objects_.stl,v 1.1 91/01/02 15:26:09 banner Exp $
+--
+package int_objects;
+  procedure create_copy(rd arg_val, itype, index_position);
+  procedure create_obj(itype_name, default_init, t_master, t_taskenv, obj_name);
+  procedure oeval_proc(eval_action);
+end int_objects;

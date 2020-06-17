@@ -1,0 +1,1 @@
+WITH Spider; USE Spider;WITH Left;PROCEDURE Drawing17 ISBEGIN                   -- Begin the drawingReset;Left;    -- new command used hereStep;Step;Left;    -- and hereRed; Step;Step;Step;Left;    -- and here too!Step;Blue;Step;Step;Step;Quit;END Drawing17;

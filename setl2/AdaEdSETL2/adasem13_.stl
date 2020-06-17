@@ -1,0 +1,32 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem13_.stl,v 1.1 90/12/05 16:16:11 ada Exp $
+--
+package adasem13;
+  procedure unset(rep_item);
+  procedure initialize_representation_info(type_name,tag);
+  procedure inherit_representation_info(derived_type, parent_type);
+  procedure explicit_small_given(type_name);
+  procedure apply_pragma_pack(type_name);
+  procedure already_forced(type_name);
+  procedure force_representation(type_name);
+  procedure choose_representation(type_name);
+  procedure force_all_types;
+  procedure collect_reprs ;
+  procedure collect_forcings ;
+  procedure collect_delayed_reprs ;
+  procedure default_representation(type_name,position);
+  procedure size_attribute(expn);
+  procedure default_size_value(type_name);
+  procedure component_size(type_name);
+  procedure has_generic_component(type_mark) ;
+  procedure default_storage_size_value(type_name);
+  procedure default_record_value(type_name);
+  procedure check_repr_type (type_name);
+  procedure length_clause (attr_type, attr_prefix, expn);
+  procedure apply_length_clause(attr_type, type_name, clause_value);
+  procedure enum_rep_clause (type_name, aggregate);
+  procedure apply_enum_clause(type_name, rep_lit_map);
+  procedure rec_rep_clause (type_name, align_clause, comp_clause_list);
+  procedure apply_record_clause( type_name, modulus_value, location_lists);
+  procedure check_range_attribute(expn) ;
+end adasem13;

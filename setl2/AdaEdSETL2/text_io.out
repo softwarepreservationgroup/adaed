@@ -1,0 +1,389 @@
+Executing file  NYU Ada/Ed 1.11 SUN UNIX Version
+ADAfile:	text_io.ada
+ASTfile:	
+AISfile:	text_io.ais
+LIBfile:	predef.lib
+	
+	
+    1   with IO_EXCEPTIONS;
+    2   package TEXT_IO is 
+    3        
+    4     type FILE_TYPE  is limited private;
+    5    
+    6     type FILE_MODE  is (IN_FILE, OUT_FILE);
+    7   
+    8     type COUNT is range 0 .. 32767;
+    9   
+   10     subtype POSITIVE_COUNT IS COUNT range 1 .. COUNT'LAST;
+   11   
+   12     UNBOUNDED : constant COUNT := 0; -- line and page length
+   13   
+   14     subtype FIELD is INTEGER range 0 .. 100 ;
+   15     subtype NUMBER_BASE is INTEGER range 2 .. 16;
+   16   
+   17     type TYPE_SET is (LOWER_CASE, UPPER_CASE);
+   18   
+   19     -- File Management
+   20   
+   21        
+   22     procedure CREATE (FILE : in out FILE_TYPE;
+   23                       MODE : in FILE_MODE := OUT_FILE;
+   24                       NAME : in STRING    := "";
+   25                       FORM : in STRING    := "");
+   26     pragma IO_interface(CREATE, TIO_CREATE);
+   27       
+   28     procedure OPEN   (FILE : in out FILE_TYPE;
+   29                       MODE : in FILE_MODE;
+   30                       NAME : in STRING;
+   31                       FORM : in STRING := "");
+   32     pragma IO_interface(OPEN, TIO_OPEN);
+   33    
+   34     procedure CLOSE  (FILE : in out FILE_TYPE);
+   35     pragma IO_interface(CLOSE, TIO_CLOSE);
+   36       
+   37     procedure DELETE (FILE : in out FILE_TYPE);
+   38     pragma IO_interface(DELETE, TIO_DELETE);
+   39   
+   40     procedure RESET  (FILE : in out FILE_TYPE; MODE : in FILE_MODE);
+   41     pragma IO_interface(RESET, TIO_RESET_MODE);
+   42   
+   43     procedure RESET  (FILE : in out FILE_TYPE);
+   44     pragma IO_interface(RESET, TIO_RESET);
+   45   
+   46     function MODE (FILE : in FILE_TYPE)     return FILE_MODE;
+   47     pragma IO_interface(MODE, TIO_MODE);
+   48   
+   49     function NAME (FILE : in FILE_TYPE)     return STRING;
+   50     pragma IO_interface(NAME, TIO_NAME);
+   51   
+   52     function FORM (FILE : in FILE_TYPE)     return STRING;      
+   53     pragma IO_interface(FORM, TIO_FORM);
+   54   
+   55     function IS_OPEN (FILE : in FILE_TYPE)  return BOOLEAN;
+   56     pragma IO_interface(IS_OPEN, TIO_IS_OPEN);
+   57   
+   58     -- Control of default input and output files
+   59        
+   60     procedure SET_INPUT  (FILE : in FILE_TYPE);
+   61     pragma IO_interface(SET_INPUT, SET_INPUT); 
+   62   
+   63     procedure SET_OUTPUT (FILE : in FILE_TYPE);
+   64     pragma IO_interface(SET_OUTPUT, SET_OUTPUT);
+   65   
+   66     function STANDARD_INPUT  return FILE_TYPE;
+   67     pragma IO_interface(STANDARD_INPUT, STANDARD_INPUT);
+   68   
+   69     function STANDARD_OUTPUT return FILE_TYPE;
+   70     pragma IO_interface(STANDARD_OUTPUT, STANDARD_OUTPUT);
+   71   
+   72     function CURRENT_INPUT  return FILE_TYPE;
+   73     pragma IO_interface(CURRENT_INPUT, CURRENT_INPUT);
+   74     function CURRENT_OUTPUT return FILE_TYPE;
+   75     pragma IO_interface(CURRENT_OUTPUT, CURRENT_OUTPUT);
+   76   
+   77     -- Specification of line and page lengths
+   78   
+   79     procedure SET_LINE_LENGTH (FILE : in FILE_TYPE;  TO : in COUNT);
+   80     pragma IO_interface(SET_LINE_LENGTH, SET_LINE_LENGTH_FILE);
+   81   
+   82     procedure SET_LINE_LENGTH (TO : in COUNT);    -- default output file
+   83     pragma IO_interface(SET_LINE_LENGTH, SET_LINE_LENGTH);
+   84   
+   85     procedure SET_PAGE_LENGTH (FILE : in FILE_TYPE;  TO : in COUNT);
+   86     pragma IO_interface(SET_PAGE_LENGTH, SET_PAGE_LENGTH_FILE);
+   87   
+   88     procedure SET_PAGE_LENGTH (TO : in COUNT);    -- default output file
+   89     pragma IO_interface(SET_PAGE_LENGTH, SET_PAGE_LENGTH);
+   90   
+   91     function LINE_LENGTH (FILE : in FILE_TYPE)  return COUNT;
+   92     pragma IO_interface(LINE_LENGTH, LINE_LENGTH_FILE);
+   93   
+   94     function LINE_LENGTH return COUNT;  -- default output file
+   95     pragma IO_interface(LINE_LENGTH, LINE_LENGTH);
+   96        
+   97     
+   98     function PAGE_LENGTH (FILE : in FILE_TYPE)  return COUNT;
+   99     pragma IO_interface(PAGE_LENGTH, PAGE_LENGTH_FILE);
+  100   
+  101     function PAGE_LENGTH return COUNT; -- default output file
+  102     pragma IO_interface(PAGE_LENGTH, PAGE_LENGTH);
+  103   
+  104     -- Column, Line and Page Control
+  105   
+  106     procedure NEW_LINE (FILE : in FILE_TYPE;  SPACING : in POSITIVE_COUNT := 1);
+  107     pragma IO_interface(NEW_LINE, NEW_LINE_FILE);
+  108   
+  109     procedure NEW_LINE (SPACING : in POSITIVE_COUNT := 1); 
+  110     pragma IO_interface(NEW_LINE, NEW_LINE);
+  111   
+  112     procedure SKIP_LINE (FILE : in FILE_TYPE;  SPACING : in POSITIVE_COUNT := 1);
+  113     pragma IO_interface(SKIP_LINE, SKIP_LINE_FILE);
+  114   
+  115     procedure SKIP_LINE (SPACING : in POSITIVE_COUNT := 1);
+  116     pragma IO_interface(SKIP_LINE, SKIP_LINE);
+  117   
+  118     function END_OF_LINE (FILE : in FILE_TYPE) return BOOLEAN;
+  119     pragma IO_interface(END_OF_LINE, END_OF_LINE_FILE);
+  120   
+  121     function END_OF_LINE return BOOLEAN; -- default input file
+  122     pragma IO_interface(END_OF_LINE, END_OF_LINE);
+  123   
+  124     procedure NEW_PAGE (FILE : in FILE_TYPE);
+  125     pragma IO_interface(NEW_PAGE, NEW_PAGE_FILE);
+  126     procedure NEW_PAGE; -- default output file
+  127     pragma IO_interface(NEW_PAGE, NEW_PAGE);
+  128   
+  129     procedure SKIP_PAGE (FILE : in FILE_TYPE);
+  130     pragma IO_interface(SKIP_PAGE, SKIP_PAGE_FILE);
+  131     procedure SKIP_PAGE; -- default input file
+  132     pragma IO_interface(SKIP_PAGE, SKIP_PAGE);
+  133   
+  134     function END_OF_PAGE (FILE : in FILE_TYPE) return BOOLEAN;
+  135     pragma IO_interface(END_OF_PAGE, END_OF_PAGE_FILE);
+  136     function END_OF_PAGE return BOOLEAN;      
+  137     pragma IO_interface(END_OF_PAGE, END_OF_PAGE);
+  138   
+  139     function END_OF_FILE (FILE : in FILE_TYPE) return BOOLEAN;
+  140     pragma IO_interface(END_OF_FILE, TIO_END_OF_FILE_FILE);
+  141     function END_OF_FILE return BOOLEAN;      
+  142     pragma IO_interface(END_OF_FILE, TIO_END_OF_FILE);
+  143   
+  144     procedure SET_COL(FILE : in FILE_TYPE; TO : in POSITIVE_COUNT);
+  145     pragma IO_interface(SET_COL, SET_COL_FILE);
+  146     procedure SET_COL(TO : in POSITIVE_COUNT); -- default output file
+  147     pragma IO_interface(SET_COL, SET_COL);
+  148   
+  149     procedure SET_LINE(FILE : in FILE_TYPE; TO : in POSITIVE_COUNT);
+  150     pragma IO_interface(SET_LINE, SET_LINE_FILE);
+  151     procedure SET_LINE(TO : in POSITIVE_COUNT); -- default output file
+  152     pragma IO_interface(SET_LINE, SET_LINE);
+  153     
+  154     function COL(FILE : in FILE_TYPE) return POSITIVE_COUNT;
+  155     pragma IO_interface(COL, COL_FILE);
+  156     function COL return POSITIVE_COUNT; -- default output file
+  157     pragma IO_interface(COL, COL);
+  158   
+  159     function LINE(FILE : in FILE_TYPE) return POSITIVE_COUNT;
+  160     pragma IO_interface(LINE, LINE_FILE);
+  161     function LINE return POSITIVE_COUNT; -- default output file
+  162     pragma IO_interface(LINE, LINE);
+  163   
+  164     function PAGE(FILE : in FILE_TYPE) return POSITIVE_COUNT;
+  165     pragma IO_interface(PAGE, PAGE_FILE);
+  166     function PAGE return POSITIVE_COUNT; -- default output file
+  167     pragma IO_interface(PAGE, PAGE);
+  168   
+  169   
+  170     -- Character Input-Output
+  171    
+  172     procedure GET (FILE : in  FILE_TYPE;  ITEM : out CHARACTER);
+  173     pragma IO_interface(GET, GET_CHAR_FILE_ITEM);
+  174     procedure GET (ITEM : out CHARACTER);
+  175     pragma IO_interface(GET, GET_CHAR_ITEM);
+  176     procedure PUT (FILE : in  FILE_TYPE;  ITEM : in CHARACTER);
+  177     pragma IO_interface(PUT, PUT_CHAR_FILE_ITEM);
+  178     procedure PUT (ITEM : in  CHARACTER);
+  179     pragma IO_interface(PUT, PUT_CHAR_ITEM);
+  180   
+  181       
+  182     -- String Input-Output
+  183       
+  184     procedure GET (FILE : in  FILE_TYPE;  ITEM : out STRING);
+  185     pragma IO_interface(GET, GET_STRING_FILE_ITEM);
+  186     procedure GET (ITEM : out STRING);    
+  187     pragma IO_interface(GET, GET_STRING_ITEM);
+  188     procedure PUT (FILE : in  FILE_TYPE;  ITEM : in STRING);
+  189     pragma IO_interface(PUT, PUT_STRING_FILE_ITEM);
+  190     procedure PUT (ITEM : in  STRING);
+  191     pragma IO_interface(PUT, PUT_STRING_ITEM);
+  192   
+  193     procedure GET_LINE (FILE : in FILE_TYPE; ITEM : out STRING;
+  194                                              LAST : out NATURAL);
+  195     pragma IO_interface(GET_LINE, GET_LINE_FILE);
+  196     procedure GET_LINE (ITEM : out  STRING; LAST : out NATURAL);
+  197     pragma IO_interface(GET_LINE, GET_LINE);
+  198   
+  199     procedure PUT_LINE (FILE : in FILE_TYPE; ITEM : in STRING);
+  200     pragma IO_interface(PUT_LINE, PUT_LINE_FILE);
+  201     procedure PUT_LINE (ITEM : in STRING);
+  202     pragma IO_interface(PUT_LINE, PUT_LINE);
+  203       
+  204     -- Generic package for Input-Output of Integer Types
+  205   
+  206     generic
+  207       type NUM is range <>;
+  208     package INTEGER_IO is
+  209   
+  210       DEFAULT_WIDTH : FIELD := NUM'WIDTH;
+  211       DEFAULT_BASE  : NUMBER_BASE := 10;
+  212   
+  213       procedure GET (FILE  : in FILE_TYPE;  ITEM : out NUM; 
+  214                                             WIDTH : in FIELD := 0);
+  215       pragma IO_interface(GET, GET_INTEGER_FILE_ITEM, NUM);
+  216   
+  217       procedure GET (ITEM  : out NUM; WIDTH : in FIELD := 0);
+  218       pragma IO_interface(GET, GET_INTEGER_ITEM, NUM);
+  219   
+  220       procedure PUT (FILE  : in FILE_TYPE;
+  221                      ITEM  : in NUM;
+  222                      WIDTH : in FIELD := DEFAULT_WIDTH;
+  223                      BASE  : in NUMBER_BASE := DEFAULT_BASE);
+  224       pragma IO_interface(PUT, PUT_INTEGER_FILE_ITEM, NUM);
+  225       procedure PUT (ITEM  : in NUM;
+  226                      WIDTH : in FIELD := DEFAULT_WIDTH;
+  227                      BASE  : in NUMBER_BASE := DEFAULT_BASE);
+  228       pragma IO_interface(PUT, PUT_INTEGER_ITEM, NUM);
+  229       
+  230       procedure GET (FROM : in STRING; ITEM: out NUM; LAST: out POSITIVE);
+  231       pragma IO_interface(GET, GET_INTEGER_STRING, NUM);
+  232       procedure PUT (TO   : out STRING;
+  233                      ITEM : in  NUM;
+  234                      BASE : in  NUMBER_BASE := DEFAULT_BASE);
+  235       pragma IO_interface(PUT, PUT_INTEGER_STRING, NUM);
+  236   
+  237     end INTEGER_IO; 
+  238   
+  239   
+  240     -- Generic packages for Input-Output of Real Types
+  241   
+  242     generic
+  243       type NUM is digits <>;
+  244     package FLOAT_IO is
+  245   
+  246       DEFAULT_FORE : FIELD := 2;
+  247       DEFAULT_AFT  : FIELD := NUM'DIGITS-1;
+  248       DEFAULT_EXP  : FIELD := 3;
+  249   
+  250       procedure GET (FILE : in FILE_TYPE; ITEM : out NUM;
+  251                                           WIDTH : in FIELD := 0);
+  252       pragma IO_interface(GET, GET_FLOAT_FILE_ITEM, NUM);
+  253       procedure GET (ITEM : out NUM; WIDTH : in FIELD := 0);
+  254       pragma IO_interface(GET, GET_FLOAT_ITEM, NUM);
+  255   
+  256       procedure PUT (FILE         : in FILE_TYPE;
+  257                      ITEM         : in NUM;
+  258                      FORE         : in FIELD := DEFAULT_FORE;
+  259                      AFT          : in FIELD := DEFAULT_AFT;
+  260                      EXP          : in FIELD := DEFAULT_EXP);
+  261       pragma IO_interface(PUT, PUT_FLOAT_FILE_ITEM, NUM);
+  262   
+  263       procedure PUT (ITEM         : in NUM;
+  264                      FORE         : in FIELD := DEFAULT_FORE;
+  265                      AFT          : in FIELD := DEFAULT_AFT;
+  266                      EXP          : in FIELD := DEFAULT_EXP);
+  267       pragma IO_interface(PUT, PUT_FLOAT_ITEM ,NUM);
+  268       
+  269       procedure GET (FROM : in STRING; ITEM: out NUM; LAST: out POSITIVE);
+  270       pragma IO_interface(GET, GET_FLOAT_STRING, NUM);
+  271       procedure PUT (TO   : out STRING;
+  272                      ITEM : in NUM;
+  273                      AFT  : in FIELD := DEFAULT_AFT;
+  274                      EXP  : in FIELD := DEFAULT_EXP);
+  275       pragma IO_interface(PUT, PUT_FLOAT_STRING, NUM);
+  276   
+  277     end FLOAT_IO;
+  278   
+  279     generic
+  280       type NUM is delta <>;
+  281     package FIXED_IO is
+  282   
+  283       DEFAULT_FORE : FIELD := NUM'FORE;
+  284       DEFAULT_AFT  : FIELD := NUM'AFT;
+  285       DEFAULT_EXP  : FIELD := 0;
+  286   
+  287       procedure GET (FILE : in FILE_TYPE; ITEM : out NUM;
+  288                                           WIDTH : in FIELD := 0);
+  289       pragma IO_interface(GET, GET_FIXED_FILE_ITEM, NUM);
+  290       procedure GET (ITEM : out NUM; WIDTH : in FIELD := 0);
+  291       pragma IO_interface(GET, GET_FIXED_ITEM, NUM);
+  292   
+  293       procedure PUT (FILE         : in FILE_TYPE;
+  294                      ITEM         : in NUM;
+  295                      FORE         : in FIELD := DEFAULT_FORE;
+  296                      AFT          : in FIELD := DEFAULT_AFT;
+  297                      EXP          : in FIELD := DEFAULT_EXP);
+  298       pragma IO_interface(PUT, PUT_FIXED_FILE_ITEM, NUM);
+  299   
+  300       procedure PUT (ITEM         : in NUM;
+  301                      FORE         : in FIELD := DEFAULT_FORE;
+  302                      AFT          : in FIELD := DEFAULT_AFT;
+  303                      EXP          : in FIELD := DEFAULT_EXP);
+  304       pragma IO_interface(PUT, PUT_FIXED_ITEM, NUM);
+  305   
+  306       procedure GET (FROM : in STRING; ITEM: out NUM; LAST: out POSITIVE);
+  307       pragma IO_interface(GET, GET_FIXED_STRING, NUM);
+  308       procedure PUT (TO   : out STRING;
+  309                      ITEM : in  NUM;
+  310                      AFT  : in  FIELD := DEFAULT_AFT;
+  311                      EXP  : in  FIELD := DEFAULT_EXP);
+  312       pragma IO_interface(PUT, PUT_FIXED_STRING, NUM);
+  313   
+  314     end FIXED_IO;
+  315   
+  316         
+  317     -- Generic package for Input-Output of Enumeration Types
+  318   
+  319     generic
+  320       type ENUM is (<>);
+  321     package ENUMERATION_IO is
+  322   
+  323       DEFAULT_WIDTH   : FIELD := 0;
+  324       DEFAULT_SETTING : TYPE_SET := UPPER_CASE;
+  325   
+  326       procedure GET (FILE : in FILE_TYPE; ITEM : out ENUM);
+  327       pragma IO_interface(GET, GET_ENUM_FILE_ITEM, ENUM);
+  328       procedure GET (ITEM : out ENUM);
+  329       pragma IO_interface(GET, GET_ENUM_ITEM, ENUM);
+  330   
+  331       procedure PUT (FILE       : in FILE_TYPE;
+  332                      ITEM       : in ENUM;
+  333                      WIDTH      : in FIELD    := DEFAULT_WIDTH;
+  334                      SET        : in TYPE_SET := DEFAULT_SETTING);
+  335       pragma IO_interface(PUT, PUT_ENUM_FILE_ITEM, ENUM);
+  336   
+  337       procedure PUT (ITEM       : in ENUM;
+  338                      WIDTH      : in FIELD    := DEFAULT_WIDTH;
+  339                      SET        : in TYPE_SET := DEFAULT_SETTING);
+  340       pragma IO_interface(PUT, PUT_ENUM_ITEM, ENUM);
+  341    
+  342       procedure GET(FROM : in STRING; ITEM: out ENUM; LAST: out POSITIVE);
+  343       pragma IO_interface(GET, GET_ENUM_STRING, ENUM);
+  344       procedure PUT (TO   : out STRING;
+  345                      ITEM : in  ENUM;
+  346                      SET  : in  TYPE_SET := DEFAULT_SETTING);
+  347       pragma IO_interface(PUT, PUT_ENUM_STRING, ENUM);
+  348   
+  349     end ENUMERATION_IO;
+  350   
+  351   
+  352     -- Exceptions:
+  353     --  
+  354     -- These are the exceptions whose names are visible to the   
+  355     -- calling environment.   
+  356        
+  357     STATUS_ERROR  : exception renames IO_EXCEPTIONS.STATUS_ERROR;
+  358     MODE_ERROR    : exception renames IO_EXCEPTIONS.MODE_ERROR;
+  359     NAME_ERROR    : exception renames IO_EXCEPTIONS.NAME_ERROR;
+  360     USE_ERROR     : exception renames IO_EXCEPTIONS.USE_ERROR;
+  361     DEVICE_ERROR  : exception renames IO_EXCEPTIONS.DEVICE_ERROR;
+  362     END_ERROR     : exception renames IO_EXCEPTIONS.END_ERROR;
+  363     DATA_ERROR    : exception renames IO_EXCEPTIONS.DATA_ERROR;
+  364     LAYOUT_ERROR  : exception renames IO_EXCEPTIONS.LAYOUT_ERROR;
+  365   
+  366   
+  367       
+  368   private
+  369   
+  370       type FILE_TYPE is array (1 .. 1) of INTEGER;
+  371   
+  372   end TEXT_IO; 
+  373   
+  374   package body TEXT_IO is
+  375     package body INTEGER_IO     is end ;
+  376     package body FLOAT_IO       is end ;
+  377     package body FIXED_IO       is end ;
+  378     package body ENUMERATION_IO is end ;
+  379   end TEXT_IO ;
+  380   
+   
+  No translation errors detected

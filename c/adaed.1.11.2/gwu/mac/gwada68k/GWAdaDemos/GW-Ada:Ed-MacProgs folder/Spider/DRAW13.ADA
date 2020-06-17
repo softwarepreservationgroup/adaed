@@ -1,0 +1,1 @@
+WITH Spider; USE Spider;PROCEDURE Drawing13 IS-- Declare a variable named CountCount: integer;PROCEDURE Walk ISBEGINWHILE NOT AtWall LOOP     Step;END LOOP;END Walk;BEGINStart;Red;-- Repeat 4 timesFOR Count IN 1..4 LOOP   Walk;   Turn;END LOOP;Quit;END Drawing13;

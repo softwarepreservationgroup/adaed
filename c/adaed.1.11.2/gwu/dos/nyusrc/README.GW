@@ -1,0 +1,91 @@
+SetUp:
+
+Before running GWAda make sure the following has been added
+to the autoexec file (or a local setup batch file):
+
+SET ADAED=<drive>:\<directory where GWAda is located>
+
+PATH= ... ;<drive>:\<directory where GWAda is located>
+
+
+To activate the environment type:
+
+GWADA <file name> <ENTER>
+
+
+For more information on how to use GWAda select the "GWAda" option within
+
+the "Help" top menu item. For information on how to use the editor select the
+
+"Editor" option within the "Help" top menu item.
+
+-------------
+
+Distribution Disks
+
+DISK 1
+
+GWAda-ex.zip     Any directory/drive
+		 Contains the basic files to run the environment
+README.gw        Contains this file
+PKUNZIP.exe      Uncompressor's program
+DISK 2
+GWAda-co.zip     Directory <drive>\adaed
+		 Contains the basic NYU sources altered to work with GWAda
+
+-------------
+
+Installing GWAda
+
+Assuming that:
+	
+	disk 1 is at drive B:
+	the target hard disk is C:
+
+
+--Create a directory named ADAED
+
+C:
+mkdir ADAED
+cd ADAED
+
+B:pkunzip b:gwada-ex
+
+
+Before runnig GWAda make sure that the "setup" above has been performed.
+
+Note:
+-----
+
+If yoy are working with other subdirectory (say c:\mypgms) than the one 
+the executables are (say c:\adaed), copy the c:\adaed\*.hlp c:\mypgms.
+
+System Requirements:
+
+	386/486 PC Compatible
+	At leat 3.2 MB of available extended memory
+	At leat 2.6 MD of disk space 
+
+
+DISCLAIMER
+----------
+
+    This program is distributed free of charges for educational purposes 
+    only, but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  
+
+
+Please, send your comments and/or suggestions to:
+
+Dr. M. B. Feldman
+EECS Department
+The George Washington University
+Washington, D.C. 20052
+mfeldman@seas.gwu.edu
+
+Dr. A. V. Lopes
+Instituto de Informatica - Predio 30
+Pontificia Universidade Catolica do Rio Grande do Sul - PUCRS
+Av. Ipiranga 6681
+90620 Porto Alegre - RS / Brazil
+vlopes@vortex.ufrgs.br

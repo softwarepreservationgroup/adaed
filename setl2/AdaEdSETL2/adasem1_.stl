@@ -1,0 +1,158 @@
+package adasem1;
+
+-- selectors for the symbol table (ST).
+
+sel nature(1), 		-- unique name -> nature of entity
+    type_of(2), 	-- unique name -> type of entity
+    signature(3), 	-- unique name -> tuple of attributes
+    default_expr(3),
+    label_status(3),
+    designated_type(3),
+    record_declarations(3),
+    overloads(4),	-- unique name -> set of unique names in current
+			-- scope, that have the  same source identifier.
+    literal_map(4),
+    private_decls(4),
+    private_dependents(4),
+    misc_type_attributes(4),
+    scope_of(5), 	-- unique name -> scope of entity
+    alias(6), 		-- unique name -> parent subprogram or root type
+    root_type(6),
+    discr_decl_tree(7);
+
+-- selectors for the signature field of ST.
+
+sel
+    invariant_part(1),
+    variant_part(2),
+    declared_components(3),
+    precision_of(4),
+    formal_decl_tree(1);
+
+const 
+     op_designators :=  
+	{"and", "or", "xor", "not", "mod", "rem", "abs",
+	 "=",   "/=", "<=",  "<",   ">=",  ">", 
+	 "+",   "-",  "&",   "*",   "/",   "**"},
+
+      comparison_ops := {"<","<=",">",">=","=","/="},
+         
+      univ_types     :=  {"universal_integer", "universal_real"},
+      priv_types     :=  {"private", "limited private"},
+      incp_types     :=  {"private","limited private","limited","incomplete"},
+      misc_attributes := {"private","limited private",
+			  "limited","incomplete", "out"},
+      base_attributes :=  {"BASE", "POS", "PRED", "SUCC", "VAL", "VALUE"},
+
+      qualifiers :=  
+		{"qual_range",  "qual_index",  "qual_discr",
+		 "qual_aindex", "qual_adiscr" },
+
+      delay_small := [1, 100];
+
+var   delay_day;
+
+var 
+	ST,		-- symbol table
+	base_declared,	-- declared map for standard environment
+	declared,	-- maps scope names to map of names declared
+			-- in scope to their unique names
+	prod_spans,	-- pair consisting of left and right token
+			-- locations of AST node
+
+	rep_clause_info,-- unique name-> representation information
+	forced,		-- unique_name-> boolean indicating if its been forced
+	representation,	-- unique name-> chosen representation for the type
+        emit_repr,      -- set of unique_name of types which need repr emitted
+	delayed_reprs,  -- set of types which have their representation delayed
+	types_not_chosen_yet,
+			-- base_type->set of subtypes with no representation yet
+
+	newtypes,	-- list of anonymous types whose declaration is
+			-- emitted in front of current declaration.
+	goto_stmts,	-- set of GOTO's encountered in unit
+	lab_scope_stk,	-- stack of label scopes for prog units
+	lab_scope_map,	-- ancestor map for label scopes 
+	lab_seen,	-- set of labels in procedure .
+	stmlabs,	-- set of statement labels
+ 
+	all_vis,	-- Modules whose visibility is required
+	context,	-- Tuple of with & use clauses 
+	new_stubs,      -- names collected during compilation of unit.
+	enclosing_scope,-- Tuple representation of subunit ancestor name.
+	generic_clause, -- Contents of current generic declarations.
+	instantiation_code,
+			-- To collect checks on actual parameters.
+	open_scopes,	-- nest of currently open scopes, from inner
+			-- to outer.  Outermost is STANDARD.
+	proc_stack,     -- Stack of statically nested subprograms
+	name_prefix,	-- prefix for forming unique name
+	suffix,		-- suffix for forming unique name
+	current_scope,	-- unique name for each scope
+	scope_st,	-- stack of lexical scopes
+ 	separate,	-- separate unit switch
+	unit_name,	-- compilation unit information
+	unit_type,	-- type of compilation unit
+	used_mods,	-- packages appearing in a use clause
+        versions_used,	-- Compilation dates of units used by unit.
+       	vis_mods,	-- list of package names visible in this unit
+	visible,	-- declared map for visible parts of packages
+ 
+        all_imported_names, 
+			-- for error reporting when name is hidden.
+        comp_units,  	-- Count of compilation units in compilation
+        noop_error;	-- Used during type checking
+
+-- The following global variables implement miscellaneous inherited
+-- attributes, i.e. they establish the context of descendant nodes.
+
+var
+    is_attribute_prefix,-- Valid context for attribute BASE.
+    out_context,	-- Signals valid appearance of out parameter.
+    full_others,        -- To enforce the rules of 4.3.2(6) et al.
+    fold_context ;	-- To inhibit constant folding on conformance 
+			-- checks.
+
+procedure node_kind(node);
+procedure record_feature_use(node_type);
+procedure type_precision(t);
+procedure index_types(array_type);
+procedure index_type(array_type); 
+procedure component_type(array_type);
+procedure no_dimensions(array_type);
+procedure discriminant_list(record);
+procedure top(x);
+procedure is_empty(node);
+procedure has_discriminants(record) ;
+procedure is_range_attribute(e) ;
+procedure is_comp_unit ;
+procedure is_access(name) ; 
+procedure is_identifier(name) ; 
+procedure is_literal(name) ; 
+procedure is_overloaded(name) ; 
+procedure is_constant(name) ;
+procedure is_proc(proc_name) ;
+procedure is_anonymous(typ) ; 
+procedure is_first_named_subtype(typ);  
+procedure is_array(typ) ;  
+procedure is_formal(id) ;
+procedure is_anonymous_task(name) ;
+procedure is_integer_type(x) ;
+procedure static_expression(x); 
+procedure sem_trace(level, msg);
+procedure sem_trace_pp(level, label, object);
+procedure sem_trace_proc_entry(level, proc);
+procedure sem_trace_proc_exit(level, proc);
+procedure sem_trace2(m1,m2,m3);
+procedure sem_trace3(m1,m2,m3,m4);
+procedure repr_trace_proc_entry(level, proc);
+procedure repr_trace_proc_exit(level, proc);
+procedure init_sem;
+procedure adasem(node) ;
+procedure symbtab_enter(oprs, result) ;
+procedure new_arith_ops(oprs, result) ;
+procedure ada_semantics(comp_unit) ;
+procedure end_sem ;
+procedure errmsg(msg,obj,lrm_sec);
+procedure trace_and_return(level, name, return_value);
+end adasem1;

@@ -1,0 +1,1200 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_util.stl,v 1.1 91/01/02 15:55:39 banner Exp $
+--
+package body int_util;
+
+  use globals;
+  use int_globals;
+  use adaio;
+  use adaarith;
+
+procedure save_env ;
+  -- Save in the current stack frame the full state of the environment.
+
+  envstackt(curtask)(height(curtask)) := 
+  		[emap, stsq, valstack, handler, tasks_declared, proc_name] ;
+end save_env;
+
+procedure set_env ;
+  -- After a context-switch, establish the environment using the current stack
+  -- frame.
+  [emap, stsq, valstack, handler, tasks_declared, proc_name] := 
+  					envstackt(curtask)(height(curtask)) ;
+end set_env;
+
+procedure push_env;
+  -- Save environment of current task, and initialize new environment with
+  -- the same environment map and no other components defined. Used on 
+  --- subprogram invocation, block entry, accept statement, etc.
+
+  save_env ;
+  envstackt(curtask) with:= 
+  ([emap, stsq, valstack, handler, tasks_declared, proc_name] := 
+						[emap, [], [], [], {}, ""]) ;
+end push_env;
+
+procedure pop_env ;
+  -- restore previous environment for current task. Used on return from
+  -- subprogram and exit from block.
+
+  envstackt(curtask)(height(curtask)) := om    ;
+  set_env ;
+end pop_env;
+
+procedure height(task); return #envstackt(task) ;      end height;
+
+procedure top_valstack;  return valstack(#valstack) ;  end top_valstack;
+
+procedure push(item); valstack with:= item;                 end push;
+
+procedure pop(wr item);  item frome valstack; 	       end pop;
+
+procedure disable; null; end disable;
+
+procedure enable;  null; end enable;
+ 
+procedure absent(arg);    return arg = om;  end absent;
+
+procedure is_empty(arg);  return arg = {}; end is_empty;
+
+procedure nonempty(arg);  return arg /= {};  end nonempty;
+
+procedure present(arg);   return arg /= om; end present;
+
+procedure is_access_iobject(t);
+  return is_tuple(t) and t.type_mark = "access_iobject";
+end is_access_iobject;
+--
+procedure is_access_ivalue(t);
+  return is_tuple(t) and t.type_mark = "access_ivalue";
+end is_access_ivalue;
+--
+procedure is_ais_stmt;
+  return true ;
+  return stm.opcode(#stm.opcode) /= "_";
+end is_ais_stmt;
+--
+procedure is_array_iobject(t);
+  return is_tuple(t) and t.type_mark = "array_iobject";
+end is_array_iobject;
+--
+procedure is_array_ivalue(t);
+  return is_tuple(t) and t.type_mark = "array_ivalue";
+end is_array_ivalue;
+--
+procedure is_constrained_type(t);
+  return (if t.type_mark = "array"
+   then (t)(4)
+   elseif t.type_mark = "record"
+       then present((t)(3))
+       else false
+       end if) ;
+end is_constrained_type;
+--
+procedure is_discr_ref(t);
+  return is_tuple(t) and t.type_mark = "discr_ref" ;
+end is_discr_ref;
+--
+procedure is_float_iobject(t);
+  return is_tuple(t) and t.type_mark = "float_iobject";
+end is_float_iobject;
+--
+procedure is_float_ivalue(t);
+  return (is_tuple(t) and #(t) = 3 and 
+   is_integer((t)(1)) and is_tuple((t)(2)) 
+   and is_integer ((t)(3)) ) ;
+end is_float_ivalue;
+--
+procedure is_fixed_iobject(t);
+  return is_tuple(t) and t.type_mark = "fixed_iobject";
+end is_fixed_iobject;
+--
+procedure is_fixed_ivalue(t);
+  return (is_tuple(t) and #(t) = 2 and 
+   is_integer((t)(1)) and is_tuple((t)(2))) ;
+end is_fixed_ivalue;
+--
+procedure is_instruction(t);  
+   return is_tuple(t) and is_string (t.opcode) ; 
+end is_instruction;
+--
+procedure is_label_iobject(t);
+  return is_tuple(t) and t.type_mark = "label_iobject";
+end is_label_iobject;
+--
+procedure is_label_ivalue(t);
+  return is_tuple(t) and t.type_mark = "label_ivalue";
+end is_label_ivalue;
+--
+procedure is_literal_ivalue(t);
+  return is_integer (t) or (t) = uninitialized ;
+end is_literal_ivalue;
+--
+procedure is_location(t);  return is_string (t) and t(1)="#"; end is_location;
+--
+procedure is_operation(t);  return is_tuple(t) and is_string (t.opcode); end is_operation;
+--
+procedure is_proc_iobject(t);
+  return is_tuple(t) and t.type_mark = "proc_iobject";
+end is_proc_iobject;
+--
+procedure is_proc_ivalue(t);
+  return is_tuple(t) and t.type_mark = "proc_ivalue";
+end is_proc_ivalue;
+--
+procedure is_range(x);
+  return is_tuple(x) and (x)(1) = "range";
+end is_range;
+--
+procedure is_record_iobject(t);
+  return is_tuple(t) and t.type_mark = "record_iobject";
+end is_record_iobject;
+--
+procedure is_record_ivalue(t);
+  return is_tuple(t) and t.type_mark = "record_ivalue";
+end is_record_ivalue;
+--
+procedure is_simple_name(t);  return is_string (t); end is_simple_name;
+--
+procedure is_task_ivalue(t);
+  return is_string (t) and (t)(1..5) = "$task";
+end is_task_ivalue;
+--
+procedure is_task_iobject(t);
+  return is_tuple(t) and t.type_mark = "task_iobject";
+end is_task_iobject;
+--
+procedure is_uninitialized(arg);
+   return (arg) = ["ivalue", uninitialized ] ;
+end is_uninitialized;
+--
+--
+procedure test(t); 
+    return if t then boolean_true else boolean_false end if; 
+end test;
+--
+--T+ CONTROL PROCEDURES
+--S+ EXEC 
+procedure exec(rd new_stmts);
+--
+-- Procedure EXEC  is given a tuple of statements 
+-- which are to be executed in the order given. This is achieved by
+-- appending the sequence of statements to the front of the current
+-- statement sequence, STSQ.
+--
+  stsq := new_stmts + stsq;
+end exec;
+
+procedure prepend(new_s, taskid) ;
+-- used when modifying the statement sequence of another task.
+    envstackt(taskid)(height(taskid)).stsqt := new_s + envstackt(taskid)(height(taskid)).stsqt ;
+end prepend;
+
+--S+ SYSTEM_ERROR
+procedure system_error(message);
+     to_list(err_line() + "Bad code -- " + message);
+     exec([["raise", except_unames("SYSTEM_ERROR"), "please report to NYU"]]);
+end system_error;
+--T+ COMPUTE PROCEDURES
+--S+ Setval
+procedure setval (object, value, drec);
+int_trace( "SETVAL" ,object);
+int_trace(value, drec);
+--
+-- Performs an assignment of the IVALUE in value
+-- to the IOBJECT in object. Note that it is not object itself which
+-- is modified, but the values (mapped by CONTENTS). This is
+-- why object is a read only argument to the procedure.
+--
+-- The third parameter, drec, is set to om, except in the case
+-- of a component assignment in a complete record assignment.
+-- In this case, drec contains the value of the complete record
+-- being assigned, and is used to obtain discriminant values
+-- which specify bounds for dynamic arrays.
+--
+-- All length checks and discriminant checks are made in SETVAL.
+-- If a CONSTRAINT_ERROR should result, a raise statement is appended
+-- to the front of the statement list and SETVAL returns the value
+-- false.  Otherwise it returns true.
+
+ -- First deal with the case of a scalar object
+
+  if is_location (object) then
+
+    contents(object) := value;
+--
+ -- Now some special objects
+-- 
+  elseif not is_tuple(object) then
+
+    return false;		-- Result of a prior array length error
+
+  else
+
+    case object.type_mark 
+      when "task_iobject" => 
+        contents(object.location) := value(2); --$PK110
+      when "proc_iobject" => 
+         for i in [2..5] loop
+          contents(object(i)) := value(i);
+        end loop;
+      when "label_iobject" => 
+        contents(object.location) := value(2..);
+      when "access_iobject" => 
+        contents(object.location) := value(2);
+      when "float_iobject" => 
+        contents(object.location) := value;
+      when "fixed_iobject" => 
+        contents(object.location) := value;
+--
+ -- Now deal with the case of a record. Just assign the fields
+ -- of the record value to the corresponding objects.
+ -- But first check discriminants if necessary.
+
+      when "record_iobject" => 
+        [-, objdeclist, constr_disc_list] := object;
+        [-, fieldmap] := value;
+
+	if present(constr_disc_list) and 	-- check discriminants
+	   (exists f in constr_disc_list | 
+		contents(objdeclist(f)) /= fieldmap(f)) then
+	    exec( [["raise", "CONSTRAINT_ERROR", "discriminant"]] );
+	    return false;			-- to stop the recursion
+	end if;
+
+        if "fields_present" in domain fieldmap then
+          fields := fieldmap("fields_present");     
+        else
+          fields := domain fieldmap;
+        end if;
+         for f in fields loop
+          if not setval (objdeclist(f), fieldmap(f), fieldmap) then
+	    return false;
+	  end if;
+        end loop;
+
+ -- Now we must check for the special case where the variant of
+ -- a dynamic record has been modified and its fields_present
+ -- indication must be updated. 
+
+        if "fields_present" in domain objdeclist then
+          contents(objdeclist("fields_present")) := fields;
+        end if;
+
+ -- Now deal with the case of an array. First perform the length check.
+
+      when "array_iobject" =>                                --$PK102
+        [-, lseq, lb, ub, lbdiscr, ubdiscr, nullobj] := object;
+        [-, rseq, l_val, u_val, nullval] := value;
+
+ -- First check for a case of a dynamic array being assigned in
+ -- a complete record assignment (the fact that we have a dynamic
+ -- array is indicated by the presence of either the lbdiscr or
+ -- ubdiscr fields, and the complete record assignment case is
+ -- indicated by the presence of the drec argument which gives
+ -- the value of the complete record being assigned). If we have
+ -- this case, then the bounds corresponding to unconstrained
+ -- discriminants are set to their proper values (from drec).
+
+        if present(lbdiscr) and present(drec) then
+          contents(lb) := drec(lbdiscr);
+        end if;
+  
+        if present(ubdiscr) and present(drec) then
+          contents(ub) := drec(ubdiscr);
+        end if;
+
+	lbval := contents(lb);
+	ubval := contents(ub);
+
+ -- Now we perform the length check. Note that an empty array
+ -- can be assigned to any empty object, regardless of its bounds
+
+        nullobj := (nullobj = "null") or (ubval < lbval);    --$PK102
+        nullval := (nullval = "null") or (u_val < l_val);
+        if nullobj and nullval then
+           return true;
+        elseif  --  not both empty
+            u_val - l_val /= ubval - lbval	 --  not same length
+        then
+	  exec([["raise", "CONSTRAINT_ERROR",
+			"arrays not same length"]]);
+          return false;
+        end if;
+
+ -- Now the bounds are set correctly, and we simply assign the
+ -- component values (using the right hand side length since it
+ -- may be the case that the left side is longer in the dynamic
+ -- array case, since it was allocated for the maximum length).
+ -- Note that we pass down the drec parameter to take care of
+ -- the case of a two dimensional array where the inner array
+ -- is the dynamic one.
+
+         for i in [1..#rseq] loop
+	  if not setval (lseq(i), rseq(i), drec) then
+	    return false;
+	  end if;
+        end loop;
+
+ -- Logic error check (one of the above cases should hold!)
+
+      otherwise =>
+        to_list(err_line() + "Bad code -- in assignment statement");
+        to_list("LHS = " + str(object));
+	to_list(" RHS = "+ str(value));
+	return false;
+    end case;
+
+  end if;
+
+  return true;
+
+end setval;
+--S+ I_VALUE
+procedure i_value(object);
+int_trace("I_VALUE",object);
+--
+-- I_VALUE is given an iobject and returns the corresponding ivalue. 
+-- It simply returns uninitialized when appropriate without
+-- signalling any error, the caller must check as required for this.
+--
+  if is_location(object) then
+    int_trace("object is a location, returning " ,str(contents(object)));
+    return contents(object);
+  else
+    case object.type_mark 
+
+      when "task_iobject" => 
+        return ["task_ivalue", contents(object.location) ];
+      when "proc_iobject" => 
+        [-, task_loc, index_loc, formals_loc, body_loc] := object;
+        return ["proc_ivalue", contents(task_loc),
+                               contents(index_loc),
+                               contents(formals_loc),
+                               contents(body_loc)     ];
+      when "label_iobject" => 
+        return ["label_ivalue"] + contents(object.location);
+      when "access_iobject" => 
+        return ["access_ivalue", contents(object.location) ];
+      when "float_iobject" => 
+	int_trace("returning ", str(contents(object.location)));
+        return contents(object.location);
+      when "fixed_iobject" => 
+        return contents(object.location);
+
+      when "array_iobject" => 
+        [-, seq, lowbound, highbound, -, -, nullobj] := object;  
+
+        seq := [i_value(e) : e in seq];
+        lowbound := i_value(lowbound);
+        highbound := i_value(highbound);
+
+ 	s := if highbound < lowbound then 
+ 		(if is_tuple(seq(1)) and seq(1).opcode = "array_ivalue"
+ 		   -- multidimensional null array. Keep ghost element.
+ 		then seq 
+                else [] end if) 
+	     elseif seq = [] then []				
+	     else seq(1..highbound - lowbound + 1) end if;
+        return ["array_ivalue", s, lowbound, highbound, nullobj];
+
+
+      when "record_iobject" => 
+        [-, objdeclist, -] := object;
+--$PK21 {
+        fields_present := domain objdeclist;
+        if "fields_present" in fields_present then
+           fields_present := contents(objdeclist("fields_present"));
+        end if;
+        return ["record_ivalue",
+                 {[f, i_value(objdeclist(f))] : f in fields_present }];
+--$PK21 }
+
+      otherwise =>
+        system_error("ivalue of " + str(object) );
+      end case;
+    end if;
+
+end i_value;
+--S+ APPLY_DISCR
+procedure apply_discr (dmap, rectype);
+--
+-- This procedure applies discriminant constraints to a record
+-- type which may have a variant part .
+--
+-- Dmap is the ivalue for the discriminant aggregate, which
+-- has the form of a map from discriminants to their values.
+-- Rectype is the itype for the record type
+
+-- The result returned is an itype for the constrained result.
+int_trace("APPLY_DISCR", dmap) ;
+
+  [-, [objdeclist, variantpart], constr_disc_list, disc_list] :=
+							rectype;
+
+-- If the constraint includes a dynamic discriminant, then it cannot
+-- be applied now. This itype is the itype of a record which is a 
+-- component of an enclosing record, and the constraint depends on
+-- one or more of the discriminants of that enclosing record. Return
+-- a record itype marked dynamic. The constraint will be applied by
+-- this procedure when a subtype of the enclosing record is elaborated, 
+-- or by create_obj_ when an unconstrained record object is created.
+
+  if exists a in range dmap | is_discr_ref(a) then		--$RD1 {}
+    return 
+    ["record", [objdeclist, variantpart],
+               ["discr_ref", dmap], disc_list];                 --$RD1 {}
+  end if;
+
+ -- First step is to identify any discriminants which appear in the
+ -- objdeclist and supply the values of the constraints as initial 
+ -- values.  The values supplied for a discriminant override any 
+ -- initial values supplied in the record type definition.
+
+--$PK18 {
+     for i in [1..#objdeclist] loop
+       [field_name, [field_itype, field_vexpr]] := objdeclist(i);
+       if field_name in domain dmap then
+          discr_val := dmap(field_name) ;
+          objdeclist(i) := [field_name, [field_itype, ["ivalue", discr_val]]];
+          -- Now verify that the constraint is compatible with the subtype
+          -- of the discriminant.
+          [-, lbd, ubd] := get_itype(field_itype) ;
+	  if discr_val < lbd or discr_val > ubd then
+	   exec([["raise", "CONSTRAINT_ERROR", "discriminant constraint"]]);
+          end if;
+       end if;
+    end loop;
+--$PK18 }
+
+ -- Now see if we have a variant part depending on a discriminant
+ -- which is one of the ones being constrained. If so, then we
+ -- select the corresponding componentlist and discard the rest.
+ -- The objdeclist of this componentlist is then appended to the
+ -- original objdeclist (since these now become fixed fields of
+ -- the resulting type) and the variantpart of this componentlist
+ -- (resulting from possible nested variant parts) replaces the
+ -- original variant part. This test is then repeated in a loop
+ -- to apply the constraints to the nested variant part. Note that
+ -- this loop must terminate, since all discriminants must be given
+ -- values in dmap, and all variants must depend on one of them.
+
+   while variantpart /= [] loop
+    [variant_name, altern_list] := variantpart;
+    if variant_name in domain dmap then
+
+--$PK22 (
+   -- Find the variant to be used
+      if (exists [choices, component_list ] in altern_list
+         | (choices /= {"others"} 
+			and contains(choices, dmap(variant_name))))
+      or
+         present(component_list := altern_list({"others"}))
+      then
+        [vobjdeclist, variantpart] := component_list;
+        objdeclist +:= vobjdeclist;
+      else
+        system_error("APPLY_DISCR");
+      end if;
+
+    else
+      system_error("missing discriminant for variant " + variant_name);
+      return [];
+--$PK22 )
+    end if;
+  end loop;
+
+
+ -- Now find dynamic arrays or record subtypes that are constrained by
+ -- discriminants of current record. In each case, replace a discriminant
+ -- reference by the value now supplied, and build the corresponding
+ -- constrained component itype.
+
+   for [fname, [ftype, initval]] = objdeclist(i) loop          --$PK18
+
+    [fkind, -] := inner_itype := get_itype(ftype);
+    if fkind = "array" then
+        ftype := apply_discr_to_array(dmap, inner_itype);
+        objdeclist(i) := [fname, [ftype, initval]]; 
+
+    elseif fkind = "record" then
+        -- Find  discriminant constraint(s) given by outer discriminant.
+        [-, comp_list, constr_d_list, -] := inner_itype ;
+        if is_discr_ref(constr_d_list) then
+            ftype := apply_discr_to_record(dmap, inner_itype) ;
+            objdeclist(i) := [fname, [ftype, initval]]; 
+        else 
+	    continue;
+        end if;
+    else
+      continue;
+    end if;
+
+  end loop;
+
+ -- Return result, setting the list of constrained discriminants.
+
+  return ["record", [objdeclist, []], domain dmap, disc_list];
+
+end apply_discr;
+--+ Apply_discr_to_array
+procedure apply_discr_to_array(dmap, array_itype) ;
+
+-- Elaborate a component type that is an array, whose bounds may be given
+-- by discriminants.
+int_trace("Apply_discr_to_array", dmap) ;
+
+  [-, index_type_list, comp_type] := array_itype; 
+  new_index_type_list := [];
+   while index_type_list /= [] loop
+     index_type fromb index_type_list;
+    [index_typename, lower, upper, enum_map] := get_itype (index_type);
+    check := false ;
+
+    if is_discr_ref(lower) then					--$RD1 {}
+       [-, discr_name, -, ctx_type] := lower;
+       if discr_name in domain dmap then
+	  lower := dmap(discr_name);
+          [-, lbd, ubd] := get_itype(ctx_type) ;
+          check := true ;
+       end if;
+    end if;
+
+    if is_discr_ref(upper) then					--$RD1 {}
+       [-, discr_name, -, ctx_type] := upper;
+       if discr_name in domain dmap then
+	  upper := dmap(discr_name);
+          [-, lbd, ubd] := get_itype(ctx_type) ;
+          check := true ;
+       end if;
+    end if;
+    -- Verify that values of bounds are compatible with the index
+    -- type. As usual, this check is only done if the array is not null.
+
+    if check and lower <= upper and (lower < lbd or upper > ubd) then
+      exec([["raise", "CONSTRAINT_ERROR", "dynamic array bounds"]]) ;
+    end if;
+    index_type := [index_typename, lower, upper, enum_map];
+    new_index_type_list with := index_type;
+
+   end loop;
+
+    return ["array", new_index_type_list, comp_type];
+end apply_discr_to_array;
+
+--+Apply_discr_to_record
+procedure apply_discr_to_record(dmap, rec_itype) ;
+
+-- Elaborate a record subtype some of whose whose bounds may be  given by the 
+-- discriminants of the enclosing record.
+int_trace("Apply_discr_to_record", dmap) ;
+
+    [-, comp_list, constr_d_list, -] := rec_itype ;
+    [-, inner_dmap] := constr_d_list ;
+    -- Replace references to outer discriminants by their given values.
+    new_dmap := {};
+    for d_val = inner_dmap(d) loop     
+        if is_discr_ref(d_val) then
+	    [-, outer_d] := d_val  ;
+            new_dmap(d) := dmap(outer_d) ;
+        else
+            -- Constraint does not depend on outer discriminant. Keep.
+            new_dmap(d) := d_val ;
+        end if;
+    end loop;
+
+    return apply_discr(new_dmap, rec_itype) ;
+end apply_discr_to_record; 
+--S+ CONTAINS
+procedure contains (choicelist, value);
+--
+-- This is a general procedure used to determine whether a value
+-- appears within the set of values specified by choicelist. In
+-- fact if choicelist were represented as a set of values, then
+-- it would be exactly a membership test. As it is, the format
+-- of a choicelist is:
+
+--   choicelist => {choice}
+--   choice => value | ['range', lbd, ubd] | 'others'
+
+-- Note that everything has been evaluated, so the values are
+-- discrete integer values.
+
+-- CONTAINS is a boolean procedure which returns true if value
+-- is contained in choicelist and false otherwise.
+
+  return exists choice in choicelist |
+    (if is_range(choice) then (choice(2) <= value and value <= choice(3))  
+    elseif is_literal_ivalue(choice) then value = choice 
+    elseif choice = "others" then true
+    else false 
+    end if);
+
+end contains;
+--S+ GET_ITYPE
+procedure get_itype (typeref);
+int_trace("GET_ITYPE", typeref);
+
+--
+-- This procedure is passed an itype reference and returns
+-- the itype obtained by dereferencing an itype name reference.
+-- It is essentially a conditional dereference operator for
+-- itype references (but it only goes down to the first non-
+-- named level).
+
+   while is_simple_name(typeref) loop
+    new_typeref := global_emap(typeref) ? emap(typeref);
+    if absent(new_typeref) then
+       exec([["raise", "PROGRAM_ERROR", "Access to " + str(typeref) 
+                  + " before elaboration"]]);
+       return om;
+    end if;
+    typeref := new_typeref;
+  end loop;
+  int_trace("get_itype returns ", str(typeref));
+  return typeref;
+end get_itype;
+--S+ INITIALIZE_DEBUG_INFO
+procedure initialize_debug_info;
+--
+-- Initialize the statement count and traceing.
+--
+  stmtcount := 0;
+  current_stmt_count := 0;
+-- 
+  strace := trace;
+  debugging := (strace > 0);
+  debugging := false;
+  
+  traced_tasks := {};
+  traced_tables := {};
+--
+-- The information initialized here is used in DUMP_TASKING_INFO  
+-- for debugging purposes explained in that procedure :
+
+  full_taskname_map := {};
+  tasks_with_raised_exc := {};
+--
+end initialize_debug_info;
+--T+ DEBUGGING PROCEDURES 
+--S+ DO_DUMPS
+procedure do_dumps(tables);
+--
+-- DO_DUMPS(tables)
+-- ----------------
+--
+-- Dumps internal tables for debugging. Parameter tables is a tuple of 
+-- strings which are the names of the tables to be dumped.
+--
+    if trace_mode = "nolist" then 
+       return; 
+    end if;
+     for table in tables loop
+        case table 
+            when "VALSTACK" => 
+              if valstack /= [] then
+                pretty_print(errfile,
+                  [err_place() + " " + "VALSTACK--", valstack]);
+              end if;
+--
+            when "EMAP" => 
+                pretty_print(errfile, [err_place() + " " +
+                              "EMAP-- ", emap]);
+--
+            when "STSQ" => 
+                pretty_print(errfile,
+                  [err_place() + " " + "STSQ--", stsq]);
+--
+            when "CONTENTS" => 
+                pretty_print(errfile, [err_place() + " " +
+		    "CONTENTS--", contents]);
+--
+            when "ENVSTACK" => 
+                pretty_print(errfile, [err_place() + " " + 
+                              "ENVSTACK-- ", envstackt(curtask)]);
+--
+            when "WAITING_TASKS" => 
+                pretty_print(errfile, [err_place() + " " +
+		    "WAITING_TASKS--", waiting_tasks]);
+--
+            when "READY_TASKS" => 
+                pretty_print(errfile, [err_place()  + " " +
+		    "READY_TASKS--", ready_tasks]);
+--
+            when "ACTIVE_TASKS" => 
+                pretty_print(errfile,
+		    ["ACTIVE_TASKS--", active_tasks]);
+--
+            when "TASK_PRIO" => 
+                pretty_print(errfile,
+		    ["TASK_PRIO--", task_prio]);
+--
+            when "TERMINATABLE" => 
+                pretty_print(errfile,
+                    ["TERMINATABLE--", terminatable]);
+--
+            when "TERMINATED_TASKS" => 
+                pretty_print(errfile,
+                  ["TERMINATED_TASKS--", terminated_tasks]);
+--
+            when "COMPLETED_TASKS" =>        --$JPR01
+                pretty_print(errfile,
+                  ["COMPLETED_TASKS--", completed_tasks]);
+--
+            when "ABNORMAL_TASKS" =>         --$JPR02
+                pretty_print(errfile,
+                  ["ABNORMAL_TASKS--", abnormal_tasks]);
+--
+            when "TASKS_DECLARED" => 
+                t_list := [t : [t, -, -] in tasks_declared];
+                pretty_print(errfile,
+                    ["TASKS_DECLARED--", t_list]);
+--
+            when "HELD_TASKS" => 
+                pretty_print(errfile,
+		    ["HELD_TASKS--", held_tasks]);
+--
+            when "OPEN_ENTRIES" => 
+                pretty_print(errfile, [err_place() + " " +
+		    "OPEN_ENTRIES--", open_entries]);
+--
+            when "DELAYED_TASKS" => 
+                delays := {[t, d] : [d, b] = delayed_tasks(t)};
+                pretty_print(errfile,
+		    ["DELAYED_TASKS--", delays]);
+--
+            when "ENTERING" => 
+                pretty_print(errfile,
+		    ["ENTERING--", entering]);
+--
+            when "MASTER" => 
+                pretty_print(errfile, ["MASTER--", master]);
+--
+            when "TASKENV" => 
+                pretty_print(errfile, ["TASKENV--", taskenv]);
+--
+--
+--
+--
+        end case;
+     end loop;
+end do_dumps;
+
+--S+ ERR_LINE
+procedure err_line;
+--
+-- ERR_LINE
+-- --------
+--
+-- Returns formated string giving  '*** Execution error' message
+-- with the place where the error occured.
+--
+   return "*** Execution error in " + err_place() + ": ";
+
+end err_line;
+--S+ ERR_PLACE
+procedure err_place;
+--
+-- ERR_PLACE
+-- ---------
+--
+-- Returns a string giving the name of the current task type and 
+-- procedure being executed. Usually used for error reporting.
+-- (When the front end starts providing it, the current 
+-- statement line will also be given).
+--
+-- If the debug switch is on, the dynamic nesting depth is also 
+-- given.
+--
+
+    line := emap("line_number") ? "??"; 
+    return  taskname_map(curtask) ? "" + " "
+            + unqualed_name(proc_name ? "") + " "
+            + (if cdebug5 /= 0 or strace > 0
+              then str(#(envstackt(curtask) ? [])) + " "
+              else "" end if)
+            + " statement " + str(line) + " ";
+--
+end err_place;
+--S+ UNQUALED_NAME
+procedure unqualed_name(q_name);
+--
+--  UNQUALED_NAME(q_name)
+--  ---------------------
+--
+--  Q_name is the qualified name of an object as received
+--  from the front end. It is assumed to be in one of the forms:
+--
+--   'qual1.qual2.....qualn.original_name#1#2.....#n'
+--   'original_name#1#2......#n'
+--   'qual1.qual2....qualn.original_name'
+--   'original_name'
+--
+--  Unqualed_name returns original_name, which ought to be
+--  the name of the object as the user wrote it in the source
+--  program. If q_name is not in one of the above forms, the
+--  result returned is undefined.
+--
+  q_temp := q_name;
+  res1 := rbreak(q_temp, ".");
+  res1 ?:= q_temp;
+  res := break(res1, "#");
+  return res ? res1;
+end unqualed_name;  
+
+procedure int_trace(msg1, msg2);
+if strace > 0 then
+   printa(errfile, msg1, msg2) ;
+end if;
+end int_trace;
+--S+ DUMP_TASKING_INFO
+procedure dump_tasking_info(file);
+
+-- This procedure dumps information about tasking queues when
+-- system becomes inactive.  It reports what each waiting task
+-- is waiting for when no task can continue executing.
+-- In addition to that this procedure takes care of a very
+-- hard-to-debug sitution when a master task which has raised an
+-- exception cannot propogate it out of the scope because a 
+-- dependant task has not completed (possibly precisely because
+-- of this exception) .  
+
+printa(file); printa(file);
+printa(file, "THE FOLLOWING TASKS ARE WAITING FOR ACCESS TO " +
+        "ENTRIES : ");
+printa(file, 72 * "-" );
+printa(file);
+count := 1;
+
+for server_task in domain waiting_tasks  loop 
+    s_task := full_taskname_map(server_task); 
+   for buzy_entry in domain waiting_tasks(server_task)  loop 
+        b_entry := unqualed_name(buzy_entry(1)) +
+                  " #" + str(buzy_entry(2));
+        for [queued_task,-] in waiting_tasks(server_task)(buzy_entry)  loop 
+             q_task := full_taskname_map(queued_task);
+             print_tasking_info( file, [ "TASK ", q_task, 
+             " IS QUEUED ON ENTRY ", b_entry, " OF TASK ", s_task
+                                                           ] );
+             if exists [ waiting_master, exname, place ] 
+                  in tasks_with_raised_exc | 
+                      waiting_master = master(queued_task)
+             then print_tasking_info( file, ["MASTER ", 
+                full_taskname_map(waiting_master),
+                         " IS HELD FROM ", "RAISING EXCEPTION ",
+                  exname, " IN ", place ] );
+
+             end if;
+
+             -- The next several lines of code are purely for output-
+             -- formatting purposes.
+            
+             current_triple := [q_task, b_entry, s_task];
+             if present(previous_triple) then 
+                if previous_triple(3) /= s_task then
+                    printa(file, 14 * "*    ");
+		    printa(file);
+                elseif previous_triple(2) /= b_entry 
+                   then printa(file);
+                end if;
+             end if;
+             previous_triple := current_triple;              
+             count +:= 1;
+         end loop;
+     end loop;
+ end loop;
+
+if count = 1 then 
+   printa(file, "( NONE )" ); 
+end if;
+printa(file);
+printa(file, "THE FOLLOWING TASKS ARE WAITING FOR CALL ON ENTRIES :");
+printa(file, 72 * "-" );
+printa(file);
+count := 1;
+
+ for [waiting_task, set_of_entries] in open_entries loop
+    w_task := full_taskname_map(waiting_task);
+     for [open_entry, -] in set_of_entries loop
+        o_entry := unqualed_name(open_entry(1)) +
+              " #" + str(open_entry(2));
+        print_tasking_info( file, ["TASK ", w_task, " HAS ENTRY ",
+         o_entry, " OPEN FOR RENDEZVOUS" ] );
+
+
+        if exists [ waiting_master, exname, place ] 
+            in tasks_with_raised_exc | 
+                 waiting_master = master(waiting_task)
+        then print_tasking_info( file,
+           ["MASTER ", full_taskname_map(waiting_master),
+            " IS HELD FROM ", "RAISING EXCEPTION ", 
+                 exname, " IN ", place ] );
+        end if;
+        count +:= 1;
+     end loop;
+     printa(file);
+ end loop;
+
+if count = 1 then 
+   printa(file, "( NONE )" ); 
+end if;
+end dump_tasking_info;
+
+--S+ PRINT_TASKING_INFO
+procedure print_tasking_info(file, tuple_of_strings);
+
+-- This procedure is used for formatting error messages issued by
+-- DUMP_TASKING_INFO.
+
+next_line := "";
+count_of_lines := 1;
+
+ for next_str in tuple_of_strings loop
+    if absent(next_str) then 
+       next_str := "$MAINTASK$"; 
+    end if;
+    if (#next_line + #next_str) <= 70 then
+    	 next_line +:= next_str;
+    else
+	 printa(file, next_line);
+         next_line := next_str;
+	 count_of_lines +:= 1;
+    end if;
+end loop;
+
+if count_of_lines = 1 then
+	printa(file, next_line);
+else
+	printa(file, lpad(next_line, 70));
+end if;
+
+end print_tasking_info;
+
+--S+ DEBUGGING_CHECKS_1
+procedure debugging_checks_1;
+--
+-- Checks to be done before the execution of the current statement:
+--
+-- Check for empty statement.
+--
+  if stm = [] then 
+     system_error("Missing code");
+  end if;
+
+--
+--
+-- Check for trace requested.
+--
+  if strace >= 1 or curtask in traced_tasks then
+    if (is_ais_stmt() or strace >= 2) and stm.opcode /= "stmt" then
+      if strace > 1 and trace_mode /= "free" and trace_count <= 0 then
+        to_errfile("?","");
+        reada(datafile, t);
+        if not is_integer(t ? []) then
+           t := 0;
+        end if;
+
+        trace_mode := if t = 0 then
+                          "free"
+                      elseif t > 0 then
+                          "list"
+                      else
+                         "nolist"
+                      end if;
+        trace_count := abs(t) ;
+      end if;
+      if strace = 1 or trace_mode /= "nolist" then
+        pretty_print(errfile, [err_place(), stm]);
+      end if;
+      if trace_mode /= "free" then
+        trace_count -:= 1;
+      end if;
+    end if;
+  end if;
+--
+--
+end debugging_checks_1;
+--S+ DEBUGGING_CHECKS_2
+procedure debugging_checks_2;
+--
+-- Checks to be done after the execution of the current statement:
+--
+-- Check for dump of internal tables.
+--
+  if present(tables := traced_tables(curtask)) then
+    if is_ais_stmt() or strace >= 2 then
+      do_dumps(tables);
+    end if;
+  elseif strace = 3 then
+    do_dumps(["VALSTACK"]);
+  elseif strace = 4 then
+    do_dumps(["VALSTACK", "READY_TASKS", "WAITING_TASKS",
+              "OPEN_ENTRIES"]);
+  end if;
+--
+--
+--
+end debugging_checks_2;
+
+procedure convert_duration(d); 
+    return (fix_mul_toi (d, fix_fri(1000, delay_small), 
+                  delay_small, delay_small))  ;
+end convert_duration;  
+
+procedure push_entryid(entryexpr);
+  if is_simple_name(entryexpr) then
+    exec([["push_", entryexpr],         
+	  ["push_", 1 ]] );
+  else
+    if entryexpr(1) = "." then
+      [-, -, e_name] := entryexpr;
+    else 
+      e_name := entryexpr;
+    end if;
+    if is_simple_name(e_name) then
+      exec([["push_", e_name],
+            ["push_", 1] ]);
+    else
+      [-, entry, [index]] := e_name;
+      exec([["push_", entry],
+            ["veval_", index] ]);
+    end if;
+  end if;
+end push_entryid;
+
+--T+ ADAVAL
+procedure adaval(typ,number,precision);
+const
+    hexdigits := "0123456789ABCDEFabcdef" ,
+
+    conv := {["0",0],["1",1],["2",2],["3",3],["4",4],
+ 	     ["5",5],["6",6],["7",7],["8",8],["9",9],
+ 	     ["a",10],["b",11],["c",12],["d",13],["e",14],["f",15],
+ 	     ["A",10],["B",11],["C",12],["D",13],["E",14],["F",15]} ;
+
+    int_trace("At proc ADAVAL","");
+    num := number;
+    if num=om or num="" then
+        return "OVERFLOW";
+    end if;
+    if num(1) in {"-","+"} then
+       numsign := num(1);
+       num := num(2..);
+       if num=om or num="" then
+          return "OVERFLOW";
+       end if;
+    end if;
+    -- Divide num into bse, num, and expnt:
+
+    b := sbreak (num, "#");
+    if b = om then	-- Not a based number.
+    	bse   := 10;
+    	expnt := num;
+    	num   := sbreak (expnt, "E");
+    	if num = om then	-- No exponent.
+    	    num   := expnt;
+    	    expnt := "";
+    	else			-- Exponent.
+    	    expnt := expnt(2..);
+    	end if;
+    else		-- Based number.
+    	bse   := adaval ("integer", b, 0);
+    	expnt := num(2..);
+    	num   := sbreak(expnt, "#"); -- strip off right base delimiter.
+    	if expnt = "#" then	-- No exponent.
+    	    expnt := "";
+    	else			-- Exponent.
+    	    expnt := expnt(3..);
+    	end if;
+    end if;
+
+    -- Compute exponent and bse ** expnt
+
+    if expnt /= "" then
+	exp_sgn := 1;
+    	if expnt(1) = "+" then
+    	    expnt := expnt(2..);
+    	elseif expnt(1) = "-" then
+    	    expnt := expnt(2..);
+    	    exp_sgn := -1;
+    	end if;
+    	e := (bse ** adaval ("universal_integer", expnt, 0));
+    else
+    	e := 1;
+	exp_sgn := 0;
+    end if;
+
+-- Now find the value of the number with base bse.
+
+    if typ in {"integer","universal_integer"} then
+
+    	    -- First convert body of integer:
+
+             n := 0 ;
+             for char1 in num loop
+                d := conv(char1);            
+                if d=om or d>=bse then
+                   return "OVERFLOW";
+                end if;
+		n := (n * bse) + d;
+            end loop;
+
+    	    -- Apply exponent:   (n := n * e)
+
+    	    if exp_sgn = 1 then
+    		n := (n * e);
+    	    end if;
+
+    	    -- If regular integer, then convert.
+
+    	    if typ = "integer" then
+    		n := stl_int_toi (n);
+                if numsign = "-" then 
+                  n:= -n; 
+                end if;   
+    	    end if;
+
+        else
+
+    	    -- To obtain the numerator of the rational number,
+    	    -- concatenate whole part with fractional part and convert
+    	    -- the whole thing as an integer.  Then the denominator is
+    	    -- just the base raised to a power determined by the
+    	    -- length of the fractional part.
+
+    	    wh := span (num, hexdigits);
+	    if num(1) = "." then
+		num  := num(2..);
+		fr   := span (num, hexdigits);
+    		p    := #fr;
+    		wh  +:= fr;
+    	    else
+    		p    := 0;
+    	    end if;
+
+	    n := adaval ("universal_integer", str(bse) + "#" + wh + "#",0);
+	    d := bse ** p ;
+	    n := rat_fri (n, d);
+
+    	    -- Apply exponent:   (n := n * e)
+
+    	    if exp_sgn = 1 then
+		n := rat_mul(n, rat_fri(e, 1));
+	    elseif exp_sgn = -1 then
+		n := rat_mul(n, rat_fri(1, e));
+    	    end if;
+
+    	    -- If non universal real, then convert.
+
+	    if typ /= "universal_real" then
+            	if typ = "float" then
+    		    n := float_fra(n, precision);
+            	elseif typ = "fixed" then
+    		    n := fix_fra(n, precision);
+            	end if;
+            end if;
+    end if;
+
+    return n;
+end adaval;
+end int_util;

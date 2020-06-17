@@ -1,0 +1,2 @@
+adacomp -nl Wave -b Wave
+adaexec wave

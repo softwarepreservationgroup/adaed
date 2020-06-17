@@ -1,0 +1,1 @@
+/* PStrUtilities.h * * Pascal copy and concat strings, borrowed from TBUtilities.cp, * part of TCL.  Renamed to avoid conflicts. * */#pragma once		/* Copy from => to */#define	PCopyString(srcStr, destStr) BlockMove(srcStr, destStr, srcStr[0] + 1L)		/* Concat here <= from */void	PConcatStrings(Str255 first, ConstStr255Param second);

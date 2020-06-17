@@ -1,0 +1,3 @@
+echo "This will take about 1 minute (on a stock Amiga 1000)"
+adacomp -nl Prime -b Prime
+adaexec Prime

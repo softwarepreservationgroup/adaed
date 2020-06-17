@@ -1,0 +1,538 @@
+ -- 
+ --Author: schonber $
+ --Date: 87/12/04 13:42:19 $
+ --Revision: 1.8 $
+ --Source: /cs.a/ada/ada/src/hll/adasem0.stl,v $ 
+ --State: validation $
+ --
+package adasem0;
+--
+-- Copyright 1990. Ada Project, Courant Institute, New York University
+--T+ A D A S E M
+--
+	-------------------------------------------------
+	--						-
+	--    S E M A N T I C   A C T I O N S   F O R	-
+	--						-
+	--		  A     D     A			-
+	--						-
+	--						-
+	--						-
+	--		   written by			-
+	--						-
+	--		   Ada Project			- 
+	--		Courant Institute		-
+	--	       New York University		-
+	--		251 Mercer Street		-
+	--		New York, NY 10012		-
+	--						-
+	-------------------------------------------------
+
+
+--T+ DOCUMENTATION OF THE MODULE
+--S+ General structure of the semantic actions.
+--
+--    The semantic actions described in this module annotate, validate 
+--    and modify the parse tree, enforcing all static semantic checks
+--    required by the language, and convert the parse tree into bindable 
+--    code.
+--
+--    These semantic actions are invoked as various tree fragments are
+--    produced. In this module these actions are organized according to
+--    the corresponding chapter of the RM:
+--
+--    c2) Lexical elements. The only item relevant to semantic processing
+--	 here is the processing of pragmas.
+--
+--    c3) Declaration processing for objects, constants, types, subtypes,
+--	 discriminants. A number of useful type predicates are also in-
+--	 troduced in this chapter.
+--
+--    c4) Expression processing: type checking and overload resolution 
+--	 are intimately linked, and performed together in this chapter.
+--
+--    c5) Statement processing: all statement forms are processed here. 
+--	 The case statement handler of this chapter is also used by the
+--	 record declaration routines to process variant parts.
+--
+--    c6) Subprogram processing: non-generic subprograms are handled here
+--        together with the chaining of overloaded constructs and the 
+--	 declarations of formal parameters.
+--
+--    c7) Package processing: the largest part of this chapter is devoted
+--	 to the enforcement of rules regarding private and limited types
+--
+--    c8) Visibility rules: name resolution for simple names, indexed and
+--	 selected components, slices, and attributes is perfomed here.
+--	 New entities are inserted in the symbol table, and scope 
+--	 manipulation (stacking and unstacking, definition of new symbol
+--	 tables, rules for unique name formations, etc.) are performed.
+--	 Overloaded constructs are recognized and marked in the tree, 
+--	 for subsequent type checking and resolution. Renaming declara-
+--	 tions are processed. (also used for some generic matching).
+--
+--    c9) Task processing: task declarations, resolution of entry names,
+--	 select statements, etc.
+--
+--    c10)Compilation issues: symbol tables for separate units and for
+--	 stubs are merged, library files are updated. Enforcement of
+--	 order-of-compilation rules takes place in the binder module.
+--
+--    c11)Exception declarations, exception handlers.
+--
+--    c12)Generic processing: declarations of generic units, instantia-
+--        tion, and construction of the bodies and symbol tables for
+--        instantiated objects.
+--
+--    c13)Representation clauses are checked for semantic correctness,
+--	 but otherwise ignored by this implementation.
+--
+--    c14)The predefined I/O packages are given in module PREDEF.ADA.
+--        An implementation-defined pragma IO_INTERFACE establishes the
+--	 link to the implementation of I/O primitives. The Ada I/O is 
+--	 otherwise not visible in the semantic module.
+--
+--    Finally, a constant folding procedure recognizes and evaluates
+--    static expressions,and performs some modest constant folding.
+--
+--    Input to the semantic actions is a parse tree, in the form of a 
+--    labelled tree, whose nodes are atoms. Two maps are defined on the
+--    nodes: 
+--      AST(n) is the tuple of descendents of node n, or a terminal
+--      string.
+--      SPANS(n) gives the coordinates in the source program, of the
+--      nonterminal denoted by node n.
+--
+--   The AST for a non-terminal is a tuple whose first component is an
+--   operator that establishes the nature of that node, eg. 'obj_decl',
+--   'formal', 'package_spec', etc. The routine ADASEM, which is the
+--   driver for the semantic actions, performs a (mostly) top-down  
+--   traversal of the AST, interpreting each node. Details on the struc-
+--   ture of each node can be found in ADASEM, and in the REDUCE routine
+--   in the parser module.
+--
+--   Ouput of the semantic actions is another tree, designated AIS code,
+--   together with the symbol table information needed to support sepa-
+--   rate compilation. The AIS code is a tree represented as a SETL tuple
+--   whose structure is otherwise similar to that of the AST, except that
+--   name resolution has replaced all source identifiers by unique names,
+--   some constant folding has taken place, and statement numbers have
+--   been inserted for tracing purposes.
+--
+-- All semantic processing revolves around a single common data-structure
+-- namely the symbol table. We proceed to describe its organization.
+ 
+--S+ Symbol table organization.
+ 
+--    The symbol table holds the attributes of all objects appearing
+-- in a program. Different classes of objects are described by different
+-- attributes, and it is convenient to describe each of them by a sepa-
+-- rate map. The domains of these maps overlap, but do not always coin-
+-- cide. Six such maps are used : NATURE, TYPE_OF, SIGNATURE, OVERLOADS,
+-- SCOPE_OF, and ALIAS. The term 'symbol table' refers collectively to 
+-- these six, and the global macros SYMBTAB, SYMBTABF denote tuples of 
+-- their values.
+--
+--   Each object in the program is given a unique name, which denotes
+-- its symbol table slot. The set of these unique names is the domain of
+-- the five symbol table maps. The semantic actions that deal
+-- with name resolution have as their purpose to determine the unique
+-- name, or symbol table slot, which corresponds to a given identifier
+-- at a given point in the program. Most subsequent semantic actions deal
+-- with that unique name, and not with the original identifiers. Confor-
+-- mance checks, and named associations in various parameter lists, make
+-- it useful to refer to the original names, or source identifiers, of
+-- unique names. 
+--
+--  In order to relate program identifiers to unique names, a global
+-- map called DECLARED, is used throughout. Every lexical scope corres-
+-- ponds to an entry in DECLARED. In turn, this entry is a map from
+-- source identifiers to their unique names in that scope. 
+--
+--   DECLARED : scope-name ->  (map : identifier -> unique-name )
+--
+-- The scope manipulation routines and the name resolution routines 
+-- revolve around DECLARED.
+--
+--   Internally, these  unique names are character strings. In order to
+-- retain  a modicum  of readability for  the intermediate  code, these
+-- strings are constructed using the original identifiers to which they
+-- correspond, and  adding various prefixes  and suffixes  in order  to
+-- insure
+-- their  uniqueness. These affixes are chosen to reflect the lexical
+-- placement of the original identifiers, and as a result these construc-
+-- ted unique names carry some information encoded within themselves, and
+-- do  not act simply  as pointers. This (probably unwise) hybrid purpose
+-- should  disappear when a  more conventional,  lower-level organization
+-- for the symbol table is implemented.
+--
+--  Compiler-generated names (for constants, scopes and anonymous types) 
+-- also  have  symbol-table entries.  Their unique names  are internally 
+-- generated following similar rules. Their natures are described below.
+--
+--S+ Contents of the symbol table maps 
+-- In what follows, -name- denotes a unique name.
+-- a) NATURE(name)  is a string which indicates the kind of entry which 
+--    name been made for -name-. It is thus a discriminant for the rest
+--    of the symbol table fields. The following are the possible values 
+--    of the  nature  of program  entities, and  the chapters in  which
+--    they are introduced:
+--
+--  Predefined entitities (the package STANDARD) include the following:
+--    'op'         'attribute'		
+--
+--  Declarations (Chapter 3) deal with the following:
+--    'obj'     'constant'  			
+--    'type'    'subtype'   'array'      'record'    'enum'    'literal' 
+--    'access'  'aggregate'  
+--
+--  Blocks, loops (Chapter 5) and exception handlers are:
+--    'block'
+--  statements may be labelled by an entity of nature
+--    'label'
+--
+--  Subprograms and their formal parameters (chapter 6) make use of:
+--    'procedure_spec'      'function_spec'       'procedure'  'function'
+--    'in'      'inout'     'out'	
+--  
+--  Packages (Chapter 7) introduce:
+--    'package_spec'    'package'    'private_part'
+--
+--  Tasks and their entries (Chapter 9) deal with:
+--    'task_type'     'task_type_spec'    'task_obj'     'task_obj_spec'
+--    'entry'         'entry_family'      'entry_former'      
+
+-- Generic units (Chapter 12) involve:
+--    'gen_inout'			( for in out parameters)
+--    'generic_procedure'   'generic_function'    'generic_package'
+--    and the corresponding specs. 
+--
+--    The content and meaning of the other symbol table maps is
+--    determined by the nature of the entity. Before giving a detailed,
+--    nature-by nature description, let us sketch their use :
+--
+-- b) TYPE_OF(name) specifies the ADA type of an entity;the value of this
+--    field is therefore the unique name of an entity which designates a 
+--    type. 
+--
+-- c) SIGNATURE(name) is used primarily to hold information about the 
+--    formal parameters of a subprogram. It is used in miscellaneous 
+--    fashions for array types, for subtypes, for packages, and for 
+--    generic objects. It is always a tuple.
+--
+-- d) OVERLOADS(name) is a SETL set, whose elements are the unique names 
+--    of the entity whose program identifier is the same as that of name
+--    and which are defined in the same scope. This map is defined for 
+--    overloadable entity in the language : procedures, functions, 
+--    literals, operators.
+--    For packages, the OVERLOADS field store the private declarations of
+--    the package. These declarations are swapped in and out of the symbol
+--    table for the body, when the body is encountered/exited.
+--
+-- e) SCOPE_OF(name) is the unique name of the scope in which name is 
+--    declared. It is declared for all symbol table entries. If -id- is 
+--    the source identifier of -name-, then the following holds:
+--
+--	DECLARED(SCOPE_OF(name))(id) = name
+--
+-- f) ALIAS(name) is used for derived subprograms and for renamed subpro-
+--    grams. It is a unique name. Such subprograms do not have a body; a
+--    call to them is transformed into a call to their parent subprogram.
+--
+--    For array types, record types, access types,  generic units, etc. 
+--    additional information must be kept. This is done by miscellaneous
+--    use of the SIGNATURE and OVERLOADS maps. These maps are accessed by
+--    means of macros described below. 
+--
+--S+ Object entities
+-- Let us now flesh out this sketch.
+--
+-- 'obj':  Denotes a symbol table slot for a program variable.
+--         The corresponding entry in TYPE_OF is always a unique name,
+--         namely that of a user-defined or internally generated type.
+--         SIGNATURE and OVERLOADS are not used for an obj.
+--        
+-- 'constant' : Denotes a symbol table slot for a user-defined constant
+--         and for a number declaration.
+--         The TYPE_OF entry is the specified type for it.
+--         The SIGNATURE entry holds the SETL representation of the value
+--         of this constant or the AIS code fragment that evaluates it, 
+--	  the case the constant is not static.
+-- 
+-- 'literal'   : an entry of this nature denotes an enumeration literal.
+--	   The SIGNATURE of the literal is the same as that of a parame-
+--          terless function, i.e. [].
+--	   
+--
+-- 'attribute' : An entry of this nature denotes a predefined attribute
+--	   of the language.
+--          Many attributes are generic : they apply to classes of types.
+--          The TYPE_OF entry for an attribute is either a predefined type,
+--          (INTEGER or STRING) or the marker 'overloaded'. This indicates
+--          that the type returned by the attribute depends on the type of
+--          its arguments.
+--	   The signature and overloads entries are unused.
+--
+--S+ Type entities
+--
+--
+-- 'type' :    This denotes an entry for a new, or derived type 
+--	   from one of the numeric types 'INTEGER', 'FLOAT',
+--          or '$FIXED', or from another numeric type, or
+--	   the error type 'any'.
+--	   The TYPE_OF entry gives the unique name of the type from
+--	   which the current one is derived.
+--	   The SIGNATURE entry gives the constraint (see 'subtype'
+--	   below).
+--	   Private and incomplete type declarations produce type
+--          entries whose TYPE_OF field is 'private','limited private'
+--	   or 'incomplete' respectively.
+--	   The map 'misc_type_attributes' collects various useful predi-
+--	   cates on types, in particular composite and generic types.
+--	   This map overlays the OVERLOADS map.
+--
+-- 'subtype' : This denotes an entry for a declared subtype, or for a
+--    	   range descriptor which has been promoted to a subtype.
+--	   The TYPE_OF entry is the unique name of the type of which 
+--          the current one is a subtype, i.e. its base type.
+--	   The SIGNATURE entry holds the constraint which defines the
+--	   subtype. For scalar types, the constraint  has  one of the 
+--	   following formats :
+--
+--		['range' low, high]		for discrete subtypes.
+--
+--		['digits', low, high, digits]	for floating subtypes.
+--
+--		['delta', low, high, delta]	for fixed subtypes.
+--
+--	   In each case, -low- and -high- are the bounds of the subytpe.
+--	   digits is a SETL integer, delta is a rational (a pair of SETL
+--	   integers. See module adaarith for details).
+--	   Both of these have their standard Ada meaning .
+--
+--          for record subtypes, the constraint as the format :
+--		['discr', list of discriminant values] 
+--
+--	  for array subtypes, see below.
+--
+-- 'array' : This denotes an entry for an unconstrained array type.
+--	   The TYPE-OF an array entry is itself.
+--	   The SIGNATURE of an array entry is the pair :
+--		[ index-types, component-type]
+--
+--	   where index_types is a tuple of type names.
+--
+--	   an array subtype denotes and entry for a constrained array.
+--	   Its nature is 'subtype', its type and signature are those of
+--          its (unconstrained) base type.
+--
+-- 'record' : Denotes a record type.
+--	   The TYPE_OF a record entry is the type name itself.
+--
+--	   The SIGNATURE for a record is a triple formatted as
+--	   follows:
+--
+--          [ [invariant_part, variant_part], discriminant_list ,
+--						declared_map ]
+--
+--	   the discriminant list is [] for a record without discriminant
+--
+--	   The declared_map is the map from selector names
+--	   to their unique names.
+--
+-- 'enum'   : Denotes an enumeration type. 
+--	   The TYPE_OF the enumeration is the parent type, if derived,
+--	   or the typename itself for BOOLEAN, CHARACTER, and non-derived
+--	   enumerations.
+--	   The SIGNATURE of the enumeration type is the range for
+--	   the enumeration type in the format:
+--
+--		['range', low, high]
+--
+--	   where low and high are the integer values for the first
+--	   and last enumeration literals of the type.
+--	     The OVERLOADS entry is a map, from the literals to their
+--	   POS in the type. By default the range of this map is dense
+--          and 0-origined, but it can be modified by a representation
+--          clause. This map is accessed by the macro literal_map.
+--
+-- 'access' : denotes an access type.
+--	   The type_of map of an access type is itself. The macro
+-- 	   designated_type(access_type) retrieves the unique name of
+--	   the type of designated objects of the access type.
+--	   this macro is also available on  subtypes of access types.
+--
+--
+-- 'aggregate' : Every array and record declaration introduces an aggre-
+--	        gate into the environment, i.e. one possible meaning 
+--	   for any aggregate expression appearing in the code. In order
+--	   to disambiguate such an expression, it is convenient to view
+--	   aggregates as overloaded constructs. Each aggregate entry
+--	   is uniquely characterized by its type (held in TYPE_OF).
+--
+--S+ Subprograms and operators.
+-- 'procedure' : Denotes a symbol table slot for a procedure subprogram.
+--         Its TYPE_OF field holds the marker 'none'.
+--         The SIGNATURE describes the formal parameters of the procedure.
+--         It is a tuple, each of whose components has the format :
+--
+--		[name, mode, type, default]
+--
+--         -name- is the unique name of the formal parameter.
+--         -mode- is one of the strings : 'in', 'out','inout' .
+--        
+--         -type- is the type of the formal parameter. It is always a
+--         unique name.
+--
+--         -default- is the type-checked and resolved expression which is
+--         to be  used as an actual  argument, when none  is  provided in
+--         the call. 
+--
+--	   OVERLOADS for a procedure is the set of procedures with the
+--          same name (source identifier, that is) which appear in the
+--          current lexical scope, or in enclosing scopes, and which are
+--          not hidden by the current entry. This set is built when the
+--          procedure specification is processed (See procedure : chain-
+--          overloads in the semantic actions) and is central to the
+--          overload resolution mechanism.
+--          OVERLOADS(id) always includes -id- itself.
+--         If the procedure is the only visible instance of the name,
+--         (i.e. it overloads no other identifier) then the OVERLOADS
+--         entry is the singleton set containing its own name.
+--               
+--      
+-- 'function'  : identical to 'procedure'. The TYPE_OF a function is the
+--          type which it returns.
+--
+-- 'procedure_spec', 'function_spec' : ditto. An entry is given this
+--               nature after the corresponding subprogram specification
+--               is processed. When the subprogram body is encountered
+--         the specification is examined again, and if it coincides with
+--         an existing symbol table slot, the _spec tag is removed.
+--
+-- 'op' :  An entry with this nature denotes a predefined operator in the
+--         language.
+--         The TYPE_OF entry for an operator is usually a generic marker
+--         which indicates the family of types to which this operator can
+--         apply. This marker obviates the need to introduce a separate
+--         operator for each type derived from the predefined types. These
+--         generic type marks are also given a symbol table slot. The 
+--         following are used :
+--
+--         1) 'universal_integer' : for all arithmetic operators which 
+--         apply to integers.
+--         2) 'universal_real'   : ditto for floating and fixed types.
+--         3) 'array_type'   : used for the (idiosyncratic) concatenation
+--	      operator.
+--         4) 'order_type'   : for comparison operators.
+--	  5) 'boolean type' : for boolean operators. This simplifies the
+--	      handling of arrays of booleans and derived booleans.
+--         6) 'string_type'  : for string literals, which overload any 
+--	      array of characters.
+--         7) 'character_type' : the component type of 'string_type'
+-- 	  8) 'composite_type': for aggregates
+--
+--         The signature of an operator follows the same format as the 
+--         one for a subprogram. The formal parameter names LEFT and 
+--         RIGHT are not stored explicitly, but recognized by the proc.
+--         order_arg_list in those rare cases when an operator is used in
+--         functional notation with named associations.
+--
+--         The OVERLOADS entry of an operator has the same meaning as for
+--         subprograms. Given that operators are entered into the symbol
+--         table during initialization, at the outermost scope, most ope-
+--         rators in fact do not overload anything. For arithmetic ope-
+--         rators however, we give different unique names to the integer
+--         and floating point version of them. 
+
+--S+ Packages.
+-- 'package', 'package_spec' : these entries have no defined type nor
+--        signature. Access to entities declared in a package is via
+--	 its declared map. Access to entities in the specification is
+--	 via the mapping VISIBLE. The domain of visible(p) is a sub-
+--        set of that of declared(p).
+--	 The private declarations of the package are stored in a
+--	 separate structure, private_decls(p). These private decla-
+--        rations are installed in the global symbol table when the
+--        body of the package is compiled, and removed afterwards, so
+--        that only the visible attributes remain accessible outside
+--	 of the package.
+--
+-- 'private_part': for technical reasons, it is convenient to regard the
+--        private part of a package specification as a scope in its own 
+--        right. This simplifies the segregation of private declarations 
+--        from visible ones, and the detection of sundry semantic errrors
+-- 
+--S+ Tasks.
+-- 'task_obj', 'task_type': Denotes a task. Access to its entries
+--	   is obtained by means of the -declared- map for either.
+--
+-- 'entry_former' : denotes the type of an entry object. Calls to entries
+--	   (rendez-vous) have the same syntax as procedure calls, and
+--	   named and default parameters are also present. The SIGNATURE
+--	   of the entry type is the list of formals for the entry, and
+--	   has the same format as that of a procedure.
+--	   As for procedures, the TYPE_OF an entry is the marker 'none'.
+--
+-- 'entry'  denotes an entry object. Its type_of field is an entry
+--          former. Its signature is the formals list, and is identical
+--	   to that of a subprogram. Ditto for OVERLOADS.
+--
+-- 'entry_family' : denotes an entry family object. This is a non-over-
+--          loadable entity, constructed as an array of entries. Its type
+--          is an anonymous array type whose component is an entry-former
+
+--S+ Generic entities.
+--
+-- Generic objects have the same organization as their non-generic
+-- counterparts. The SIGNATURE of a generic entity has, in addition to
+-- its non-generic purpose, the further role of holding the list of 
+-- generic parameters and the body of the generic object.
+
+
+--S+  Shortcuts.
+
+-- This section details some programming artifacts that appear in Ada/Ed for
+-- miscellaneous reasons unrelated to its definitional purpose. To the extent
+-- that Ada/Ed is executable, it cannot avoid paying some attention to matters
+-- of efficiency, and thus some of the code reflects this attention, which is
+-- also visible in some of the algorithms employed, e.g. for name resolution.
+-- The entries that follow will be of greater interest to implementors than to
+-- language lawyers. We hope that they do not detract from the general use-
+-- fullness of Ada/Ed, but rather help to make its modest aims more credible. 
+
+--S+ problems with generic in out parameters.
+
+-- Generic in  out parameters are identical to renamings: their implementation
+-- by simple name substitution should present no problem. There is nevertherless
+-- a possible complication involving bounds checks: the imposition of checks must
+-- be done after generic instantiation, because the constraints on a generic
+-- formal are those of the corresponding actual (122.3.1(3)). In Ada/Ed,  the
+-- constraint checks are already generated when analysing the generic unit
+-- itself. This is generally sufficient, because constraints on generic types
+-- become constraints on the actuals after name replacements. However, if the
+-- generic object has a non-generic type, then the constraint is expressed in 
+-- terms of the subtype indication appearing in the generic declaration, rather 
+-- than in terms of the type of the actual. Furthermore, if the type of the 
+-- generic object is a private type without discriminants,  no constraint at all
+-- is indicated, on the assumption that its uses will be automatically legal. 
+-- This assumption is unfortunately disproved by tests c64104n, c64104o, c95085n,
+-- and c950850.  Even though these are admitedly contorted tests, they indicate 
+-- a real problem in the Ada/Ed model of constraint checking. 
+
+-- Modifying the way in which contraint checks are currently generated is too
+-- large a task. Therefore the fix should be restricted to the handling of in out
+-- generic parameters. A possible solution is to impose constraints at the time
+-- of generic instantiation, for all occurrences of the generic object that may
+-- carry a constraint: assignment, use as actual parameter in call, etc. An even
+-- weaker solution (sufficient for ACV purposes) is to recognize generic in out
+-- parameters used as actuals in subprogram and entry calls,  and indicating a
+-- constraint check on them in terms of their (generic) type. Each generic 
+-- instantiation examines lists of actuals in calls to recognize generic in out 
+-- parameters, and emits a constraint check in terms of the type of the actual.
+
+-- In order to recognize generic in out parameters, they are given the nature:
+-- 'gen_inout', which must be recognized elsewhere (assignments, etc.) as a valid
+-- nature for a variable. Otherwise, their nature would be 'obj' which is used
+-- for non-generic entitites. 
+end adasem0;

@@ -1,0 +1,2894 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adaarith.stl,v 1.1 90/12/05 16:14:53 ada Exp $
+--
+package body adaarith;
+
+-- Selectors for access to rational and floating point numbers:
+
+use globals;
+
+sel num(1),
+    den(2),
+    sig(1),
+    mantissa(2),
+    exponent(3);
+
+-- Constants for use by arithmetic packages:
+
+const radix := 2,                       -- value of the radix
+      int_radix := [2],                 -- value of the radix in the
+                                        -- multiprecision integer representation
+      fix_0             := [0,[0]],     -- value of zero for all fixed point 
+                                        -- types
+      float_0           := [0,[0],0],   -- value of zero for all floating point 
+                                        -- types
+      rat_one           := [1, 1],
+      rat_two		:= [2, 1],
+      ada_mantissa_size := 24,   	-- # of bits in an ADA FLOAT number
+      bas         	:= 1024,	-- value of base digit
+      digs              := 10,          -- base is 2**10
+      ada_max_integer_long := 1073741823  ;
+
+-- "A canonical form is defined for any fixed point model number other than 
+--  zero. In this form : sign is either +1 or -1; mantissa is a positive
+--  (nonzero) integer; and any model number is a multiple of a certain positive
+--  real number number called small, as follows:
+--
+--          sign * mantissa * small"
+--
+-- [LRM 3.5.9.(4)]
+-- In our representation, the fixed point numbers are represented as pairs
+-- [sign, mantissa].
+-- Zero is represented as [0,[0]].
+-- In the other cases, the sign is either -1 or 1, depending on whether the 
+-- fixed point number is negative or positive.
+-- The mantissa is represented as a setl integer in base 2**10.
+-- F I X E D   P O I N T   A R I T H M E T I C   P A C K A G E
+--
+--             Alain Lauque
+--             Dec 19th, 1986
+
+-- The following routines are provided :
+
+--	fix_add		fixed point addition
+--	fix_sub		fixed point substraction
+--	fix_mul_tfi	fixed point multiplication with a fixed point result.
+--      fix_mul_tfl     fixed point multiplication with a floating point result.
+--	fix_div_tfi	fixed point division with a fixed point result. 
+--      fix_div_tfl     fixed point division with a floating point result.
+--      fixi_mul        fixed point/integer multiplication with a result
+--                       of the same fixed point type.
+--      fixi_div        fixed point/integer division with a result
+--                       of the same fixed point type.
+--	fix_umin	fixed point unary minus
+--	fix_abs		fixed point absolute value
+--	fix_eql		fixed point equal to
+-- 	fix_geq		fixed point greater than or equal to
+--	fix_gtr		fixed point greater than
+--	fix_leq		fixed point lesser than or equal to
+--	fix_lss		fixed point lesser than
+--	fix_neq		fixed point not equal to
+--	fix_fri		convert fixed point number from integer
+--	fix_toi 	convert fixed point number to integer
+--	fix_tfl		convert fixed point number to floating point number 
+--	fix_ffl		convert fixed point number from floating point number
+--      fix_tos		convert fixed point number to string
+--      fix_fra       	convert fixed point number from rational
+--      fix_tra       	convert fixed point number to rational
+--	fix_convert   	fixed point to fixed point conversion
+-- Addition of two fixed point numbers
+
+procedure fix_add(x,y);
+--arith_trace("At proc fix_add " + str(x) + str(y) ,"");
+
+   sum := [];
+
+   -- First, we take the argument with the greater absolute value as the first 
+   -- one.
+
+   if fix_geq(fix_abs(x),fix_abs(y)) then
+
+      arg1 := x;
+
+      arg2 := y;
+
+   else
+
+      arg1 := y;
+
+      arg2 := x;
+
+   end if;
+
+   -- The sign of the result is the sign of the argument with the greater 
+   -- value. If this value is null, the result is null.
+
+   if arg1.sig /= 0 then
+
+      sum.sig      := arg1.sig;
+
+   else
+
+      return fix_0;
+
+   end if;
+
+   -- If the signs of the arguments are the same, we add the mantissas, 
+   -- otherwise, we substract them.
+
+   if arg1.sig = arg2.sig then
+
+      sum.mantissa := int_add(arg1.mantissa,arg2.mantissa);
+
+   else
+
+      sum.mantissa := int_sub(arg1.mantissa,arg2.mantissa);
+
+   end if;
+
+   return if sum.mantissa = [0] then fix_0 else sum end if;
+
+end fix_add;
+-- Substraction of two fixed point numbers. The substraction is an addition
+-- of the first argument and the opposite of the second argument.
+
+procedure fix_sub(x,y);
+--arith_trace("At proc fix_sub"+str(x) + str(y),"");
+
+   return fix_add(x, fix_umin(y));
+
+end fix_sub;
+-- "Multiplication and division of fixed point values deliver results of an
+--  anonymous predefined fixed point type that is called universal_fixed in
+--  this reference manual; the accuracy of this type is arbitrarily fine.
+--  The values of this type must be converted explicitly to some numeric type."
+-- [LRM 3.5.9.(9)]
+-- Multiplication of two fixed point numbers with a fixed point result, knowing
+-- the small of the result.
+
+procedure fix_mul_tfi(x, y, sx, sy, sr);
+--arith_trace("At proc fix_mul_tfi", str (x)  + " " + str(y));
+--arith_trace("At proc fix_mul_tfi", str(sx) + " " + str(sy));
+--arith_trace("At proc fix_mul_tfi", str(sr));
+
+   product           := [];
+
+   product.sig      := x.sig*y.sig;
+
+   -- we multiply the mantissas and we then convert the intermediary result, 
+   -- whose small is the product of the smalls of the two operands, into the
+   -- target fixed point type.
+
+   product.mantissa := int_mul(x.mantissa,y.mantissa);
+
+   product := fix_convert(product, rat_mul(sx, sy), sr);
+
+   return product;
+
+end fix_mul_tfi;
+-- Multiplication of two fixed point numbers with an integer result
+procedure fix_mul_toi(x, y, sx, sy);
+--arith_trace("At proc fix_mul_toi",x, y, sx, sy);
+
+   -- This routine is coded as a particular case of the previous one, the 
+   -- integer number being considered as a fixed point number of small equal 
+   -- to one. 
+
+   product           := [];
+
+   product.sig      := x.sig*y.sig;
+
+   product.mantissa := int_mul(x.mantissa,y.mantissa);
+
+   result := fix_toi(product, rat_mul(sx, sy));
+
+   return result;
+
+end fix_mul_toi;
+-- Multiplication of two fixed point numbers with a floating  point result, 
+-- knowing the smalls of the operands and the precision of the result.
+
+procedure fix_mul_tfl(x, y, sx, sy, decimal_precision);
+--arith_trace("At proc fix_mul_tfl",x, y, sx, sy, decimal_precision);
+
+   product           := [];
+
+   product.sig      := x.sig*y.sig;
+
+   product.mantissa := int_mul(x.mantissa, y.mantissa);
+
+   -- we convert the intermediary result, which is of a fixed point type with a
+   -- small equal to the product of the smalls of the two operands, into the 
+   -- target floating point type.
+
+   fix_tfl(product, rat_mul(sx, sy), decimal_precision);
+
+   return product;
+
+end fix_mul_tfl;
+-- Fixed point division of two fixed point numbers with a fixed point result
+-- knowing the small wanted for the result. We first convert
+-- the dividend into an intermediary fixed point type whose small is the product
+-- of the divisor's and the result's.
+-- [Rosen 86]
+
+procedure fix_div_tfi(x, y, sx, sy, sr);
+--arith_trace("At proc fix_div_tfi",x, y, sx, sy, sr);
+
+   quotient           := [];
+
+   quotient.sig      := x.sig*y.sig;
+
+   x := fix_convert(x, sx, rat_mul(sy, sr));
+
+   quotient.mantissa := int_quo(x.mantissa, y.mantissa);
+
+   return quotient;
+
+end fix_div_tfi;
+-- Fixed point division of two fixed point numbers with an integer result
+-- This is a particular case of the previous case with sr equal to one.
+procedure fix_div_toi(x, y, sx, sy);
+--arith_trace("At proc fix_div_toi",x, y, sx, sy);
+
+   x := fix_convert(x, sx, sy);
+
+   result := int_quo(x.mantissa, y.mantissa);
+
+   return result;
+
+end fix_div_toi;
+-- Fixed point division of two fixed point numbers with a floating point result
+-- knowing the precision of the result. We first
+-- convert the dividend into an intermediary fixed point type whose small is 
+-- calculated so that it is compatible with the precision required for the 
+-- floating point result. 
+
+procedure fix_div_tfl(x, y, sx, sy, decimal_precision);
+--arith_trace("At proc fix_div_tfl",x, y, sx, sy, decimal_precision);
+
+   bits_precision := ceil(1.0 + log(10.0)/log(2.0)*
+                         float(decimal_precision));
+
+   rat_x := rat_mul([x.sig*int_toi(x.mantissa), 1], sx);
+
+   rat_y := rat_mul([y.sig*int_toi(y.mantissa), 1], sy);
+
+   rat_quotient := rat_div(rat_x, rat_y);
+
+   float_quotient := float_fra(rat_quotient, decimal_precision);
+
+   return float_quotient;
+
+end fix_div_tfl;
+-- Multiplication of a fixed point number with an integer with the result 
+-- of the same fixed point type.
+
+procedure fixi_mul(x, s);
+--arith_trace("At proc fixi_mul",x, s);
+
+   result := [];
+
+   if s > 0 then 
+
+      result.sig := x.sig;
+  
+   elseif s < 0 then
+
+      result.sig := -x.sig;
+
+   else
+
+       return fix_0;
+
+   end if;
+
+   result.mantissa := int_mul(x.mantissa, int_fri(abs(s) ));
+
+   return result;
+
+end fixi_mul;
+-- Division of a fixed point number with an integer with the result 
+-- of the same fixed point type.
+procedure fixi_div(x, n);
+--arith_trace("At proc fixi_div",x, n);
+
+   result := [];
+
+   if n > 0 then 
+
+      result.sig := x.sig;
+  
+   else
+
+      result.sig := -x.sig;
+
+   end if;
+
+   result.mantissa := int_quo(x.mantissa, int_fri(abs(n) ));
+
+   return result;
+
+end fixi_div;
+-- Returns the unary minus of a fixed point number.
+
+procedure fix_umin(x);
+--arith_trace("At proc fix_umin",x);
+
+   x.sig := -x.sig;
+
+   return x;
+
+end fix_umin;
+-- Returns the absolute value of a fixed point number.
+
+procedure fix_abs(x);
+--arith_trace("At proc fix_abs",x);
+
+   x.sig := abs(x.sig);
+
+   return x;
+
+end fix_abs;
+-- Fixed point equality
+
+procedure fix_eql(x, y);
+--arith_trace("At proc fix_eql",x, y);
+
+   return x = y;
+
+end fix_eql;
+-- Fixed point number greater than or equal
+
+procedure fix_geq(x, y);
+--arith_trace("At proc fix_geq",x, y);
+
+   return x = y or fix_gtr(x, y);
+
+end fix_geq;
+-- Fixed point number greater than
+
+procedure fix_gtr(x,y);
+--arith_trace("At proc fix_gtr",x,y);
+
+   -- First check if the two numbers are equal.
+   if x = y then 
+	 return false ;
+   end if;
+
+   -- First check the sign combinations and the null values.
+
+   if x.sig > 0 and y.sig = 0 then
+
+      return true;
+
+   elseif x.sig >= 0 and y.sig < 0 then
+
+      return true;
+
+   elseif x.sig <= 0 and y.sig >= 0 then
+
+      return false;
+
+   else
+   
+   -- Now we have two non null values of the same sign.
+
+      pos := x.sig > 0;
+
+      if int_gtr(x.mantissa, y.mantissa) then
+
+         return (if pos then true else false end if);
+
+      else
+
+         return (if pos then false else true end if);
+
+      end if;
+
+   end if;
+
+end fix_gtr;
+-- Fixed point number lesser than or equal
+ 
+procedure fix_leq(x, y);
+--arith_trace("At proc fix_leq",x, y);
+
+   return not fix_gtr(x, y);
+
+end fix_leq;
+-- Fixed point number less than
+
+procedure fix_lss(x, y);
+--arith_trace("At proc fix_lss",x, y);
+
+   return not fix_geq(x, y);
+
+end fix_lss;
+-- Fixed point number not equal to
+
+procedure fix_neq(x, y);
+--arith_trace("At proc fix_neq",x, y);
+
+   return x /= y;
+
+end fix_neq;
+-- This routine converts an integer into a floating point number whose small is s
+
+procedure fix_fri(integer_value, s);
+--arith_trace("At proc fix_fri",integer_value, s);
+
+   fix_value := [];
+
+   -- First, determination of the sign.
+
+   if integer_value > 0 then
+
+      fix_value.sig := 1;
+
+   elseif integer_value < 0 then
+
+      fix_value.sig := -1;
+
+      integer_value := abs(integer_value);
+
+   else
+
+      return fix_0;
+
+   end if;
+
+   -- The conversion is made by using the fixed point to fixed point conversion,
+   -- considering that an integer is a fixed point number whose small is one.
+
+   fix_value.mantissa := int_fri(integer_value);
+
+   fix_value := fix_convert(fix_value, rat_one, s); 
+
+   return fix_value;
+
+end fix_fri;
+-- This routine converts a fixed point number, knowing its small, into an integer
+
+procedure fix_toi(x, sx);
+--arith_trace("At proc fix_toi",x, sx);
+
+   -- The conversion is made by using the fixed point to fixed point conversion,
+   -- the target type being a floating point number whose small is one, that is
+   -- to say an integer.
+  
+   x := fix_convert(x, sx,  rat_one);
+
+   return x.sig*int_toi(x.mantissa);
+
+end fix_toi;
+-- This routine converts a fixed point number, knowing its small, into a floating
+-- point number with a certain precision;
+
+procedure fix_tfl(x, sx, decimal_precision);
+--arith_trace("At proc fix_tfl",x, sx, decimal_precision);
+
+   -- The conversion is made by calculating in an intermediary floating point
+   -- type with an extra digit of precision the expression sign*mantissa*small
+   -- and then by converting the result into the desired floating point type.
+   -- (The intermediary floating point type is required by the loss of accuracy
+   --  which can be introduced by the intermediary calculations.)
+
+   float_value := float_div(float_mul(float_mul(
+                    float_fri(x.sig, decimal_precision + 1), 
+                    float_fri(int_toi(x.mantissa),
+                              decimal_precision + 1)), 
+                  float_fri(sx.num, decimal_precision + 1)),
+                  float_fri(sx.den, decimal_precision + 1));
+
+   float_value := float_convert(float_value, decimal_precision);
+
+   return float_value;
+
+end fix_tfl; 
+
+-- This routine converts a floating point number into a fixed point number.
+
+procedure fix_ffl(x,s);
+--arith_trace("At proc fix_ffl",x,s);
+
+   bits_precision := bit_nbr(x.mantissa);
+
+   fix_value := [];
+
+   -- The conversion is made using the fixed point to fixed point conversion,
+   -- considering the floating point number as a fixed point number whose small
+   -- is radix**(exponent - bits_precision).
+
+   fix_value.sig := x.sig;
+
+   fix_value.mantissa := x.mantissa;
+
+   -- Expressing radix**(exponent - bits_precision) as a fraction.
+
+   v_num := 1;
+
+   v_den := 2**bits_precision; 
+ 
+   if x.exponent >= 0 then 
+
+      v_num *:= 2**(x.exponent);
+
+   else
+
+      v_den *:= 2**(- x.exponent);
+
+   end if;
+
+   fix_value := fix_convert(fix_value, [v_num, v_den], s);
+
+   return fix_value;
+
+end fix_ffl;
+-- This routine converts a fixed point number into a string.
+-- frac represents the number of digits required after the decimal point.
+
+ procedure fix_tos(x, sx, frac);
+
+   decimal_part := str(fix_toi(x, sx));
+
+   decimal_precision := (# decimal_part) + frac;
+
+   return float_tos(fix_tfl(x, sx, decimal_precision));
+
+end fix_tos;
+-- This routine converts a fixed point from a rational.
+
+procedure fix_fra(rat, s);
+--arith_trace("At proc fix_fra",rat, s);
+
+   fix_value := fix_fri(rat.num, rat_one);
+
+   fix_value := fix_convert(fix_value, [1, rat.den],  s);
+
+   return fix_value;
+
+end fix_fra;
+-- This routine converts a fixed point number to a rational.
+
+procedure fix_tra(x, sx);
+--arith_trace("At proc fix_tra",x, sx);
+
+   rat_value := rat_fri(int_toi(x.mantissa)*sx.num, sx.den); 
+
+   return rat_value;
+
+end fix_tra;
+ 
+-- Fixed point to fixed point conversion.
+
+procedure fix_convert(x, sx, sr);
+--arith_trace("At proc fix_convert",x, sx, sr);
+
+   if x.sig = 0 then
+   
+      return fix_0;
+   
+   else
+
+      result := [];
+
+      result.sig := x.sig;
+
+      -- The calculation of mantissa(x)*sx/sr is made by integer operations
+      -- after puting sx/sr in the form N:D. [Rosen 86]
+
+      result.mantissa := int_quo(int_mul(
+                             int_mul(x.mantissa,int_fri(sx.num)),
+                                     int_fri(sr.den))
+                        ,int_mul(int_fri(sr.num),int_fri(sx.den)));
+
+      return if result.mantissa = [0] then fix_0 else result end if;
+
+    end if;
+
+end fix_convert;
+ 
+-- P R O C E D U R E S   F O R   T H E   U S E   O F   T H E    F I X E D 
+-- P O I N T   A R I T H M E T I C    P A C K A G E
+-- This routine, given a binary exponent, returns a fraction of the form 1/2**exp
+
+procedure to_small(binary_exponent);
+--arith_trace("At proc to_small "+ str(binary_exponent) );
+
+   if binary_exponent <= 0 then
+
+      return [1, 2**(- binary_exponent)];
+
+   else
+
+      return [2**binary_exponent, 1];
+
+   end if;
+
+end to_small;
+-- "For a given radix, the following canonical form is defined for any floating
+--  point model other than zero:
+--
+--      sign * mantissa * (radix ** exponent)
+--
+--  In this form : sign is either +1 or -1; mantissa is expressed in a number
+--  base given by radix; and exponent is an integer number (possibly negative)
+--  such that the integer part of mantissa is zero and the first digit of its
+--  fractional part is not a zero." 
+-- [LRM 3.5.7.(4) & 3.5.7.(5)]
+-- In the representation chosen here, radix is equal to two.
+-- The floats are stored as a triple [sign, mantissa, exponent]. Zero is
+-- stored as [0, [0], 0]. In the other cases, the sign is either -1 or 1,
+-- depending on whether the float number is negative or positive. The mantissa is
+-- represented by its fractional part (its integer part being 0). The first
+-- digit of this fractional part cannot be 0 [LRM 3.5.7] and so the
+-- mantissa  can be represented as a setl integer in base 2**10.
+-- The exponent is an integer, either positive or negative.
+-- "For floating point types, the error bound is specified as a relative 
+--  precision by giving the required minimum number of significant decimal
+--  digits." 
+-- [LRM 3.5.7.(1)]
+-- This minimum number of significant digits is a 
+-- variable which is here noted 'decimal_precision' (noted D in the LRM).
+
+-- "The specified number D is the minimum number of decimal digits required
+--  after the point in the decimal mantissa (that is, if radix is ten).
+--  The value of D in turn determines a corresponding number B that is the
+--  minimum number required after the point in the binary mantissa
+--  (that is, if radix is two). The number B associated with D is the smallest
+--  value such that, the relative precision of the binary form is no less 
+--  than that specified for the decimal form.
+--  (The number B is the integer next above (D*log(10)/log(2)) + 1.)" 
+--  [LRM 3.5.7.(6)]
+-- In our representation, radix is two, so we have to calculate 'bits_precision'
+-- (noted B in the LRM). 'bits_precision' represents the number of binary digits
+-- after the point, and so, the number of bits of our representation of mantissa.
+-- M U L T I P L E    P R E C I S I O N   F L O A T I N G    P O I N T
+
+--          A R I T H M E T I C    P A C K A G E
+
+--                  Alain Lauque
+--                 Dec 16th, 1986
+
+-- This package of routines implements floating point arithmetic using the
+-- algorithms described in Knuth "Art of Programming" Volume 2, section 4.2.1
+-- called 'floating point arithmetic : single precision calculation'.
+-- Indeed ,this can be considered as single precision calculations since the
+-- mantissa is represented as a single multiple precision integer and 
+-- calculation on the mantissa are made with Robert Dewar's 'MULTIPLE 
+-- PRECISION ARITHMETIC PACKAGE'. 
+
+-- The following routines are provided :
+
+--	float_add	floating point addition
+--	float_sub	floating point substraction
+--	float_mul	floating point multiplication
+--       floati_mul      floating point/integer multiplication
+--	float_div	floating point division
+--       floati_div      floating point/integer division
+--	float_exp	raise floating point to integer power
+--	float_umin	floating point unary minus
+--	float_abs	floating point absolute value
+--	float_eql	floating point equal to
+--	float_geq	floating point greater than or equal to
+--	float_gtr	floating point greater than
+--       float_leq       floating point less than or equal to
+--       float_lss	floating point less than
+--	float_neq	floating point not equal to
+--       float_fri       convert floating point number with certain precision
+--                       fron integer
+--       float_tos       convert floating point number to string
+--	float_fra	convert floating point number from rational
+--	float_tra	convert floating point number to rational
+--       float_toi       convert floating point number to integer
+--       float_convert   convert a floating point number with a certain precision
+--                       into a floating point number with another precision
+-- Addition of two floating point numbers provided both with the same precision.
+-- The returned value has the same  precision.
+
+procedure float_add(x,y);
+--arith_trace("At proc float_add",x,y);
+
+   sum := [];
+
+   -- First take the argument with the greatest absolute value
+   -- as the first one.
+
+   if float_geq(float_abs(x), float_abs(y)) then
+
+       arg1 := x; 
+
+       arg2 := y;
+
+   else 
+
+      arg1 := y;
+
+      arg2 := x;
+
+   end if;
+
+   -- The sign of the result is the sign of the argument which has the greatest
+   -- absolute value. If the later is zero, then the result is zero.
+
+   bits_precision := bit_nbr(arg1.mantissa);
+
+   if arg1.sig /= 0 then
+
+      sum.sig            := arg1.sig;
+
+   else return float_0;
+
+   end if;
+   if arg2 = float_0 then 
+     return arg1 ; 
+   end if;
+
+   -- Shift the larger argument in order to align exponents.
+   shift__left(arg1.mantissa, arg1.exponent - arg2.exponent);
+
+   -- If the signs of the arguments are the same, we add the mantissas.
+
+   if arg1.sig = arg2.sig then
+
+      sum.mantissa       := int_add(arg1.mantissa, arg2.mantissa);
+
+   -- If the signs of the mantissas are different, we substract them.
+
+   else
+
+      sum.mantissa       := int_sub(arg1.mantissa, arg2.mantissa);
+
+   end if;
+
+   if sum.mantissa = [0] then 
+	return float_0 ;
+   end if;
+
+   -- Calculation of the exponent of the result.
+
+   sum.exponent          := arg2.exponent - bits_precision;
+
+   -- Normalizing and rounding routine to have the result normalized 
+   -- with the determined precision.
+
+   sum := norm_round(sum,bits_precision);
+
+   return sum;
+
+end float_add;
+-- Substraction of two floating point numbers provided both with the same 
+-- precision. The returned value has the same precision.
+
+-- The substraction is an addition of the first argument and the opposite
+-- of the second argument.
+
+procedure float_sub(x,y);
+--arith_trace("At proc float_sub",x,y);
+
+   return float_add(x, float_umin(y));
+
+end float_sub;
+-- Multiplication of two floating point numbers provided both with the same
+-- precision. The returned value has the same precision.
+
+procedure float_mul(x,y);
+--arith_trace("At proc float_mul",x,y);
+
+   bits_precision    := bit_nbr(x.mantissa);
+
+   product           := [];
+
+   product.sig      := x.sig*y.sig; 
+
+   product.mantissa := int_mul(x.mantissa,y.mantissa);
+
+   -- Calculation of the exponent of the result.
+   product.exponent := x.exponent + y.exponent - 2*bits_precision;
+
+   -- Normalizing and rounding routine to have the result normalized 
+   -- with the determined precision.
+
+   product := norm_round(product,bits_precision);
+
+   return product;
+
+end float_mul;
+-- Multiplication of a floating point number with an integer with a result of 
+-- the floating point type.
+procedure floati_mul(x, n);
+--arith_trace("At proc floati_mul",x, n);
+   -- We use here the Russian peasant algorithm.
+   v:= float_0;     
+   if n < 0 then
+      n := -n ;
+      x := float_umin(x) ;
+   end if;
+   x2n := x;
+   while n > 0 loop 
+      if x2n = "OVERFLOW" then 
+        return "OVERFLOW"; 
+      end if;
+      if n mod 2 = 1 then 
+        v := float_add(v, x2n); 
+      end if;
+      if v = "OVERFLOW" then 
+        return "OVERFLOW"; 
+      end if;
+      n := n / 2 ;
+      if n /= 0 then 
+        x2n := float_add(x2n, x2n) ; 
+      end if;
+   end loop;
+
+   return v ;
+
+end floati_mul;
+-- Division of two floating point numbers provided both with the same precision.
+-- The returned value has the same precision.
+
+procedure float_div(x,y);
+--arith_trace("At proc float_div",x,y);
+
+   bits_precision         := bit_nbr(x.mantissa);
+
+   quotient               := [];
+
+   quotient.sig          := x.sig*y.sig;
+
+   -- The first operand is multiplied by radix power to precision plus two
+   -- to make sure that the result of the integer division of the mantissas
+   -- has the precision required.
+
+   shift_                  := bits_precision + 2;
+
+   shift__left(x.mantissa, shift_);
+
+   x.exponent           -:= shift_;
+
+   quotient.mantissa     := int_quo(x.mantissa, y.mantissa);
+
+   -- Calculation of the exponent of the result.
+
+   quotient.exponent     := x.exponent - y.exponent;
+
+   -- Normalizing and rounding routine to have the result normalized 
+   -- with the determined precision.
+   --$ FOLLOWING IS INCORRECT: precision should be digits.
+   quotient := norm_round(quotient,bits_precision);
+
+   return quotient;
+
+end float_div;
+-- Division of a floating point number with an integer with a result of 
+-- the floating point type.
+procedure floati_div(x, n);
+--arith_trace("At proc floati_div",x, n);
+
+   bits_precision         := bit_nbr(x.mantissa);
+
+   float_n := float_fri(n, bits_precision);
+
+   return float_div(x, float_n);
+
+end floati_div;
+-- Exponentiation of a floating point number provided with any precision.
+-- The returned value has the same precision.
+ 
+procedure float_exp(x, n);
+--arith_trace("At proc float_exp",x, n);
+
+   bits_precision := bit_nbr(x.mantissa) ;
+     
+   assert exists  p in [1..bits_precision / 2] |
+	bits_precision = ceil(log(10.0)/log(2.0)*float(p) + 1.0) ;
+   decimal_precision :=  p ;
+		     
+
+   -- "Exponentiation by a zero exponent delivers the value one"
+   -- [LRM 4.5.6(6)]
+
+   result := float_fra([1,1], decimal_precision );
+
+   -- "Exponentiation with a positive exponent is equivalent to repeted 
+   --  multiplication of the left operand by itself, as indicated by the exopnent
+   --  and from left to right."
+   -- [LRM 4.5.6(6)]
+
+   -- "For an operand of a floating point type, the exponent can be 
+   -- negative, in which case the value is the reciprocal of the value
+   -- with a positive exponent"
+   -- [LRM 4.5.6(6)]
+
+   if (n < 0) then
+       x := float_div(float_fra([1,1], decimal_precision), x);
+   end if;
+
+    for i in [1..abs(n)] loop
+   
+      result := float_mul(result, x);
+
+      if result = "OVERFLOW" then 
+
+         exit;
+      end if;
+
+   end loop;
+
+   if n >= 0 then
+
+      return result;
+
+   else
+
+      if result = "OVERFLOW" then 
+
+         return float_0;
+
+      else
+
+         return result;
+
+      end if;
+
+   end if;
+
+end float_exp;
+-- Returns the unary minus of a floating point number.
+
+procedure float_umin(x);
+--arith_trace("At proc float_umin "+ str(x) );
+
+   x.sig := -x.sig;
+
+   return x;
+
+end float_umin;
+-- Returns the absolute value of a floating point number.
+
+procedure float_abs(x);
+--arith_trace("At proc float_abs "+ str(x) );
+
+   x.sig := abs(x.sig);
+
+   return x;
+
+end float_abs;
+-- Floating point equality
+
+procedure float_eql(x, y);
+--arith_trace("At proc float_eql",x, y);
+
+   return x = y;
+
+end float_eql;
+-- Floating point number greater than or equal
+
+procedure float_geq(x, y);
+--arith_trace("At proc float_geq",x, y);
+
+   return x = y or float_gtr(x, y);
+
+end float_geq;
+-- Floating point number greater than
+
+procedure float_gtr(x,y);
+--arith_trace("At proc float_gtr",x,y);
+
+   -- First check for equality
+   if x = y then
+	return false ;
+   end if;
+
+   -- Then check the sign combinations and the null values.
+
+   if x.sig > 0 and y.sig = 0 then
+
+      return true;
+
+   elseif x.sig >= 0 and y.sig < 0 then
+
+      return true;
+
+   elseif x.sig <= 0 and y.sig >= 0 then
+
+      return false;
+
+   else
+   
+   -- Now we have two non null values of the same sign.
+
+      pos := x.sig > 0;
+
+      if (x.exponent > y.exponent or
+          (x.exponent = y.exponent and 
+	   int_gtr(x.mantissa,y.mantissa))) then
+
+         return (if pos then true else false end if);
+
+      else
+
+         return (if pos then false else true end if);
+
+      end if;
+
+   end if;
+
+end float_gtr;
+-- Floating point number lesser than or equal
+ 
+procedure float_leq(x, y);
+--arith_trace("At proc float_leq",x, y);
+
+   return not float_gtr(x, y);
+
+end float_leq;
+-- Floating point number less than
+
+procedure float_lss(x, y);
+--arith_trace("At proc float_lss",x, y);
+
+   return not float_geq(x, y);
+
+end float_lss;
+-- Floating point number not equal to
+
+procedure float_neq(x, y);
+--arith_trace("At proc float_neq",x, y);
+
+   return x /= y;
+
+end float_neq;
+-- This routine converts an integer into a floating point number with a certain
+-- precision.
+
+procedure float_fri(integer_value, decimal_precision);
+--arith_trace("At proc float_fri",integer_value, decimal_precision);
+
+   bits_precision := ceil(1.0 + log(10.0)/log(2.0)*
+                         float(decimal_precision));
+
+   float_val := [];
+  
+   -- first, determination of the sign
+
+   if integer_value > 0 then
+
+      float_val.sig := 1;
+
+   elseif integer_value < 0 then
+
+      float_val.sig := -1;
+
+      integer_value := abs(integer_value);
+
+   else
+
+      return float_0;
+
+   end if;
+
+   -- determination of the mantissa
+
+   float_val.mantissa := int_fri(integer_value);
+
+   -- determination of the exponent
+
+   float_val.exponent := 0;
+ 
+   float_val := norm_round(float_val, bits_precision);
+
+   return float_val;
+
+end float_fri;
+
+   
+-- This routine converts a floating point number into a string which is the
+-- representation of this floating point number in radix ten.
+
+procedure float_tos(float_value);
+--arith_trace("At proc float_tos "+ str(float_value) );
+
+   bits_precision := bit_nbr(float_value.mantissa);
+   --arith_trace("bits_precision="+ str(bits_precision) ) ;
+
+   assert exists  p in [1..bits_precision / 2] |
+	bits_precision = ceil(log(10.0)/log(2.0)*float(p) + 1.0) ;
+   decimal_precision :=  p ;
+   --arith_trace("decimal_precision="+ str(decimal_precision) ) ;
+
+   -- First, determination of the sign
+
+   if float_value.sig >= 0 then
+
+      signe := "";
+
+   else
+
+      signe := "-";
+
+   end if;
+
+   -- Determination of the decimal mantissa and exponent
+
+   delta := float_value.exponent - bits_precision;
+   --arith_trace("delta="+ str(delta) ) ;
+
+   if delta >= 0 then
+
+      decimal_mantissa := int_toi(float_value.mantissa)*
+                                     2**delta;
+
+      decimal_exponent := 0;
+
+   else
+
+      decimal_mantissa := int_toi(float_value.mantissa)*
+                                     5**(- delta);
+
+      decimal_exponent := delta;
+
+   end if;
+
+   --arith_trace("decimal_mantissa="+ str(decimal_mantissa) ) ;
+   --arith_trace("decimal_exponent="+ str(decimal_exponent) ) ;
+   if decimal_mantissa = 0 then
+
+      integer_part := "0";
+
+      fractional_part := "0";
+
+      decimal_exponent := 0;
+
+   else
+
+   --arith_trace(4,"Calculating power") ;
+      power := arb { p : p in [1..4*bits_precision] | decimal_mantissa 
+       >= 10**(p - 1) and decimal_mantissa < 10**(p) }; 
+
+      s_decimal_mantissa := str(decimal_mantissa);
+
+      integer_part := s_decimal_mantissa(1);
+
+      fractional_part := s_decimal_mantissa(2..decimal_precision);
+
+      decimal_exponent +:= power - 1;
+
+   end if;
+
+   return ( signe + integer_part + "." + fractional_part + 
+         "e" + str(decimal_exponent) );
+
+end float_tos;
+
+-- This routine converts a floating point number from a rational.
+
+procedure float_fra(u, decimal_precision);
+--arith_trace("At proc float_fra ",u, decimal_precision);
+
+-- Convert a rational to a floating point of the given precision if possible.
+-- First work with positives
+
+  sgn      := sign(u.num);
+  u.num    := abs(u.num) ;
+  [nu, du] := [u.num, u.den];
+
+-- Check for 0
+
+  if sgn = 0 then 
+     return float_0;
+  end if;
+
+   bits_precision := ceil(1.0 + log(10.0)/log(2.0)*
+                         float(decimal_precision));
+
+lb := (2**bits_precision);
+ub := lb * 2;
+-- To find an accurate floating representation of a rational number,
+-- we normalize it so that   
+--
+--		2 ** (N) <= (num/den) < 2 ** (N+1)
+--
+-- where N is the size of the mantissa.
+-- We can then perform a long division, and know that the mantissa is
+-- accurate to 2 ** -(N+1) i.e. to the last bit, with one extra bit for
+-- rounding.
+
+  numpow := 0 ;
+  denpow := 0 ;
+  [n, d] := [nu, du] ;
+
+  while n > 0 loop  n /:= 2; numpow +:= 1; end loop;
+  while d > 0 loop  d /:= 2; denpow +:= 1; end loop;
+
+  p := numpow - denpow - bits_precision;
+
+  if p < 0 then				-- -p > 0
+     nu := nu * (2 ** -p) ;
+  else					--  p >= 0
+     du := du * (2 ** p) ;
+  end if;
+
+  while (nu > (ub * du)) loop 
+    du *:= 2 ;
+    p +:= 1;
+  end loop;
+  lbnd := (lb * du);
+  while (nu < lbnd) loop 
+    nu *:= 2 ;
+    p -:= 1;
+  end loop;
+
+  y := (nu / du);
+
+  result := [];
+  result.sig := sgn;
+  result.mantissa := int_fri(y);
+  result.exponent := p;
+
+  result := norm_round(result, bits_precision);
+
+  return result;
+
+end float_fra;
+-- This routine converts a floating point number to a rational
+
+procedure float_tra(x);
+--arith_trace("At proc float_tra "+ str(x) );
+
+   bits_precision := bit_nbr(x.mantissa);
+
+   -- Expressing radix**(exponent - bits_precision) as a fraction.
+
+   v_num := 1;
+
+   v_den := 2**bits_precision; 
+ 
+   if x.exponent >= 0 then 
+
+      v_num *:= 2**(x.exponent);
+
+   else
+
+      v_den *:= 2**(- x.exponent);
+
+   end if;
+
+   rat_value := rat_fri(int_toi(x.mantissa)*v_num, v_den);
+
+   return rat_value;
+
+end float_tra;
+ 
+procedure float_toi(x);
+-- This routine converts a float number into an integer
+-- The routine rounds up by adding 1/2 to the number before conversion and
+-- truncation.
+--arith_trace("At proc float_toi "+ str(x) );
+   if x = float_0 then 
+     return 0 ; 
+   end if;
+
+   bits_precision := bit_nbr(x.mantissa);
+   one_half := [x.sig, pow2(bits_precision - 1), 0] ;
+   -- If x has no decimal part (i.e. if the exponent is no smaller than the
+   -- number of bits in the mantissa) then there is no need to round up.  
+   -- Otherwise add  0.5 before the conversion. 
+   if x.exponent < bits_precision then
+      x := float_add(x, one_half) ;
+   end if;
+
+   -- First case, the float number is less than one
+
+   if x.exponent <= 0 then
+      return 0;
+   -- Regular case
+   else
+
+      shift_ := bits_precision - x.exponent;
+
+      -- either truncation or multiplication of the mantissa
+
+      if shift_ >= 0 then
+
+         shift__right(x.mantissa, shift_);
+
+      else
+
+         shift__left(x.mantissa, - shift_);
+
+      end if;
+
+      return x.sig * int_toi(x.mantissa);
+
+   end if;
+
+end float_toi;
+-- This routine converts an float number with a certain precision into
+-- a float number with another precision.
+
+procedure float_convert( x, new_decimal_precision);
+--arith_trace("At proc float_convert", x, new_decimal_precision);
+
+   former_bits_precision := bit_nbr(x.mantissa);
+
+   new_bits_precision := ceil(1.0 + log(10.0)/log(2.0)*
+                             float(new_decimal_precision));
+
+   -- first the case of the null value
+
+   if x.sig = 0 then
+
+      return float_0;
+
+   -- regular case
+
+   else
+
+      result := [];
+
+      result.sig := x.sig;
+
+      epsilon := former_bits_precision - new_bits_precision;
+ 
+      -- first case, the new precision is smaller. We have to round before
+      -- shift_ing the mantissa.
+
+      if epsilon > 0 then
+
+         result.mantissa := int_add(x.mantissa, pow2(epsilon - 1));
+
+         epsilon_prime := bit_nbr(result.mantissa) -
+                          new_bits_precision;
+
+         shift__right(result.mantissa, epsilon_prime);
+
+         result.exponent := x.exponent + epsilon_prime - epsilon;
+
+      -- other case, the new precision is greater. We only have to shift_ the
+      -- mantissa.
+
+      else
+
+         result.mantissa := x.mantissa;
+
+	 result.exponent := x.exponent ;
+
+         shift__left(result.mantissa, -epsilon);
+
+      end if;
+
+     if new_decimal_precision > float_digits then
+        max_exponent := long_float_machine_emax;
+     else 
+	max_exponent := float_machine_emax;
+     end if;
+
+     if result.exponent > max_exponent then
+        return "OVERFLOW";
+     elseif result.exponent < -max_exponent then
+        return float_0;
+     else
+        return result ;
+     end if;
+
+   end if;
+
+end float_convert;
+
+ 
+-- P R O C E D U R E S   F O R   T H E   U S E   O F   T H E   M U L T I P L E
+-- P R E C I S I O N   F L O T I N G   P O I N T   A R I T H M E T I C   
+--        P A C K A G E
+-- This procedure multiplies the mantissa by a certain power of two, which
+-- can be seen as a shift_ to the left since the radix is two.
+
+procedure shift__left(rw mantis,shift_);
+--arith_trace("At proc shift__left" + str(mantis) ,shift_);
+
+   mantis := int_mul(mantis,  pow2(shift_));
+
+end shift__left;
+-- This procedure divides the mantissa by a certain power of two, which
+-- can be seen as a shift_ to the right since the radix is two.
+
+procedure shift__right(rw mantis,shift_);
+--arith_trace("At proc shift__right " + str(mantis) ,shift_);
+
+   mantis := mantis(1..# mantis - shift_ / digs);
+   shift_  := shift_ mod digs;
+   mantis := int_quo(mantis, pow2(shift_));
+
+end shift__right;
+-- The regular rounding routine with the particularity that if the mantissa
+-- of the float number is represented  by less bits than precision, zero bits
+-- are added at the end of this later.The exponent is modified since the integer
+-- which represents the mantissa is in fact the fractional part af the mantissa.
+
+procedure norm_round(x, precision);
+--arith_trace("At proc norm_round " + str(x) , precision);
+
+   -- Special case, the float number is zero
+
+   if x.sig = 0 then
+
+      return float_0;
+
+   -- Regular case
+
+   else
+
+      epsilon := bit_nbr(x.mantissa) - precision;
+
+      result := [];
+
+      result.sig := x.sig ;
+
+      result.exponent := x.exponent + bit_nbr(x.mantissa);
+      if epsilon > 0 then
+
+      -- In this case the mantissa is represented by more bits than the required
+      -- precision.
+
+         -- Adding of a certain 'bit' (power of two) to the mantissa, truncation
+         -- and modification of the exponent possibly caused by the 'bit' added.
+
+         result.mantissa := int_add(x.mantissa, pow2(epsilon - 1));
+
+         epsilon_prime := bit_nbr(result.mantissa) - precision;
+
+         shift__right(result.mantissa,epsilon_prime);
+
+         result.exponent +:= epsilon_prime - epsilon;
+
+      else
+   
+      -- In this case the mantissa is represented by less bits than the required
+      -- precision.
+
+         -- 'bits' of value zero are added to the right of the mantissa.
+
+         result.mantissa := x.mantissa;
+
+         shift__left(result.mantissa, - epsilon);
+
+      end if;
+
+     if precision > 21 then
+        max_exponent := long_float_machine_emax;
+     else 
+	max_exponent := float_machine_emax;
+     end if;
+
+     if result.exponent > max_exponent then
+        return "OVERFLOW";
+     elseif result.exponent < -max_exponent then
+        return float_0;
+     else
+        return result ;
+     end if;
+
+   end if;
+
+end norm_round;
+-- This routine counts the number of bits by which is represented the mantissa.
+
+procedure bit_nbr(mantis);
+--arith_trace("At proc bit_nbr " + str(mantis) );
+
+-- The mantissa is represented by a multiprecision integer in base 1024. 
+-- First, we count the number of bits of the first digit of the multiprecision
+-- integer (the most significant one).
+
+n := mantis(1);
+nbr_bits := 0 ;
+while n /= 0 loop 
+    nbr_bits +:= 1 ;
+    n /:= 2 ;
+end loop;
+
+-- Then each successive multiprecision digit holds DIGS binary digits.
+nbr_bits +:= digs * (#mantis -1) ;
+
+-- The size of normalized 0 is taken to be one. Anything else is greater.
+
+return nbr_bits max 1;
+
+end bit_nbr;
+-- All integers are stored in the multiple precision form used
+-- in the package which is included as part of this program, 
+-- and rationals are stored as a pair [numerator, denominator],
+-- with the denominator always positive, and [0] stored as [[0],n].
+-- A rational plus or minus infinity may be represnted as
+-- [n,[0]] or [-n,[0]] respectively. A rational of the form [[0],[0]]
+-- will have an undefined effect if used in an operation.
+-- R A T I O N A L     A R I T H M E T I C     P A C K A G E
+
+--                   Robert B. K. Dewar
+--                    June 18th, 1980
+
+-- This package contains a set of routines for performing
+-- rational multiple precision arithmetic.
+
+-- A rational number is represented as a pair [num,den],
+-- where num is the numerator, which may be negative, and
+-- den is the denominator, which is non-zero and positive.
+-- Usually rational numbers are reduced to lowest terms
+-- (see procedure rat_red), but none of the routines
+-- depend on this assumption. The numerator and denominator
+-- are represented as multiple precision integers, using
+-- the standard formats for the multiple precision integer
+-- package, which must be included as part of the program.
+-- If and when SETL has multiple precision arithmetic,
+-- recoding would be possible to use SETL integers.
+-- The following routines are provided in the package
+
+--	rat_abs		rational absolute value
+--	rat_add		rational addition
+--	rat_div		rational division
+--	rat_eql		rational equal to
+--       rat_exp         raise rational to multiple precision integer power
+--	rat_fri		convert multiple precision integers to rational
+--	rat_frr		convert SETL real to rational
+--	rat_frs		convert rational from string
+--	rat_geq		rational greater than or equal to
+--	rat_gtr		rational greater than
+--	rat_leq		rational less than or equal to
+--	rat_lss		rational less than
+--	rat_mul		rational multiplication
+--	rat_neq		rational not equal to
+--	rat_rec		rational reciprocal
+--	rat_red		reduce rational to lowest terms
+--       rat_str         convert integral fraction to string fraction
+--	rat_sub		rational subtraction
+--	rat_tor		convert rational to SETL real
+--	rat_toi		convert rational to SETL integer (rounds)
+--	rat_tos		convert rational to string
+--       rat_tup         convert string fraction to integral fraction
+--	rat_umin	rational unary minus
+
+procedure rat_abs (u);
+--arith_trace("At proc rat_abs " + str(u) );
+
+-- Absolute value of rational number
+
+  return [abs(u.num), u.den];
+
+end rat_abs;
+
+procedure rat_add (u, v);
+--arith_trace("At proc rat_add ",u, v);
+
+-- Add rational numbers
+
+--   un     vn        un * vd  +  vn * ud
+--   --  +  --   =    -------------------
+--   ud     vd              ud * vd
+
+  rn := v.num * u.den + u.num * v.den ;
+  rm := u.den * v.den ;
+  return [rn, rm];
+
+end rat_add;
+
+procedure rat_div (u, v);
+--arith_trace("At proc rat_div ",u, v);
+
+-- Divide rational numbers
+
+--    un
+--    --
+--    ud
+--                un * vd
+--   ----    =    -------
+--                vn * ud
+--    vn
+--    --
+--    vd
+
+-- Test for division by zero
+
+  if v.num = 0 then
+    return om;
+
+-- Divisor is non-zero
+
+  else
+
+    rn := (u.num * v.den);
+    rm := (v.num * u.den);
+
+    return [rn, rm];
+
+  end if;
+
+end rat_div;
+
+procedure rat_eql (u, v);
+--arith_trace("At proc rat_eql ",u, v);
+
+-- Test rational numbers for equality
+
+    return (v.num * u.den = u.num * v.den) ;
+
+end rat_eql;
+
+procedure rat_exp (u, e);
+--arith_trace("At proc rat_exp ",u, e);
+
+-- Raise rational number to multiple precision integer power
+
+--  If e >= 0:		   If e < 0:
+--
+--    un	       un ** e	     un		     1		 ud ** (-e)
+--    -- ** e = -------	     -- ** e = --------------- = ----------
+--    ud	       ud ** e	     ud	       (un/ud) ** (-e)   un ** (-e)
+
+  if u.num = 0 then
+    return if e = 0 then [1,1] else [0,1] end if;
+  end if;
+
+  if e < 0 then
+    u  := rat_rec (u);
+    e  := abs(e) ;
+  end if;
+
+  return [(u.num ** e),  (u.den ** e)];
+
+end rat_exp;
+procedure rat_fri (u,v);
+--arith_trace("At proc rat_fri ",u,v);
+
+-- Convert multiple precision integers to a rational number.
+
+  return rat_red(u,v);
+
+end rat_fri;
+procedure rat_frr (u);
+--arith_trace("At proc rat_frr " + str(u) );
+
+-- Convert a SETL real to a rational number.
+
+-- converts a floating number u to a pair of integers [p, y] such that
+-- u = 2.0**p * float y
+-- Here y satisfies 2**(N-1) <= abs y < 2 ** N
+-- where N is the number of mantissa bits.
+-- This essentially separates the fraction and the exponent.
+
+  sgn := sign(u);
+  if sgn = 0 then 
+    return [0, 1];
+  end if;
+
+  u := abs(u) ;
+  ub := 2.0** float(ada_mantissa_size);
+  lb := 2.0** float(ada_mantissa_size - 1);
+
+  p := fix (log(u) / log(2.0)) - ada_mantissa_size;
+					-- estimate the exponent
+  --u := u * 2.0**(-p);			-- and adjust number
+
+  if p > 0 then                         -- -p < 0
+     u := u / 2.0 ** float(p) ;
+  else                                  -- -p >= 0
+     u := u * 2.0 ** float(-p) ;
+  end if;
+
+  while u >= ub loop 
+    u /:= 2.0;				-- scale down
+    p +:= 1;
+  end loop;
+  while u < lb loop 
+    u *:= 2.0;				-- scale up;
+    p -:= 1;
+  end loop;
+  y := sgn * fix(u);
+  return rat_mul(rat_exp(rat_two, p), [y, 1]);
+
+end rat_frr;
+procedure rat_frs (s);
+--arith_trace("At proc rat_frs " + str(s) );
+
+-- Convert a string representing a decimal fraction to the corresponding 
+-- rational number.  The string consists of a digit string, optionally 
+-- containing a decimal point and preceded by an optional sign.  If an 
+-- erroneous string is passed as an argument, then OM is returned.
+
+-- First step is to find number of digits after decimal point
+
+  dp   := 0;
+  frac := srbreak (s, ".");
+  if frac /= om then
+    dp := #frac;
+    s  := s(1..#s-1) + frac;
+  end if;
+
+-- Then number is converted as integer, and result is obtained
+-- by supplying the appropriate power of ten as the denominator.
+
+  i := int_frs (s);
+
+  if i = om then
+    return om;
+  else
+    return rat_red (i, 10 ** dp);
+  end if;
+
+end rat_frs;
+procedure rat_geq (u, v);
+--arith_trace("At proc rat_geq ",u, v);
+
+-- Compare rational numbers: return true if u >= v, false otherwise.
+
+  return not rat_lss (u, v);
+
+end rat_geq;
+procedure rat_gtr (u, v);
+--arith_trace("At proc rat_gtr ",u, v);
+
+-- Compare rational numbers: return true if u > v, false otherwise.
+
+  return not (rat_eql (u, v) or rat_lss (u, v));
+
+end rat_gtr;
+procedure rat_leq (u, v);
+--arith_trace("At proc rat_leq ",u, v);
+
+-- Compare rational numbers: return true if u <= v, false otherwise.
+
+  return rat_eql (u, v) or rat_lss (u, v);
+
+end rat_leq;
+procedure rat_lss (u, v);
+--arith_trace("At proc rat_lss ",u, v);
+
+-- Compare rational numbers: return true if u < v, false otherwise.
+
+--   un     vn
+--   --	<  --	iff   un * vd  <  vn * ud
+--   ud     vd
+
+  return (u.num * v.den) < (v.num * u.den);
+
+end rat_lss;
+procedure rat_mul (u, v);
+--arith_trace("At proc rat_mul ",u, v);
+
+-- Multiply rational numbers
+
+--   un     vn        un * vn
+--   --  *  --   =    -------
+--   ud     vd        ud * vd
+
+  rn := (u.num * v.num);
+
+  rm := (u.den * v.den);
+
+  return rat_red(rn, rm);
+
+end rat_mul;
+procedure rat_neq (u, v);
+--arith_trace("At proc rat_neq ",u, v);
+
+-- Test rational numbers for inequality
+
+  return not rat_eql (u, v);
+
+end rat_neq;
+procedure rat_rec (u);
+--arith_trace("At proc rat_rec "+ str(u) );
+
+-- Find reciprocal of rational number (number should not be zero).
+
+  un := u.den;
+  dn := u.num;
+  if dn < 0 then
+    un := -un ;
+    dn := abs(dn) ;
+  end if;
+  return [un,dn];
+
+end rat_rec;
+procedure rat_red (un, ud);
+--arith_trace("At proc rat_red ",un, ud);
+
+-- Form rational reduced to lowest terms
+
+-- This procedure is given as arguments the numerator and denominator
+-- of a rational value (as multiple precision integers). It returns
+-- the rational formed by reducing these values to lowest terms.
+
+-- First a special case: zero is reduced to [0, 1].
+
+  if un = 0 then
+    return [0, 1];
+
+-- Another special case: plus or minus infinity is reduced to [1, 0]
+-- or [-1, 0] 
+
+   elseif ud = 0 then
+     return [sign (un), 0];
+-- If either numerator or denominator is one, expression is already reduced.
+
+   elseif ud = 1 or un = 1 then return [un, ud] ;
+
+-- Else we must compute GCD, using Euclid's algorithm.
+
+  else
+
+    i := abs(un) ; 
+    j := abs(ud) ;
+    if (j > i) then 
+      [i, j] := [j, i]; 
+    end if;
+
+-- Steps of Euclid's algorithm, at each step, i is greater than
+-- or equal to j, i is replaced by j and j is replaced by the
+-- remainder of dividing i by j. The algorithm terminates when
+-- j is zero, with i being the greatest common divisor.
+
+    while j /= 0 loop 
+      [i, j] := [j, (i mod j)];
+    end loop;
+
+    gcd := i;
+
+-- Now reduce the original to lowest terms using the computed GCD
+
+    return [(un / gcd), (ud / gcd)];
+
+  end if;
+
+end rat_red;
+procedure rat_str (q);
+--arith_trace("At proc rat_str " + str(q) );
+
+-- Convert tuple of multiple precision integers to tuple of
+-- strings.
+
+  return [stl_int_tos(q(1)), stl_int_tos(q(2))];
+
+end rat_str;
+procedure rat_sub (u, v);
+--arith_trace("At proc rat_sub ",u, v);
+
+-- Subtract rational numbers
+
+--   un     vn        un * vd  -  vn * ud
+--   --  -  --   =    -------------------
+--   ud     vd              ud * vd
+
+  rn := u.num * v.den - v.num * u.den ;
+  rm := u.den * v.den ;
+
+  return [rn, rm];
+
+end rat_sub;
+procedure rat_tor (u, n);
+--arith_trace("At proc rat_tor ",u, n);
+
+-- Convert a multiple precision real to a SETL real, if possible.
+-- First work with positives
+
+  sgn      := sign(u.num);
+  u.num    := abs(u.num) ;
+  [nu, du] := [u.num, u.den];
+
+-- Check for 0
+
+  if sgn = 0 then 
+    return 0.0; 
+  end if;
+
+-- Check for overflow
+
+ub := (2**ada_mantissa_size);
+lb := ub / 2;
+
+if nu > du * ub ** 4 then 			-- 2 ** 96 : mach.dep.
+    return "OVERFLOW";
+end if;
+
+-- To find an accurate floating representation of a rational number,
+-- we normalize it so that   
+--
+--		2 ** (N - 1) <= (num/den) < 2 ** N
+--
+-- where N is the size of the mantissa.
+-- We can then perform a long division, and know that the mantissa is
+-- accurate to 2 ** (-N) i.e. to the last bit.
+
+  numpow := 0 ;
+  denpow := 0 ;
+  [n, d] := [nu, du] ;
+
+  while n > 0 loop  n /:= 2; numpow +:= 1; end loop;
+  while d > 0 loop  d /:= 2; denpow +:= 1; end loop;
+
+  p := numpow - denpow - ada_mantissa_size;
+
+  if p < 0 then				-- -p > 0
+     nu := nu * (2 ** -p) ;
+  else					--  p >= 0
+     du := du * (2 ** p) ;
+  end if;
+
+  while (nu > (ub * du)) loop 
+    du *:= 2 ;
+    p +:= 1;
+  end loop;
+  lbnd := (lb * du);
+  while (nu < lbnd) loop 
+    nu *:= 2 ;
+    p -:= 1;
+  end loop;
+
+  y := sgn * (nu / du);
+
+  --return float(y) * 2.0**p;
+  if p >= 0 then
+     return float(y) * 2.0 ** float(p);
+  else
+     return float(y) / 2.0 ** float(-p); 
+  end if;
+end rat_tor;
+procedure rat_toi(u);
+--arith_trace("At proc rat_toi" + str(u) );
+
+-- Convert the rational number u to a SETL integer.  The number
+-- u is rounded by adding rational 1/2 or -1/2.  
+
+    s := sign(u.num);			-- get sign of u
+    [x, y] := rat_add(u, [s, 2]);	-- add or subtract 1/2 (or 0)
+    return (x / y);			-- get quotient and convert it
+
+end rat_toi;
+procedure rat_tos (u, n);
+--arith_trace("At proc rat_tos ",u, n);
+
+-- Convert a rational number u to a decimal
+-- string with n places after the decimal point. The result
+-- is correctly rounded and always has the specified number
+-- of digits after the decimal place (even if they are zero)
+
+-- First acquire the sign (and then work with positive numbers)
+
+  sn := "";
+  if u.num < 0 then
+    u.num := abs(u.num) ;
+    sn 	      := "-";
+  end if;
+
+-- Form result by multiplying by power of ten corresponding
+-- to number of decimal places and then doing division.
+
+  un := (u.num * 10 ** n);
+  ud := u.den;
+  q  := (un / ud);
+  r  := un mod ud ;
+  if (r  * 2) > ud then
+    q +:=1;
+  end if;
+
+-- Return result by converting this integer to a string and
+-- then supplying the decimal point at the appropriate position.
+
+  q := stl_int_tos (q);
+  if #q <= n then
+    q := (n + 1 - #q) * "0" + q;
+  end if;
+  
+  return sn + q(1..#q-n) + "." + q(#q-n+1..);
+
+end rat_tos;
+procedure rat_tup (q);
+--arith_trace("At proc rat_tup " + str(q) );
+
+-- Convert tuple of strings to tuple of multiple precision integers.
+
+return [stl_int_frs(q(1)),stl_int_frs(q(2))];
+end rat_tup;
+procedure rat_umin (u);
+--arith_trace("At proc rat_umin " + str(u) );
+
+-- Rational unary minus
+
+    return [-(u.num), u.den];
+
+end rat_umin;
+-- M U L T I P L E     P R E C I S I O N     I N T E G E R
+
+--         A R I T H M E T I C     P A C K A G E
+
+--                   Robert B. K. Dewar
+--                    June 16th, 1980
+
+-- This package of routines implements multiple precision integer
+-- arithmetic using what are called the "classical algorithms" in
+-- Knuth "Art of Programming", Volume 2, Section 4.3.1. The style
+-- of the algorithms follows Knuth fairly closely, and section
+-- 4.3.1 can be consulted for further theoretical details.
+
+-- Multiple precision integers are represented as tuples of small
+-- integers in the range 0 to BAS - 1, where BAS is a power of 10
+-- (actually 10 ** DIGS) which is the base used to represent the
+-- long integers. Essentially the successive elements of the tuple
+-- are the digits of the representation in base BAS. All integers
+-- are normalized so that the first digit is non-zero, except in
+-- the case of zero itself. The sign is carried with the first
+-- digit value, all remaining digits are always positive.
+
+-- Some examples of the representation, assuming DIGS = 4 and
+-- BAS = 10000 (note that the choice of BAS as a power of 10
+-- is for convenience of the conversion routines, and is not
+-- required for correct operation of the arithmetic algorithms).
+
+--     -123456789     [-1 , 2345 , 6789]
+--              0     [0]
+--      123456789     [1 , 2345, 6789]
+
+-- The constants BAS and DIGS must be defined as global constants
+-- in a program using these routines. It is assumed that the value
+-- BAS * BAS - 1 can be represented as a SETL integer value.
+
+-- The following routines are provided:
+
+--	int_abs		integer absolute value
+--	int_add		integer addition
+--	int_div		integer division
+--	int_eql		integer equal to
+--       int_exp         raise multiple integer to multiple integer power
+--	int_fri		convert multiple precision integer from integer
+--	int_frs		convert multiple precision integer from string
+--	stl_int_frs	convert SETL integer from string
+--	int_geq		integer greater than or equal to
+--	int_gtr		integer greater than
+--	int_len		number of digits in multiple precision integer
+--	int_leq		integer less than or equal to
+--	int_lss		integer less than
+--	int_mod		integer modulus
+--	int_mul		integer multiplication
+--	int_neq		integer not equal to
+-- 	int_ptn		integer power of ten
+--       int_quo		integer quotient
+--	int_rem		integer remainder
+--	int_sub		integer subtraction
+--	int_toi		convert integer to SETL integer
+--	int_tos		integer to string
+--	stl_int_tos	SETL integer to string
+--	int_umin	integer unary minus
+
+-- Internal procedures have names starting with int__
+
+procedure int_abs (u);
+--arith_trace("At proc int_abs " + str(u) );
+
+-- Absolute value of multiple precision integer
+
+    u(1) := abs(u(1)) ;
+    return u;
+
+end int_abs;
+procedure int_add (u, v);
+--arith_trace("At proc int_add ",u, v);
+
+-- Add signed integers
+
+-- This procedure implements the familiar algorithm of comparing
+-- the signs, if the signs are the same, then the result is the
+-- sum of the magnitudes with the sign of the operands. If the
+-- signs differ, then the number with the smaller magnitude is
+-- subtracted from the larger magnitude and the result sign is
+-- that of the operand with the larger magnitude.
+
+  if u(1) >= 0 and v(1) >= 0 then
+    return int__addu (u, v);
+
+  elseif u(1) < 0 and v(1) < 0 then
+    u(1) := -u(1);
+    v(1) := -v(1);
+    t    := int__addu (u, v);
+    t(1) := -t(1);
+    return t;
+
+  else
+    us := u(1); u(1) := abs(u(1)) ;
+    vs := v(1); v(1) := abs(v(1)) ;
+
+    if int_gtr (u, v) then
+      t := subu_int (u, v);
+      if us < 0 then 
+        t(1) := -t(1); 
+      end if;
+      return t;
+
+    else
+      t := subu_int (v, u);
+      if vs < 0 then 
+        t(1) := -t(1); 
+      end if;
+      return t;
+
+    end if;
+
+  end if;
+
+end int_add;
+procedure int_eql (u, v);
+--arith_trace("At proc int_eql ",u, v);
+
+-- Compare multiple precision integers for equality
+
+  return u = v;
+
+end int_eql;
+
+procedure int_exp (u, v);
+--arith_trace("At proc int_exp ",u, v);
+
+-- Raise a multiple precision integer to a multiple precision integer
+-- power using a modified version of the Russian Peasant algorithm
+-- for exponentiation.
+
+  -- Compute sign of result: positive if v is even, the sign of u if
+  -- v is odd.
+
+  sgn  := if v(#v) mod 2 = 1 then sign(u(1)) else 1 end if;
+  u(1) := abs(u(1)) ;
+
+  -- Starting the result at 1 and running at u, loop through the binary 
+  -- digits of v, squaring running each time, and multiplying the result 
+  -- by the current value of running each time a 1-bit is found.
+
+  result  := [1];
+  running := u;
+
+  while v /= [0] loop 
+
+    -- If v is odd then multiply result by running.
+
+    if v(#v) mod 2 = 1 then
+      result := int_mul (result, running);
+    end if;
+
+    -- Square running.
+
+    running := int_mul (running, running);
+
+    -- Halve v.
+
+    carry := 0;
+    for i in [1..#v] loop 
+      half  := bas * carry + v(i);
+      carry := half mod 2;
+      v(i)  := half / 2;
+    end loop;
+    int__norm (v);
+
+  end loop;
+
+  if sgn < 1 then 
+    result(1) := -result(1); 
+  end if;
+  return result;
+
+end int_exp;
+
+procedure pow2(e) ;
+
+-- Return 2 ** e as an arbitrary precision integer.
+if e < 0 then
+    print("pow2 negative exponent", e) ;
+   e := 0 ;
+end if; 
+-- This routine makes use of the fact that BAS is a power of 2.
+return if e < digs then [2 ** e]
+                   else [2 ** (e mod digs)] + [0]*(e / digs) 
+       end if;
+end pow2;
+
+procedure int_fri (i);
+--arith_trace("At proc int_fri " + str(i) );
+
+-- Convert an integer to a multiple precision integer.
+
+-- First check the sign of i.
+
+  if i < 0 then
+    sn := -1;
+    i  := abs(i) ;
+  end if;
+
+-- Now build up t in groups of BAS digits until i is depleted.
+
+  if i > 0 then
+    t := [];
+    while i > 0 loop 
+      t    := [i mod bas] + t;
+      i /:= bas;
+    end loop;
+  else
+    t := [0];
+  end if;
+
+  if sn = -1 then 
+    t(1) := -t(1); 
+  end if;
+
+  return t;
+
+end int_fri;
+
+procedure int_frs (s);
+--arith_trace("At proc int_frs "+ str(s) );
+
+-- Convert a string to multiple precision integer format.  The string 
+-- s is a non-empty sequence of digits, possibly preceded by a sign 
+-- (+ or -).
+
+-- Erroneous strings are converted to OM.
+
+-- Since the base is a power of ten, the process of conversion
+-- amounts simply to converting groups of DIGS digits.
+
+  sn := span (s, "+-");
+
+  dg := span (s, "0123456789");
+  
+  if s /= "" then
+    return om;
+
+  else
+    if (z := #dg mod digs) /= 0 then
+      dg := (digs - z) * "0" + dg;
+    end if;
+
+    r := [];
+    while #dg > 0 loop 
+      r with:= value (len (dg, digs));
+    end loop;
+      
+    if sn = "-" then 
+      r(1) := -r(1); 
+    end if;
+    return r;
+
+  end if;
+
+end int_frs;
+
+procedure int_geq (u, v);
+--arith_trace("At proc int_geq ", u, v);
+
+-- Compare multiple precision integers: return true if u >= v, false
+-- otherwise.
+
+  return u = v or int_gtr (u, v);
+
+end int_geq;
+
+procedure int_gtr (u, v);
+--arith_trace("At proc int_gtr ", u, v);
+
+-- Compare multiple precision integers: return true if u > v, false
+-- otherwise.
+  if not is_tuple(u) or not is_tuple(v) then return false; end if;
+-- First check sign combinations
+
+  if u(1) >= 0 and v(1) < 0 then
+    return true;
+
+  elseif u(1) < 0 and v(1) >= 0 then
+    return false;
+
+-- Now we have a real compare (signs the same)
+
+  else
+    neg  := u(1) < 0;
+    u(1) := abs(u(1)) ;
+    v(1) := abs(v(1)) ;
+
+    if #u > #v then
+      return if neg then false else true end if;
+
+    elseif #u < #v then
+      return if neg then true else false end if;
+
+    else 
+      for i in [1 .. #u] loop 
+	if u(i) /= v(i) then 
+	    return (if neg then v(i) > u(i) else u(i) > v(i) end if) ; 
+        end if;
+      end loop;
+      return false;
+    end if;
+
+  end if;
+
+end int_gtr;
+
+procedure int_len (u);
+--arith_trace("At proc int_len " + str(u) );
+
+-- Return the number of digits in a multiple precision integer.
+
+  return # str(abs(u(1))) + (#u - 1) * digs;
+
+end int_len;
+
+procedure int_leq (u, v);
+--arith_trace("At proc int_leq " + str(u) , v);
+
+-- Compare multiple precision integers: return true if u <= v, false
+-- otherwise.
+
+  return not int_gtr (u, v);
+
+end int_leq;
+
+procedure int_lss (u, v);
+--arith_trace("At proc int_lss " + str(u) , v);
+
+-- Compare multiple precision integers: return true if u < v, false
+-- otherwise.
+
+  return not int_geq (u, v);
+
+end int_lss;
+
+procedure int_mod (u, v);
+--arith_trace("At proc int_mod " + str(u) , v);
+
+-- Find u mod v where the mod operation is defined as:
+--
+--	u mod v = u - v * N	such that sign (u mod v) = sign v
+--				      and  abs (u mod v) < abs v
+
+  r := int_rem (u, v);
+  return if r = om or sign(u(1)) = sign(v(1)) or r(1) = 0
+	    then r
+	    else int_add (r, v)
+	 end if;
+
+end int_mod;
+
+procedure int_mul (u, v);
+--arith_trace("At proc int_mul " + str(u) , v);
+
+-- Multiply signed integers, cf Knuth 4.3.1 Algorithm M
+
+-- Multiplication is similar to, but not identical with, the
+-- usual pencil and paper algorithm. The main difference is
+-- that the sum is accumulated as we go along, rather than
+-- forming all the partial sums and adding them up at the end.
+
+-- First we acquire the sign of the result, and set each number
+-- to its absolute value, thus the multiplication proper always
+-- works with non-negative integers.
+
+  sn := u(1) * v(1);
+  u(1) := abs(u(1)) ;
+  v(1) := abs(v(1)) ;
+
+-- Initialize result to all zeroes (actually it is only absolutely
+-- necessary to initialize the last #v digits of w to zero).
+
+  w := [0 : i in [1 .. #u+#v]];
+
+-- Outer loop, through digits of multiplier
+
+  for j in [#v, #v-1 .. 1] loop 
+
+-- The inner loop, through the digits of the multiplicand, is
+-- similar to the inner loop of the addition, except that the
+-- product is added in, and the carry, k, can exceed 1.
+
+    k := 0;
+    for i in [#u, #u-1 .. 1] loop 
+      t := u(i) * v(j) + w(i+j) + k;
+      w(i+j) := t mod bas;
+      k := t / bas;
+    end loop;
+
+-- The final step in the inner loop is to store the final
+-- carry in the next position in the result.
+
+    w(j) := k;
+
+  end loop;
+
+-- The result must be normalized (there could be one leading zero),
+-- and then the result sign attached to the returned value.
+
+  int__norm (w);
+  if sn < 0 then 
+    w(1) := -w(1); 
+  end if;
+  return w;
+
+end int_mul;
+
+procedure int_neq (u, v);
+--arith_trace("At proc int_neq " + str(u) , v);
+
+-- Compare multiple precision integers for inequality
+
+  return u /= v;
+
+end int_neq;
+
+procedure int_ptn (n);
+--arith_trace("At proc int_ptn " + str(n) );
+
+-- Return the result 10**n as a multiple precision
+-- integer, where n is a non-negative simple integer.
+
+  d1 := 1;
+  for i in [1..n mod digs] loop  d1 *:= 10; end loop;
+
+  return [d1] + [0 : i in [1 .. n / digs]];
+
+end int_ptn;
+
+procedure int_quo (u, v);
+--arith_trace("At proc int_quo " + str(u) , v);
+
+-- Obtain quotient of dividing u by v
+
+  [q, -] := int_div (u, v) ? [];	-- if v is 0, q := om
+
+  return q;
+
+end int_quo;
+
+procedure int_rem (u, v);
+--arith_trace("At proc int_rem " + str(u) , v);
+
+-- Obtain remainder from dividing u by v, where u rem v is defined as:
+--
+--	u rem v = u - (u/v) * v	    such that sign (u rem v) = sign u
+--					  and  abs (u rem v) < abs v
+
+  [-, r] := int_div (u, v) ? [];	-- if v is 0, r := om
+
+  return r;
+
+end int_rem;
+
+procedure int_sub (u, v);
+--arith_trace("At proc int_sub " + str(u) , v);
+
+-- Subtract signed integers
+
+-- There is no point in duplicating the int_add code, so we
+-- simply negate the right argument and call the add routine!
+
+  v(1) := -v(1);
+  return int_add (u, v);
+
+end int_sub;
+procedure int_toi (t);
+--arith_trace("At proc int_toi " + str(t) );
+
+-- Convert a multiple precision integer to a SETL integer.
+
+-- First check if it overflows.
+
+  sgn := sign(t(1));
+
+  if sgn = 0 then
+     return 0;
+  end if;
+
+  t(1) := abs(t(1)) ;
+  x := 0;
+  for i in [1..#t] loop 
+    x := bas * x + t(i);
+  end loop;
+
+  return sgn * x;
+
+end int_toi;
+procedure int_tos (u);
+--arith_trace("At proc int_tos " + str(u) );
+
+-- Convert a multiple precision integer to a string.
+-- The string is a non-empty digit sequence with a possible leading
+-- minus sign (but a plus sign is never generated).
+
+-- As in stl_int_frs, the fact that the base is a power of ten means
+-- that the conversion is simply a matter of converting successive
+-- digits to decimal strings of length DIGS.
+
+  if u(1) >= 0 then
+    s := "";
+  else
+    u(1) := -u(1);
+    s    := "-";
+  end if;
+
+  s +:= str(u(1)) ;
+
+  for i in [2 .. #u] loop 
+    d  := str(u(i)) ;
+    d  := (digs - #d) * "0" + d;
+    s +:= d;
+  end loop;
+
+  return s;
+end int_tos;
+
+procedure int_umin (u);
+--arith_trace("At proc int_umin " + str(u) );
+
+-- Unary minus on multiple precision integer.
+
+    u(1) := -u(1);
+    return u;
+
+end int_umin;
+procedure subu_int (u, v);
+--arith_trace("At proc subu_int " + str(u) , v);
+
+-- Subtract unsigned integers, u >= v, cf Knuth 4.3.1 Algorithm S
+
+-- As in int__addu, we arrange for the two numbers to have the same
+-- length (note that we know as an entry condition that #u >= #v).
+
+  v := [0 : i in [1 .. #u - #v]] + v;
+
+-- The subtraction is similar to the addition, except that k now
+-- represents the borrow condition and has values 0 or -1.
+
+  k := 0;
+  for j in [#u, #u-1 .. 1] loop 
+    u(j) := u(j) - v(j) + k;
+    if u(j) < 0 then
+      u(j) +:= bas;
+      k := -1;
+    else
+      k := 0;
+    end if;
+  end loop;
+
+-- We cannot have a final borrow (since the entry condition
+-- required that u >= v). However, we must normalize the
+-- result since it is possible for leading zeroes to appear.
+
+  int__norm (u);
+  return u;
+
+end subu_int;
+procedure int_div (u, v);
+--arith_trace("At proc int_div " + str(u) , v);
+
+-- Obtain quotient and remainder of signed integers,
+-- cf Knuth 4.3.1 Algorithm D
+-- Result is returned as a tuple [quotient,remainder].
+
+-- This is by far the most difficult of the four basic operations.
+-- This is because the paper and pencil algorithm involves certain
+-- amounts of guess work which cannot be programmed directly. The
+-- approach (which is analyzed in detail in Knuth) is to reduce 
+-- the guess work by computing a rather good guess at each digit
+-- of the result, and then correcting if the guess is wrong.
+
+-- If the divisor is zero, return om.
+
+  if v = [0] then
+    return om;
+
+-- A special case, if u is shorter than v, the result is 0
+
+  elseif #u < #v then
+    return [[0],u];
+
+-- Otherwise we initialize as in multiplication by obtaining the
+-- result sign and then working with non-negative integers.
+
+  else
+    qs := u(1) * v(1);
+    rs := u(1);
+    u(1) := abs(u(1)) ;
+    v(1) := abs(v(1)) ;
+
+-- The case of a one digit divisor is treated specially. Not only
+-- is this more efficient, but the general algorithm assumes that
+-- the divisor contains at least two digits.
+
+    if #v = 1 then
+      q := [];
+
+-- Basically this case is straight-forward. Since we can represent
+-- numbers up to BAS * BAS - 1, we can do the steps of the division
+-- exactly without any need for guess work. The division is then
+-- done left to right (essentially it is the short division case).
+
+      rr := 0;
+      for j in [1 .. #u] loop 
+	du := rr * bas + u(j);
+	q(j) := du / v(1);
+	rr := du mod v(1);
+      end loop;
+
+      r := [rr];
+
+-- Here is where we must do the full long division algorithm
+
+    else
+      q := [];
+      n := #v;
+      m := #u - #v;
+      u := [0] + u;
+
+-- The first step is to multiply both the divisor and dividend
+-- by a scale factor. Obviously such scaling does not affect
+-- the quotient. The purpose of this scaling is to ensure that
+-- the first digit of the divisor is at least BAS / 2. This
+-- condition is required for proper operation of the quotient
+-- estimation algorithm used in the division loop. Note that
+-- we added an extra digit at the front of the dividend above.
+
+      d := bas / (v(1) + 1);
+
+      c := 0;
+      for j in [#u, #u-1 .. 1] loop 
+	p := u(j) * d + c;
+	u(j) := p mod bas;
+	c := p / bas;
+      end loop;
+
+      c := 0;
+      for j in [#v, #v-1 .. 1] loop 
+	p := v(j) * d + c;
+	v(j) := p mod bas;
+	c := p / bas;
+      end loop;
+
+-- This is the major loop, corresponding to long division steps
+
+      for j in [1 .. m+1] loop 
+  
+-- Guess the next quotient digit by doing a division based on the
+-- leading digits. This estimate is never low and at most 2 high.
+
+	qe := if u(j) /= v(1) then
+		(u(j) * bas + u(j+1)) / v(1)
+	      else
+		bas - 1
+	      end if;
+  
+-- The following loop refines this guess so that it is almost always
+-- correct and is at worst one too high (see Knuth for proofs).
+
+        while v(2) * qe >
+	       (u(j) * bas + u(j+1) - qe * v(1)) * bas + u(j+2) loop 
+	  qe -:= 1;
+	end loop;
+
+-- Now (for the moment accepting the estimate as correct), we
+-- subtract the appropriate multiple of the divisor. This is
+-- similar to the inner loop of the multiplication routine.
+
+	c := 0;
+	for k in [n, n-1 .. 1] loop 
+	  du := u(j+k) - qe * v(k) + c;
+       	  u(j+k) := du mod bas;
+	  c := du / bas;
+          if du < 0 and u(j+k) /= 0 then 
+            c -:=1; 
+          end if;
+	end loop;
+
+	u(j) +:= c;
+
+-- If the estimate was one off, then u(j) went negative when the
+-- final carry was added above. In this case, we add back the
+-- divisor once, and adjust the quotient digit.
+
+        if u(j) < 0 then
+
+          qe -:= 1;
+	  
+          c := 0;
+	  for k in [n, n-1 .. 1] loop 
+            u(j+k) +:= v(k) + c;
+            if u(j+k) >= bas then
+              u(j+k) -:= bas;
+              c := 1;
+            else
+              c := 0;
+            end if;
+	  end loop;
+
+          u(j) +:= c;
+
+	end if;
+
+-- Store the next quotient digit
+
+        q(j) := qe;
+
+      end loop;
+
+-- Remainder is in u(m+2..m+n+1) but must be divided by d.
+
+      
+      r:=int_quo(u(m+2..m+n+1),[d]);
+
+    end if;
+
+-- All done, except for normalizing the quotient 
+-- to remove leading zeroes and supplying the
+-- proper result sign to the returned values.
+
+    int__norm (q);
+    if qs < 0 then 
+       q(1) := -q(1); 
+    end if;
+    if rs < 0 then 
+       r(1) := -r(1); 
+    end if;
+    return [q,r];
+
+  end if;
+
+end int_div;
+
+procedure int__addu (u, v);
+--arith_trace("At proc int__addu " + str(u) , v);
+
+-- Add unsigned integers, cf Knuth 4.3.1 Algorithm A
+
+-- As a first step, we make the two numbers the same length by
+-- adding zeroes to the shorter one. This is done to simplify
+-- the presentation of the algorithm, it would actually be more
+-- efficient to avoid this step and do the addition in two stages.
+
+  if #u < #v then
+    u := [0 : i in [1 .. #v - #u]] + u;
+  else
+    v := [0 : i in [1 .. #u - #v]] + v;
+  end if;
+
+-- Now we perform the addition from right to left in the familiar
+-- paper and pencil manner. The variable k is the carry from the
+-- previous column, which has either the value zero or one.
+
+  k := 0;
+  for j in [#u, #u-1 .. 1] loop 
+    u(j) +:= v(j) + k;
+    if u(j) >= bas then
+      u(j) -:= bas;
+      k := 1;
+    else
+      k := 0;
+    end if;
+  end loop;
+
+-- The result is one digit longer if we got a final carry
+
+  if k /= 0 then 
+    u := [1] + u; 
+  end if;
+
+  return u;
+
+end int__addu;
+
+procedure int__norm (rw u);
+--arith_trace("At proc int__norm " + str(u) );
+
+-- Remove leading zeroes from calculated value
+
+-- The representation used in this package requires that all integer
+-- values be normalized, i.e. the first digit of any stored value
+-- must be non-zero except for the special case of zero itself. The
+-- normalize routine is called to ensure this condition is met.
+
+  if #u = 1 or u(1) /= 0 then
+    return;
+  
+  elseif exists i in [2 .. #u] | u(i) /= 0 then
+    u := u(i..);
+
+  else
+    u := [0];
+
+  end if;
+
+end int__norm;
+
+procedure stl_int_frs (s);
+--arith_trace("At proc stl_int_frs " + str(s) );
+
+-- Convert a string to multiple precision integer format.  The string 
+-- s is a non-empty sequence of digits, possibly preceded by a sign 
+-- (+ or -).
+
+-- Erroneous strings are converted to OM.
+
+-- Since the base is a power of ten, the process of conversion
+-- amounts simply to converting groups of DIGS digits.
+
+  sn := span (s, "+-");
+
+  dg := span (s, "0123456789");
+  
+  if s /= "" then
+    return om;
+
+  else
+     return value(dg) ;
+  end if;
+
+  procedure value (s);
+    --arith_trace("At proc value " + str(s) );
+    -- Convert a numeric string to an integer.
+    v := 0;
+    for c in s loop 
+      v := 10 * v + (abs(c) - abs("0"));
+    end loop;
+    return v;
+  end value;
+end stl_int_frs;
+
+procedure stl_int_toi (t);
+--arith_trace("At proc stl_int_toi " + str(t) );
+
+-- Convert a multiple precision integer to a SETL integer, if possible.
+-- Otherwise, return 'OVERFLOW'.
+
+-- First check if it overflows.
+  if abs(t) >  ada_max_integer_long then
+    return "OVERFLOW";
+  else
+    return t ;
+  end if;
+end stl_int_toi;
+procedure stl_int_tos (u);
+--arith_trace("At proc stl_int_tos " + str(u) );
+
+-- Convert a multiple precision integer to a string.
+-- The string is a non-empty digit sequence with a possible leading
+-- minus sign (but a plus sign is never generated).
+
+-- As in int_frs, the fact that the base is a power of ten means
+-- that the conversion is simply a matter of converting successive
+-- digits to decimal strings of length DIGS.
+
+  return str(u) ;
+end stl_int_tos;
+
+procedure arith_trace(msg1, msg2);
+-- If SEMTRACE2 is >= 1, then trace.
+-- Note that this may be called BEFORE semtrace2 is set, 
+-- during predef compilations. 
+-- So the semtrace2?0 is necessary.
+
+if semtrace2?0 >= 1 then
+   print(msg1, msg2);
+end if;
+end arith_trace;
+
+procedure sign(x);
+case 
+  when is_integer(x) => 
+     case
+        when (x<0) => return -1;
+        when (x=0) => return 0;
+        when (x>0) => return 1;
+     end case;
+  when is_real(x) => 
+     case of
+        when (x<0.0) => return -1;
+        when (x=0.0) => return 0;
+        when (x>0.0) => return 1;
+     end case;
+  otherwise =>
+     print("error in sign"); 
+     return 0;
+end case;
+end sign;
+end adaarith;

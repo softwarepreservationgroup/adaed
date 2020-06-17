@@ -1,0 +1,1342 @@
+
+--Source: /cs.a/ada/ada/src/hll/adalib.stl,v $ 
+--
+-- Copyright 1990. Ada Project, Courant Institute, New York University
+package body adalib;
+
+ 
+	-----------------------------------------
+	--					-
+	--	 A D A - L I B R A R I A N	-
+	--					-
+	--		written by		-
+	--					-
+	--	       Ada Project		-
+	--	    Courant Institute		-
+	--	   New York University		-
+	--	    251 Mercer Street		-
+	--	 New York, New York 10012	-
+	--					-
+	-----------------------------------------
+
+--   Procedures in this module serve two phases of the compiler:
+--
+--     (1)  maintaining a program library during semantic translation,
+--
+--     (2)  after translation, binding fragments of intermediate code
+--	   into a single object for the interpreter.
+--
+--   Three types of files are used here:
+--
+--	AIS files    intermediate code and other information generated
+--		     during the translation of a source file,
+--
+--	LIB files    directory to units in AIS files,
+--
+--	AIX files    complete program bound of the interpreter.
+--
+--    LIB files and AIS files are each organized as a pair of maps whose
+--    domain elements are unique compilation unit names such as:
+--
+--	['subprog spec', 'MAIN']
+--
+--	['spec', 'MATH_PACK']
+--
+--	['subprog', 'SIN', 'MATH_PACK']
+--
+--   The first string in these names is gives the unit's class as seen
+--   by the binder:
+--
+--	'subprog spec', 'subprog'  -- subprogram specifications & bodies
+--
+--	'spec', 'body'  -- package specifications & module bodies
+--
+--	'subprog instance', 'spec instance'  -- instantiations
+--
+--   The second string is the name of the compilation unit itself.  If
+--   this is a subunit, the remaining names are those of its enclosing
+--   scopes.
+--
+--   A LIB file is a pair of maps from these unique names to the
+--   appropriate AIS files names:
+--
+--	(1)  LIB_UNIT, which indicates the file containing the
+--	     translation of each compilation unit, and
+--
+--	(2)  LIB_STUB, which indicates the file containing the
+--	     translation of the stub of the subunit.
+--
+--   Each AIS file is a parallel pair of maps, again from unique names,
+--   containing the translation of each compilation unit and the
+--   environment of each stub.  For convenience, these two maps are split
+--   into five within the translator itself:
+--
+--   COMP_DATE
+--	A map for each compilation unit to compilation dates & times
+--	of every unit "used" by the current unit (this is used for
+--	checking consistency).  Dates themselves are a tuple including
+--	the date and clock time of translation, and an indication of
+--	the order of compilation within a single session.
+--
+--   PRE_COMP
+--	List of units that should have been compiled before this one.
+--
+--   UNIT_DECL
+--	The declarations that can be seen by other units, or that will
+--	be needed later by the translator.
+--
+--   CODE_UNITS
+--	Intermediate code to be bound for the interpreter.
+--
+--   STUB_ENV
+--	The environment at the point where the stub was declared.
+--
+--   During the initialization of the compiler, several predefined
+--   library units are read in and permanently installed.  These units
+--   are not included explicitly in the library, but may be accessed
+--   as if they were.  The information from their AIS files is stored in
+--   the map 'predef_map' (local to this module), and a set of those
+--   currently available (not displaced by a user's unit) is maintained
+--   in the global variable PREDEF_UNITS.  For simplicity, these
+--   predefined units may not have stubs.
+--
+--   The semantic analyser has access to compilation information in the
+--   AIS files through the procedures RETRIEVE and STUB_RETRIEVE.  When
+--   called, these two procedures try to make the requested information
+--   available in the five compilation maps listed above (it may read
+--   an AIS file, copy from predef_map or the information may
+--   already be present). If successful, they return the value TRUE,
+--   otherwise they return FALSE.
+--
+--   Other procedures called by the semantic phase are INCLUDE_AIS, to
+--   implement the pragma INCLUDE_CODE, and UPDATE_LIB_MAPS, which
+--   does some housekeeping when a new compilation unit is started.
+--
+--   The other major interface to the compiler as a whole is the
+--   procedure BIND, which checks the components of a main program
+--   for completeness and consistency, and then assembles them into a
+--   single tuple for the interpreter.
+--
+--   The user may choose to not use the separate compilation facility
+--   and put every compilation unit into one file.  In this case,
+--   the LIB file can be omitted, since its role is to group several
+--   AIS files together.  Furthermore, since AIS files contain all of
+--   the information produced by a translation session, more than
+--   one LIB file may refer to a single AIS file.
+ 
+use globals;
+use int_globals;
+use adaio;
+
+const
+	infinity := 1073741823,
+	opsys_unix := 1,		-- for UNIX
+	opsys_vms := 2;			-- for VMS
+ 
+var
+    to_bind,		-- Set of library names of units to be bound
+    predef_map,         -- Map of predefined compilation unit info
+    aisfiles_read,	-- Set of file names, to avoid rereading files
+    no_bind_error,	-- Was any error found in a generic unit ?
+    pre_bind_errcount;  -- Number of errors detected before binding
+ 
+-- Global procedures for the use of all modules:
+ 
+procedure is_libunit(name); 
+   return #name = 2;
+end is_libunit;
+ 
+procedure is_subunit(name); 
+  return #name > 2;
+end is_subunit;
+
+procedure is_package_spec(name);
+   return name(1) = "spec";
+end is_package_spec;
+
+procedure is_package_body(name);
+   return name(1) = "body";
+end is_package_body;
+
+procedure is_subprogram_spec(name);
+   return name(1) = "subprog spec";
+end is_subprogram_spec;
+
+procedure is_subprogram_body(name);
+   return name(1) = "subprog";
+end is_subprogram_body;
+
+procedure is_generic_unit(name);
+  return name in generic_units;
+end is_generic_unit;
+
+procedure stub_ancestor(subunit);
+   return subunit(#subunit);
+end stub_ancestor;
+
+procedure lib_trace_proc_entry(level, proc);
+  if cdebug4 > level then 
+      printa(errfile, "ENTER   :", proc) ;
+  end if;
+end lib_trace_proc_entry;
+
+procedure lib_trace_proc_exit(level, proc);
+  if cdebug4 > level then 
+      printa(errfile, "EXIT    :", proc) ;
+  end if;
+end lib_trace_proc_exit;
+
+procedure lib_trace(level, msg);
+  if cdebug4 > level then 
+      printa(errfile, "          "+  msg) ;
+  end if;
+end lib_trace;
+ 
+--S+ init_predef
+procedure init_predef;
+
+  lib_trace_proc_entry(3, "Init_Predef");
+  -- Initialize predef_units map with information from a library
+  -- of predefined compilation units.
+ 
+    aisfiles_read := {};
+    comp_date  := {};
+    pre_comp   := {};
+    pragma_elab := {};
+    compilation_order := [];
+    generic_units := {};
+    unit_decl  := {};
+    stub_env   := {};
+    code_units := {};
+    lib_unit := {};
+    lib_stub := {};
+    stub_parent := {};
+    instantiations := {};
+ 
+  -- Note:  we assume here and elsewhere that predefined library units
+  -- contain no stubs.
+    predef_map := {};
+    predef_units := {};
+
+    if (not predef_option) and new_library then
+        --predef_lib := get_option("predef_lib=");
+	--if predef_lib = "" then predef_lib := "predef.lib"; end if;
+	predef_lib := "/u/banner/setl2/sem/predef.lib";
+        read_lib(predef_lib);
+    else
+	--to_list("  Cannot read predefined units");
+        --lib_trace_proc_exit(3, "Init_Predef");
+        return;
+    end if;
+ 
+  -- Remove the names of the predefined files from aisfiles_read, so that
+  -- revised versions of these files could be read in the usual manner
+  -- after initialization.
+ 
+    --aisfiles_read := {};
+ 
+    -- problem determining the elaboration order if predefined units are not in
+    -- pre_comp.
+    -- PRE_COMP   := {}; 
+
+    --lib_trace_proc_exit(3, "Init_Predef");
+    return [];
+ 
+end init_predef;
+--S+ init_lib
+procedure init_lib(xec);
+  lib_trace_proc_entry(3, "Init_Lib");
+  -- Not to be called when executing a bound AIX file.
+  -- When the separate compilation facility is being used and the
+  -- translation phase is being skipped (LIB_OPTION = false and
+  -- xec = true), all references to AIS files will be made via
+  -- the directory in LIBFILE.  In such a case, aisfiles_read
+  -- is initialized to {}.  In all other cases, AISFILE should
+  -- not be read during translation or binding (i.e., after
+  -- INIT_LIB), and aisfiles_read is initialized to {AISFILE}.
+ 
+    if new_library or not lib_option then
+ 
+        aisfiles_read with:= aisfile;
+ 
+	if xec and ais_option then
+	    [units, envs] := read_ais(aisfile);
+	    lib_unit := {[u, aisfile] : u in units};
+	    lib_stub := {[s, aisfile] : s in envs};
+	end if;
+ 
+    else
+	read_lib(libfile);
+	if not xec then
+ 
+	    aisfiles_read with:= aisfile;
+	    lib_unit := {x : x in lib_unit | x(2) /= aisfile};
+	    lib_stub := {x : x in lib_stub | x(2) /= aisfile};
+	end if;
+    end if;
+ 
+  -- Predefined units are never explicitly in the library.
+ 
+    predef_units -:= domain lib_unit;
+    lib_trace_proc_exit(3, "Init_Lib");
+end init_lib;
+ 
+procedure read_ais(file);
+ 
+  -- Reads an AIS file and restores its compilation
+  -- information to the compilation maps.
+  -- If the file cannot be opened, an error message is printed and the
+  -- tuple [{}, {}] returned.
+    lib_trace_proc_entry(3, "Read_Ais: " + file);
+    just_read := [{},{}];
+ 
+    handle := open(file, "BINARY-IN");
+    if (handle /= om)  then
+       getb(handle, ais, aist);
+       close(handle);
+ 
+       for [name,items] in ais
+                	    | lib_unit(name) = file or not lib_option loop 
+ 
+	    -- Unpack unit information.
+            [comp_date(name) ,unit_decl(name),
+					code_units(name)]  := items ;
+	    just_read(1) with:= name;
+       end loop;
+ 
+       for [name,env] in aist
+                | lib_stub(name) = file or not lib_option loop 
+	    stub_env(name) := env;
+	    just_read(2) with:= name;
+       end loop;
+    else
+	msg := "*** Warning, could not read AIS file " + file;
+	to_list(msg);
+    end if;
+    aisfiles_read with:= file;
+    lib_trace_proc_exit(3, "Read_Ais");
+    return just_read;
+end read_ais;
+ 
+--S+ write_ais
+procedure write_ais(file);
+ 
+  -- Writes information from the current compilation to
+  -- 'file', restructuring the separate compilation maps
+  -- to improve the readability of the AIS code.
+    lib_trace_proc_entry(3, "Write_Ais: " + file);
+    ais := {[name,[comp_date(name),
+		   unit_decl(name),
+		   code_units(name)]]: [name,f] in lib_unit | f = file};
+    aist := {[name,stub_env(name)] : [name,f] in lib_stub | f = file};
+ 
+    handle := open(file,"BINARY-OUT");
+    putb(handle, ais, aist);
+    close(handle);
+    lib_trace_proc_exit(3, "Write_Ais");
+end write_ais;
+ 
+ 
+--S+ read_lib
+procedure read_lib(file);
+    lib_trace_proc_entry(3, "Read_Lib:" +file);
+
+    handle := open(file,"TEXT-IN");
+    if (handle /= om) then
+        reada(handle,lib_unit);
+	reada(handle,lib_stub);
+	reada(handle,stub_parent);
+	reada(handle,pre_comp);
+	reada(handle,pragma_elab);
+	reada(handle,compilation_order);
+	reada(handle,generic_units);
+	reada(handle,instantiations);
+	reada(handle,except_unames);
+    else
+	to_list("*** Warning, could not read LIB file " + file);
+    end if;
+    lib_trace_proc_exit(3, "Read_Lib");
+end read_lib;
+ 
+--S+ write_lib
+procedure write_lib;
+   lib_trace_proc_entry(3, "Write_Lib: " + libfile);
+   handle := open(libfile,"TEXT-OUT");
+   pretty_print(handle, lib_unit);
+   pretty_print(handle, lib_stub);
+   pretty_print(handle, stub_parent);
+   pretty_print(handle, pre_comp);
+   pretty_print(handle, pragma_elab);
+   pretty_print(handle, compilation_order);
+   pretty_print(handle, generic_units);
+   pretty_print(handle, instantiations);
+   pretty_print(handle, except_unames);
+   close(handle);
+
+   lib_trace_proc_exit(3, "Write_Lib");
+end write_lib;
+ 
+ 
+--S+ read_aix
+procedure read_aix(file);
+    lib_trace_proc_entry(3, "Read_Aix: " + file);
+    if open(file,"TEXT-IN") then
+        reada(file, ais_main, ais_code, ais_prio);
+        close(file);
+        lib_trace_proc_exit(3, "Read_Aix");
+	return true;
+    else
+	ais_main := "";
+	ais_code := [];
+	to_list("*** Warning, could not read AIX file " + file);
+        lib_trace_proc_entry(3, "Read_Aix");
+	return false;
+    end if;
+end read_aix;
+--S+ write_aix
+procedure write_aix(file);
+ 
+  -- Bound code is saved in 'file' when AIX_OPTION is true.
+ 
+    if aix_option then
+        lib_trace_proc_entry(3, "Write_Aix: " + file);
+	handle := open(file,"TEXT-OUT");
+	pretty_print(handle, ais_main);
+	pretty_print(handle, ais_code);
+	pretty_print(handle, ais_prio ? []);
+	close(handle);
+    end if;
+    lib_trace_proc_exit(3, "Write_Aix");
+end write_aix;
+ 
+ 
+procedure body_of(name); 
+   lib_trace_proc_entry(3, "Body_Of");
+   if is_package_spec(name) then
+	bdy := ["body", name(2)];
+   elseif is_subprogram_spec(name) then
+	bdy := ["subprog", name(2)];
+   end if;
+lib_trace_proc_exit(3, "Body_Of");
+return bdy;
+end body_of;
+
+procedure update_subunit_context(subunit);
+
+-- Add the library units mentioned in the context clause for the subunit
+-- to the precedes map for the ancestor unit of the stub since all the units
+-- in the context clause need to be elaborated before the ancestor.
+-- 
+lib_trace_proc_entry(3, "Update_Subunit_Context");
+stub_context := pre_comp(subunit);
+ancestor_body := ["body",stub_ancestor(subunit)];
+
+-- determine if the ancestor unit is package or subprogram 
+if ancestor_body notin domain lib_unit then
+   ancestor_body := ["subprog",stub_ancestor(subunit)];
+end if;
+
+-- add in units that were in context clause of subunit so exclude subunits 
+-- which happen to be in the PRE_COMP field of this subunit.
+-- 
+pre_comp(ancestor_body) +:= {comp_unit in stub_context |
+		is_libunit(comp_unit) and comp_unit /= ancestor_body};
+lib_trace_proc_exit(3, "Update_Subunit_Context");
+end update_subunit_context;
+
+procedure update_pragma_elaborate;
+ for name in domain pragma_elab loop
+   pre_comp(name) +:= pragma_elab(name)?{};
+end loop;
+end update_pragma_elaborate;
+--S+ bind
+procedure bind(file);
+    --lib_trace_proc_entry(3, "Bind: " + file);
+    no_bind_error := true;
+    pre_bind_errcount := errcount;
+ 
+  -- BIND checks the program library of a given main program
+  -- for completeness and correct compilation order.  If
+  -- recompilation is indicated, a recommended recompilation
+  -- order is printed, and the procedure returns the value
+  -- false.  Otherwise, the various compilation units may
+  -- be bound together in a single tuple (AIS_CODE) for the
+  -- interpreter, and the value true returned.
+ 
+    ais_code := [];
+ 
+  -- First, we identify the main program, whose name may have been
+  -- passed as a parameter to AIS_MAIN.  If not, we check the library
+  -- for a single parameterless subprogram, or lacking that, a single
+  -- package, to be the main program.
+ 
+    if ais_main = "" then
+	names := [x : x in domain lib_unit
+		  | is_libunit(x)
+		    and (x(1) = "subprog" or x(1) = "subprog instance")
+		    and main_subprog(x) ];
+      -- For the checking phase, we start with the subprogram
+      -- specification, if present.
+      -- (As implemented here, a subprogram will not be recognized as a
+      -- main program if only the specification has been compiled.)
+	names := [if retrieve(["subprog spec", x(2)]) then
+		      ["subprog spec", x(2)]
+		  else x end if : x in names];
+ 
+        if #names = 1 then
+	   main_name := names(1);
+    	   ais_main := main_name(2);
+        else
+	   to_list("  Cannot identify main program ");
+           lib_trace_proc_exit(3, "Bind");
+	   return false;
+        end if;
+    else
+	main_name := ["subprog", ais_main];
+	-- TBSL:
+        --  possibly leave open the possiblity of having a subprog instance be
+	-- a main program. 
+    end if;
+    if not retrieve(main_name) then
+	to_list("Missing main program: "+formatted_name(main_name));
+        lib_trace_proc_exit(3, "Bind");
+	return false;
+    end if;
+    ais_prio := find_priority( main_name );
+    to_check := {main_name};
+    to_bind := {};
+    missing_units := {};
+ 
+  -- check compilation order:
+  --
+  -- All units needed (directly or indirectly) by AIS_MAIN
+  -- are checked.  The order in which these checks are
+  -- performed is unimportant.  
+ 
+  update_pragma_elaborate();
+
+    while to_check /= {} loop 
+ 
+	name from to_check;
+	lib_trace(3,"checking "+str(name) );
+ 
+      -- Check the stubs of the current unit.
+ 
+	lib_trace(3, "checking stubs");
+ 
+	for subname in stubs(name) loop 
+ 
+	    if not retrieve(subname) then
+		missing_units with:= subname;
+	    end if;
+	    to_check with:= subname;
+ 
+	end loop;
+ 
+      -- Check to see whether a package specification requires a
+      -- body, and to see that the body was compiled after the
+      -- specification.
+ 
+ 
+	if is_package_spec(name) then
+	    lib_trace(3,  "checking package body");
+	    p_body := body_of(name);
+
+	    if retrieve(p_body) then
+		to_check with:= p_body;
+	    elseif needs_body(name) then
+		lib_trace(3,"needs_body pack. body " + str(p_body) );
+		missing_units with:= p_body;
+	    else				
+		-- Create dummy body, in order to initialize tasks that
+		-- may be introduced in the spec. 
+
+		code_units(p_body) := [["package_body",name(2), 
+					      [[], [["end"]], []] ]] ;
+		-- the following is necessary so that the body is recognized
+		-- as an explicit compilation unit which can be elaborated.
+		-- TBSL: BB (8/5/86)
+		-- can this be handled another way? Is it necessary to elaborate
+		-- this dummy package body in the case of pragma elaborate??
+		-- LIB_UNIT(body) := AISFILE;
+		-- The following line is a noop
+		lib_unit(p_body) := om;
+		pre_comp(p_body) := {name};
+		compilation_order with:= p_body;
+		to_bind with:= p_body ;
+	    end if;
+	end if;
+ 
+      -- Check 'subprog spec' for body (required for subprog spec)
+ 
+	if is_subprogram_spec(name) then 
+	    lib_trace(3, "checking subprogram body");
+	    s_body := body_of(name);
+	    to_check with:= s_body;
+	    if not retrieve(s_body) and not (is_generic_unit(s_body)) then
+		lib_trace(3,"missing subprogram body " + str(s_body) );
+		missing_units with:= s_body;
+	    end if;
+	end if;
+ 
+      -- Check the order indicated by visibility lists (PRE_COMP).
+ 
+	lib_trace(3,"checking PRE_COMP");
+ 
+	for prior in (pre_comp(name) ? {})  loop 
+ 
+	    if retrieve(prior) then
+		if prior notin to_bind then
+		    to_check with:= prior;
+		end if;
+	    else
+		-- an ELABORATE clause may give the name of a package
+		-- that has no body. If it needs a dummy one, it will
+		-- be introduced when the spec is processed.
+
+		if is_package_body(prior) then null ;		
+		elseif prior notin missing_units then
+		    to_check with:= prior;
+		    lib_trace(3,"recompile unit: " + str(name) );
+		    missing_units with:= prior;
+		end if;
+	    end if;
+ 
+            -- In the  case of  a package, prior  is a spec, but its body
+            -- may  be required.  If the body  of prior  is  required, it
+	    -- must be  bound after its spec and before the main program.
+ 
+            if is_package_spec(prior) then
+                prior_body := ["body", prior(2)];
+                if retrieve(prior_body) or needs_body(prior) then
+                    null;
+                end if;
+            end if;
+ 
+
+	end loop;
+ 
+	if is_subunit(name) and name in domain lib_unit then
+	   update_subunit_context(name);
+	end if;
+
+	to_bind with:= name;
+ 
+    end loop;
+ 
+ 
+  -- If any recompilations are required, report them and return.
+ 
+    if missing_units /= {} then
+	to_list(" ");
+	to_list("Missing units in library:");
+ 	 for comp_unit in missing_units loop
+	   to_list(formatted_name(comp_unit));
+	end loop;
+        lib_trace_proc_exit(3, "Bind");
+	return false;
+    end if;
+ 
+    --to_bind := {x : x in to_bind | is_libunit(x)};
+    lib_trace(0,  "to_bind:" + str(to_bind) );
+
+  -- AIS_CODE is built in an order determined by a topological
+  -- sort.  Stubs are replaced by the corresponding subunit bodies.
+ 
+
+   -- call_lib_unit is built in an order consistent with the rules for
+   -- the elaboration of library units.
+   -- The algorithm tries to use the compilation order, unless some unit
+   -- depends on a not yet elaborated unit. In that case, it is appended
+   -- to a list of units depending on one of the not yet elaborated units
+   -- When this unit is elaborated, one tries again to elaborate units
+   -- depending on it.
+   -- If a unit depends on one of its own delayed units, it is a 
+   -- circularity                          
+   -- elaborated: set of already elaborated units
+   -- delayed   : map from units to the list of dependant units.
+ 
+   -- Use the compilation order but ignore units not needed for binding
+   elaboration_table := [ x : x in compilation_order | x in to_bind ];
+
+   elaborated        := {};
+   delayed           := {};  
+ 
+    while elaboration_table /= [] loop
+      name fromb elaboration_table;
+ 
+      if is_subunit(name) then
+         -- subunits are elaborated from the parent unit.
+         elaborated with:= name;
+ 
+      elseif pre_comp(name) subset elaborated then
+         -- May elaborate this unit now
+         lib_trace(0, "elaborate: "+  str(name) );
+	 if name(1) /= "subprog spec" then
+            unit := replace_stubs(name) ;
+            if has_generics(unit) then
+		unit := replace_generics(unit);
+            end if;
+	    ais_code +:= unit;
+	 end if;
+         elaborated with:= name;
+         if name in domain delayed then
+            -- Retry units depending on this one
+            elaboration_table := delayed(name) + elaboration_table;
+            delayed(name)     := om;          
+         end if;
+ 
+      else
+         -- Depends on a not yet elaborated unit => delay elaboration 
+         unit          := arb(pre_comp(name) - elaborated);
+         delayed(unit) := (delayed(unit) ? []) with name;
+      end if;
+      
+   end loop;                                                        
+ 
+   if #delayed /= 0 then
+         -- Circularity
+         to_list("Circularity detected among these units:");
+         to_list(formatted_name(name));
+          for unit in domain delayed loop
+            to_list(formatted_name(unit));
+         end loop;
+         to_list("    ");
+	 to_list("  No consistent binding order for " + main_name(2));
+         to_list("    ");
+         lib_trace_proc_exit(3, "Bind");
+	 return false;
+   end if;
+                   
+    write_aix(file);
+ 
+    lib_unit := lib_stub := stub_parent := comp_date := pre_comp :=
+	unit_decl := code_units := stub_env := om;
+ 
+    lib_trace_proc_exit(3, "Bind");
+    return (no_bind_error and pre_bind_errcount = errcount);
+ 
+end bind;
+ 
+ 
+--S+ find_priority
+procedure find_priority( main_name );
+--
+-- Searches the declarations of the main procedure for an
+-- occurance of the statement ['set_priority',...] . This
+-- is inserted by the semantic pass as a result of encountering
+-- a pragma priority statement. Note that no attempt is currently
+-- made by the binder to check for multiple occurances of 'set_priority'
+-- or for occurances in illegal contexts.
+--
+  lib_trace_proc_entry(3, "Find_Priority");
+  [code] := code_units(main_name);
+
+  [-, name, formals, [decls, s_body, except]] := code;
+  lib_trace_proc_exit(3, "Find_Priority");
+  if exists d in decls | d(1) = "set_priority" then
+    [-, priority] := d;
+    decls := [d in decls | d(1) /= "set_priority"];
+    code_units(main_name) := [ ["procedure", name, formals,
+                                    [decls, s_body, except] ]
+                             ];
+    lib_trace_proc_exit(3, "Find_Priority");
+    return [priority];
+  else
+    lib_trace_proc_exit(3, "Find_Priority");
+    return [];
+  end if;
+end find_priority;
+--S+ retrieve
+procedure retrieve(name);
+ 
+  -- If the unit 'name' has not previously been read from
+  -- an AIS file, the file is read and its contents added
+  -- to the compilation maps.
+    lib_trace_proc_entry(3, "Retrieve: " + str(name) );
+    if lib_unit(name) = om then
+	if comp_date(name) = om then
+	    if name in predef_units then
+    		[comp_date(name), unit_decl(name), 
+		code_units(name), stub_env(name)] := predef_map(name);
+	    else
+		lib_trace(3,"Retrieve failed");
+                lib_trace_proc_exit(3, "Retrieve");
+		return false;
+	    end if;
+      -- else this is a predefined unit that has already been RETRIEVEd.
+	end if;
+    elseif lib_unit(name) notin aisfiles_read then
+	if read_ais(lib_unit(name)) = [{},{}] then
+           lib_trace_proc_exit(3, "Retrieve");
+	    return false;  -- Message emitted by READ_AIS.
+	end if;
+    end if;
+    lib_trace_proc_exit(3, "Retrieve");
+    return true;
+ 
+end retrieve;
+ 
+ 
+ 
+--S+ stub_retrieve
+procedure stub_retrieve(name);
+ 
+  -- Reads, if necessary, information from the file in which the stub
+  -- 'name' was declared.
+    lib_trace_proc_entry(3, "Stub_Retrieve: " + str(name) );
+    if name notin domain lib_stub then
+	-- TO_LIST(str name + ' not in library ' + LIBFILE);
+        lib_trace_proc_exit(3, "Stub_Retrieve");
+	return false;
+    elseif lib_stub(name) notin aisfiles_read
+	and stub_env(name) = om
+    then
+	if read_ais(lib_stub(name)) = [{},{}] then
+            lib_trace_proc_exit(3, "Stub_Retrieve");
+	    return false;   -- Message emitted by READ_AIS.
+	end if;
+    end if;
+    lib_trace_proc_exit(3, "Stub_Retrieve");
+    return true;
+ 
+end stub_retrieve;
+--S+ main_subprog
+procedure main_subprog(subprog);
+  -- A main program cannot have parameters in this implementation.
+ 
+    lib_trace_proc_entry(3, "Main_Subprog");
+    if not retrieve(subprog) then
+        lib_trace_proc_exit(3, "Main_Subprog");
+	return false;
+    elseif is_generic_unit(subprog) then
+        lib_trace_proc_exit(3, "Main_Subprog");
+	return false;
+    else
+	[code] := code_units(subprog);
+        lib_trace_proc_exit(3, "Main_Subprog");
+	if code = om then
+           return false;
+        else 
+           [ptyp, -, formals, -] := code;
+           return formals = [] and ptyp = "procedure";  
+        end if;
+    end if;
+end main_subprog;
+
+--S+ needs_body
+procedure needs_body(specname);
+ 
+-- Determine whether a package specification requires a body.
+-- This  will  be true if  the declarations include a procedure  or task
+-- specification, or a package specification that itself requires a body.
+ 
+lib_trace_proc_entry(3, "Needs_Body: " + str(specname(2)) );
+if is_generic_unit(specname) then
+-- Since generic have any empty CODE_UNITS we must retrieve the decls from
+-- the signature of the generic package.
+   [u_name, s_info, -] := unit_decl(specname) ;
+   [-,-,sig] := s_info(u_name) ;
+   [-,decls,-] := sig; 
+   return lib_trace_and_return(3, "Needs_Body",  
+       needs_body2(decls)) ;
+elseif (u := code_units(specname)) = [] or u = om then
+    lib_trace_proc_exit(3, "Needs_Body");
+    return false ;
+else 
+    [[-,name, decls]] := u ;
+    return lib_trace_and_return(3, "Needs_Body",  
+        needs_body2(decls)) ;
+end if;
+ 
+end needs_body;
+--S+ needs_body2
+procedure needs_body2(decls) ;
+ 
+-- search (recursively) the declarations in a package, for items that
+-- require a body.
+lib_trace_proc_entry(3, "Needs_Body2");
+for d in decls ? []  loop 
+    lib_trace(3,"declaration of " + str(d(1)) ) ;
+ 
+    if d(1) in {"proc", "task"} 
+    then
+        lib_trace_proc_exit(3, "Needs_Body2");
+        return true ;
+    -- Renaming declarations can appear in the visible part of a package.
+    -- They do not require the presence of a package body, and are recog-
+    -- nized by the presence of a body in the declaration.
+    elseif d(1) in { "procedure", "function"} 
+    and #d < 4 then				-- i.e. no body present.
+        lib_trace_proc_exit(3, "Needs_Body2");
+	return true ;
+    elseif d(1) = "package" then
+	[-,-,ds] := d ;
+	return lib_trace_and_return(3, "Needs_Body2", 
+            needs_body2(ds)) ;
+    elseif d(1) = "type" then
+        [-,-, t_former] := d;
+	if is_tuple(t_former) and t_former(1) = "task_former" then
+           lib_trace_proc_exit(3, "Needs_Body2");
+           return  true;
+        else null;
+	end if;
+    else null;
+    end if;
+
+end loop;
+lib_trace_proc_exit(3, "Needs_Body2"); 
+return false ;			-- If nothing was found.
+ 
+end needs_body2;
+ 
+--S+ replace_stubs
+procedure replace_stubs(name);
+  lib_trace_proc_entry(3, "Replace_Stubs");
+  -- In  a compilation unit, replace all stubs with the corresponding
+  -- proper bodies. Because of the rule on placements of stubs, the
+  -- replacement is done by looking only at the declarations at the top
+  -- level. However, a proper body may in turn contains stubs, so that
+  -- a recursive call is needed on the AIS of the stub itself. 
+    stb  := stubs(name);
+    unit := code_units(name);
+    if stb = {} or unit = []  or name in generic_units then
+        lib_trace_proc_exit(3, "Replace_Stubs");
+	return unit ;
+    else
+	case name(1) 
+	    when "subprog" => 
+		[[kind, nam, formals,blk]] := unit ;
+ 
+	    when "body" => 
+	        [[kind, nam, blk]] := unit ;
+ 
+	    otherwise =>
+                lib_trace_proc_exit(3, "Replace_Stubs");
+		return unit;
+	end case;
+ 
+	[decls, stmts, handler] := blk ;
+
+	new_decls := [];
+	 for d in decls loop
+ 
+	    [decl_kind, decl_nam, -] := d;
+ 
+	    if decl_kind = "SEPARATE" and decl_nam in stb then
+		 new_decls +:= replace_stubs(decl_nam);
+            else 
+		 new_decls with:= d;
+	    end if;
+ 
+	end loop;
+ 
+	-- if stb /= {} then
+	--     TO_LIST('Missing stubs in ' + formatted_name(name)(2));
+	-- end if;
+ 
+	blk := [new_decls, stmts, handler] ;
+ 
+	case name(1) 
+ 
+	    when "subprog" => 
+		unit := [[kind, nam, formals, blk ]] ;
+ 
+	    when "body" => 
+		unit := [[kind, nam, blk]] ;
+	end case;
+    end if;
+    lib_trace_proc_exit(3, "Replace_Stubs");
+    return unit ;
+end replace_stubs;
+--S+ replace_generics
+procedure replace_generics(tree) ;
+ 
+-- This procedure completes the instantiation of generic objects, in
+-- cases where an instantiation preceded the generic body.
+
+lib_trace_proc_entry(3, "Replace_Generics");
+if not is_tuple(tree) then
+    lib_trace_proc_exit(3, "Replace_Generics");
+    return tree ;
+else
+    case tree(1) 
+ 
+    when "subprogram_instance" => 
+	[-, gen_name, rename_map, must_constrain, p_spans ] := tree ;
+ 
+	-- Find generic body, and apply renamings to it.
+	-- Look for body first, and spec if body cannot be found.
+	if (exists unit in domain unit_decl |
+		(symbtab := unit_decl(unit) (2)) /= om
+		 and (sym := symbtab(gen_name)) /= om
+		 and (sym(1) = "generic_procedure" or 
+		      sym(1) = "generic_function"))
+	or (exists unit in domain unit_decl |
+	    	(symbtab := unit_decl(unit) (2)) /= om
+		 and (sym := symbtab(gen_name)) /= om
+		 and (sym(1) = "generic_procedure_spec" or 
+		      sym(1) = "generic_function_spec"))
+	then
+	    [nat, typ, sig,-] := sym;
+	    [-,-, s_body, locals] := sig ;
+	    if s_body = om then
+                no_bind_error := false;
+	        to_list( "missing body for instantiation of "
+					+ source_name(gen_name)) ;
+                lib_trace_proc_exit(3, "Replace_Generics");
+	        return tree ;
+	    end if;
+ 
+	    locals ?:= {} ;
+	    renamings := {[old_n, gen_name + old_n] : old_n in locals |
+		   rename_map(old_n) = om} + rename_map ;
+	    check_generic_use(must_constrain, symbtab, p_spans) ;
+            s_body(1) := replace_generic_stubs(s_body(1)) ;
+   	    return lib_trace_and_return(3, "Replace_Generics", 
+                          replace(replace_generics(s_body), renamings)) ;  
+	else
+	    -- Generic object is not in any current unit.
+            no_bind_error := false;
+	    to_list("missing generic unit " + gen_name) ;
+            lib_trace_proc_exit(3, "Replace_Generics");
+	    return tree ;
+	end if;
+ 
+    when "package_instance" => 
+	[-, gen_name, instantiation, rename_map,
+			must_constrain, p_spans] := tree ;
+	-- Find generic body, and apply renamings to it.
+	-- Look for body first, and spec if body cannot be found.
+	if (exists unit in domain unit_decl |
+		(symbtab := unit_decl(unit) (2)) /= om
+		 and (sym := symbtab(gen_name)) /= om
+		 and sym(1) = "generic_package")
+ 
+	or (exists unit in domain unit_decl |
+		(symbtab := unit_decl(unit) (2)) /= om
+		 and (sym := symbtab(gen_name)) /= om
+		 and sym(1) = "generic_package_spec")
+	then
+	    [nat, typ, sig,-] := sym ;
+	    [-, p_specs, p_body, locals] := sig ;
+	    locals ?:= {} ;
+	    renamings := {[old_n, gen_name + old_n] : old_n in locals |
+		   rename_map(old_n) = om} + rename_map ;
+	    check_generic_use(must_constrain, symbtab, p_spans) ;
+	    if p_body /= om then
+	        [decls, stmts, except] := p_body ;
+	    else
+                if needs_body2(p_specs) then
+                    no_bind_error := false;
+                    to_list("missing body for instantiation of "
+                                              + source_name(gen_name)) ;
+                end if;
+
+		decls := except := [] ;
+		stmts := [["end"]] ;				
+	    end if;
+	    decls := instantiation + replace_generic_stubs(decls) ;
+	    new_body := [decls, stmts, except] ;
+ 
+ 
+	elseif not needs_body2(p_specs) then			
+	       new_body := [instantiation, [["end"]], []] ;	
+ 
+	else
+	    -- Generic object is not in any current unit.
+            no_bind_error := false;
+	    to_list("missing body for instantiation of "+ gen_name) ;
+	    new_body := [] ;
+	end if;
+	return lib_trace_and_return(3, "Replace_Generics", 
+             [["package_body",rename_map(gen_name),
+	      replace(replace_generics(new_body), renamings)]]) ;
+    otherwise =>
+        new_tree := [] ;
+        for t in tree loop 
+	   if is_tuple(t) and t(1) = "package_instance" then
+	      new_tree +:= replace_generics(t) ;
+           else new_tree with:= replace_generics(t) ;
+	   end if;
+        end loop;
+        lib_trace_proc_exit(3, "Replace_Generics");
+        return new_tree ;
+ 
+    end case;
+ 
+end if;
+lib_trace_proc_exit(3, "Replace_Generics"); 
+end replace_generics;
+procedure has_generics(unit) ;
+return is_tuple(unit) 
+	and ((unit(1) = "package_instance" or unit(1) = "subprogram_instance")
+	    or (exists t in unit | has_generics(t))) ;
+end has_generics; 
+procedure replace_generic_stubs(decls) ;
+-- If a generic body contains stubs, replace them by their proper bodies before
+-- completing the instantiation of the generic.
+-- Here we only modify the AIS of the generic. a complete treatment should
+-- include as well the instantiation of the symbol tables of the proper bodies.
+
+if exists d in decls | d(1) = "SEPARATE" then
+    new_decls := [] ;
+    for d in decls loop 
+       if d(1)  = "SEPARATE" then
+	    new_decls +:= replace_stubs(d(2));
+       else
+            new_decls with:= d;
+       end if;
+    end loop;
+    return new_decls ;
+else 
+    return decls ;
+end if;
+end replace_generic_stubs;
+--S+ check_generic_usage
+procedure check_generic_use(must_constrain, symbtab, p_spans) ;
+ 
+-- The types in must_constrain have been instantiated with unconstrained
+-- types. Verify  that these  types have not been used  in a declarative
+-- context requiring a constrained type, and flagged as such in sem.
+ 
+for t in must_constrain loop 
+    [nat, typ, sig, generic_attributes] := symbtab(t) ;
+    generic_attributes ?:= {} ;
+    if "$constrain" in generic_attributes then
+	no_bind_error := false ;
+	[[line_no,-],-] := p_spans ;
+	to_list("*** Error in instantiation at line " + str(line_no) ) ;
+	to_list(" usage of generic private type " + source_name(t)
+        +  " requires instantiation with constrained type"
+        +  " (RM 12.3.2)" ) ;
+    end if;
+end loop;
+ 
+end check_generic_use;
+ 
+procedure source_name(unique_nam) ;
+
+-- Obtain source name of a given unique name, for diagnostic purposes.
+
+if not is_string(unique_nam) then 
+   return ""; 
+end if;
+
+old_name := unique_nam ;
+while ((old := sbreak(old_name, ".")) /= om) loop
+  old_name := old_name(2..) ;
+end loop;
+
+old := sbreak(old_name,"#") ;
+return old ? old_name ;
+
+end source_name;
+
+--S+ replace
+procedure replace(tree, rename_map) ;
+ 
+-- General substitution procedure on code fragments. Used by generic
+-- instantiation procedure.
+ 
+return
+    if     is_string(tree) then rename_map(tree) ? tree
+    elseif is_tuple(tree)  then
+	[replace(leaf, rename_map) : leaf in tree]
+    elseif is_set(tree)    then
+	{replace(item, rename_map) : item in tree}
+    else tree
+end if;
+ 
+end replace;
+--S+ stubs
+procedure stubs(lib_name);
+    lib_trace_proc_entry(3, "Stubs");
+    if is_package_spec(lib_name) or is_subprogram_spec(lib_name) then
+	stublist := {};
+    else
+	-- stublist := {n : n in domain STUB_ENV | n(3..) = lib_name(2..)};
+	stublist := {n : n in domain lib_stub | n(3..) = lib_name(2..)};
+    end if;
+ 
+    lib_trace(3,"lib_name:" + str(lib_name) + ", stublist: " + str(stublist) );
+    lib_trace_proc_exit(3, "Stubs"); 
+    return stublist;
+ 
+end stubs;
+ 
+--S+ ancestor
+procedure ancestor(lib_name);
+ 
+  -- If lib_name is a subunit, returns the name of the subunit's
+  -- eldest ancestor.  This ancestor, if in the library, should
+  -- have already been entered into the set to_bind.
+ 
+    if is_libunit(lib_name) then
+	return lib_name;
+    elseif exists anc in to_bind | is_libunit(anc)
+	and anc(1) in {"body", "subprog"}
+	and anc(2) = lib_name(#lib_name)
+    then
+	return anc;
+    else
+	to_list("  No ancestor for subunit " + str(lib_name) );
+	return lib_name;
+    end if;
+end ancestor;
+--S+ formatted_name
+procedure formatted_name(unit);
+const
+    unit_kind := {["spec","package spec"], 
+		  ["body","package body"],
+		  ["subprog spec", "subprogram spec"],
+	          ["subprog","subprogram"],
+		  ["spec instance", "package"]};
+    if #unit = 2 then 
+	formatted_tuple := [unit_kind(unit(1)), unit(2)];
+    else
+       formatted_tuple :=  ["proper body",
+            ""+/[unit(i) + "." : i in [#unit,#unit-1..3]] + unit(2)];
+    end if;
+    return("  " + rpad(formatted_tuple(1),12) + " " + 
+		  rpad(formatted_tuple(2),25));
+end formatted_name;
+--S+intval
+procedure intval(a);
+    const
+	digit := {["1",1],["2",2],["3",3],["4",4],["5",5],
+		 ["6",6],["7",7],["8",8],["9",9],["0",0],[" ",0]};
+    n := 0;
+    for i in [1..#a] loop  n := n * 10 + digit(a(i)); end loop;
+    return n;
+end intval;
+
+--S+ include_ais
+procedure include_ais(file);
+ 
+--
+--   There is one implementation defined pragma that may optionally be
+--   used in conjunction with separate compilation:
+--
+--	pragma INCLUDE_CODE("filename1","filename2"...);
+--
+--   This reads the named AIS files and inserts the library names of
+--   their compilation units into the current library, replacing existing
+--   units if duplicate names are encountered.
+ 
+    remember := lib_option;
+    lib_option := false;
+    [units,stub_envs] := read_ais(file);
+    lib_option := remember;
+ 
+
+    for unit in units loop 
+	if lib_unit(unit) /= om and lib_unit(unit) /= file then
+	     to_list("  " + formatted_name(unit)(2) +
+		    "replaced from AIS file " + file);
+        end if;
+	lib_unit(unit) := file;
+     end loop;
+     for env in stub_envs loop 
+	 lib_stub(env) := file;
+     end loop;
+ 
+end include_ais;
+
+
+procedure remove_same_name(name);
+-- remove references in library maps to previously compiled units with
+-- the same name, except for specs if name is the corresponding body.
+-- returns the set of deleted names.
+   lib_trace_proc_entry(3, "Remove_Same_Name: " + str(name) );                      
+   same_name := {};
+   if is_package_body(name) then
+      to_keep := "spec";
+   elseif is_subprogram_body(name) then
+      to_keep := "subprog spec";
+   else
+      to_keep := "";
+   end if;
+
+    for u_data = lib_unit(unam) | unam(2..) = name(2..) and 
+                                         unam(1)  /= to_keep 
+   loop                                                     
+      same_name with:= unam;
+   end loop;
+                               
+  same_name with:= name;
+  dependent := {};
+
+   for unam in domain lib_unit loop
+     if (unam(2..) = name(2..)) and
+	(unam(1) /= to_keep) then
+	same_name with:= unam;
+     end if;
+  end loop;
+
+   for unam in same_name loop
+     dependent := dependent + remove_dependent(unam);
+  end loop;
+
+   same_name less:= name;
+   obsolete_units := same_name + dependent;
+
+   obsolete_stubs := {};
+    for unam in domain lib_stub loop
+      if stub_parent(unam) in obsolete_units then
+     	obsolete_stubs with:= unam;
+      end if;
+   end loop;
+
+    for unam in obsolete_stubs loop
+      lib_stub(unam) := om;
+      stub_parent(unam) := om;
+   end loop;
+   lib_trace_proc_exit(3, "Remove_Same_Name: " + str(name) );                      
+   return obsolete_units;
+end remove_same_name;
+
+--S+ remove_dependent
+procedure remove_dependent(name);
+-- remove references in library maps to units depending directly or
+-- indirectly on the give unit.
+-- returns the set of deleted names.
+   lib_trace_proc_entry(3, "Remove_Dependent: " + str(name) );
+   if is_package_body(name) or 
+      (is_subprogram_body(name) and 
+       ["subprog spec"] + name(2..) in domain lib_unit)
+   then
+      -- Package body and subprog body with separate spec. Only subunits
+      -- may depend on such things, plus units naming them in pragma
+      -- elaborate. Only subunits must be deleted.
+      dependent:= {unam: unam in domain lib_unit 
+			| is_subunit(unam) and name in pre_comp(unam)};
+   else
+      dependent:= {unam: unam in domain lib_unit 
+			| name in pre_comp(unam)};
+   end if;
+   new_dep := {};
+
+       for unam in dependent loop
+	 new_dep +:= remove_dependent(unam);
+      end loop;
+
+   lib_trace_proc_entry(3, "Remove_Dependent");
+   return dependent + new_dep;
+
+end remove_dependent;
+
+procedure lib_trace_and_return(level, name, return_value);
+-- In-line call of LIB_TRACE_PROC_EXIT, 
+-- but this way we can evaluate the return_value BEFORE
+-- we print the exit tracing for the first procedure.
+-- 
+if cdebug4 > level then 
+    printa(errfile, "EXIT    :", name) ;
+end if;
+
+return return_value;
+end lib_trace_and_return;
+
+end adalib;
+

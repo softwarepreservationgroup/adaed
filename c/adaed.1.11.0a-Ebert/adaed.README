@@ -1,0 +1,49 @@
+% this is simple -*- text -*-
+
+This is the Linux port of AdaEd V1.11.0a+, a freely distributable Ada
+*interpreter*. The tarfile adaed.tar.Z contains the necessairy
+binaries and a Ada-library with the predefined packages. 
+
+DOCUMENTATION
+
+The man pages explain very well the usage of AdaEd. I strongly recommend 
+the definition of the environment varable ADALIB.
+
+For further doc about Ada see comp.lang.ada. A FAQ will sonn be available.
+
+
+INSTALLATION
+
+go to /usr and untar the file. This will give you these files:
+
+local/bin/adabind	-- Ada linker
+local/bin/adacomp	-- front end
+local/bin/adaexec	-- interpreter
+local/bin/adalib	-- library manager
+local/lib/predef.axq	\
+local/lib/predef.lib	 - lib of predefined packages
+local/lib/predef.trc	/
+local/lib/adabind	-- a link to /usr/local/bin/adabind
+local/lib/adagen	\
+local/lib/adaprs	 - "sub"programs of the front end 
+local/lib/adasem	/
+man/manl/adabind.l	\
+man/manl/adacomp.l	 \
+man/manl/adaed.l	  - man pages
+man/manl/adaexec.l	 /
+man/manl/adalib.l	/
+README			-- README from NYU
+appendf.doc		-- Appendix F
+ada.diff		-- context diff between Linux port and
+			-- cs.nyu.edu:/pub/adaed/Adaed-1.11.0a+.tar.Z
+
+
+Rolf
+
+-----------------------------------------------------------------------------
+Rolf Ebert     Groupe Informatique et Systemes Energetiques     GISE EMP-ENPC
+Tel: +33 1 43044098 app 3475 FAX: +33 1 43046364            La Courtine Cedex
+Internet: ebert@enpc.fr                                F-93167 Noisy le Grand
+-----------------------------------------------------------------------------
+
+

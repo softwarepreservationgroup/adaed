@@ -1,0 +1,119 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_globals_.stl,v 1.1 91/01/02 15:25:49 banner Exp $
+--
+
+         ---------------------------------------
+         --                                    -
+         --   EXECUTABLE SEMANTIC MODEL FOR    -
+         --                                    -
+         --            A    D    A             -
+         --                                    -
+         --                                    -
+         --                                    -
+         --            written by              -
+         --                                    -
+         --            ADA Project             -
+         --         Courant Institute          -
+         --        New York University         -
+         --         251 Mercer Street,         -
+         --         New York, NY 10012         -
+         --                                    -
+         ---------------------------------------
+
+package int_globals;
+--
+--T+ Global declarations and definitions
+
+sel
+   location(2),
+   opcode(1),
+   type_mark(1),
+   i_type_precision(4),
+   emapt(1),
+   stsqt(2),
+   valstackt(3),
+   handlert(4),
+   tasks_declaredt(5),
+   proc_namet(6);
+
+--S+ Constants
+const undef_prio := 9;
+const max_envstack_size := 120;
+
+const 
+   boolean_false := 0,
+   boolean_true  := 1,
+
+   float_0 := [0,[0],0],
+   fix_0   := [0,[0]],
+
+   delay_small := [1, 100],
+   fixed_small := [1, 1073741824],
+
+   rat_0         := [0,1],
+   rat_1         := [1,1],
+   rat_2         := [2,1],
+   rat_10        := [10,1],
+   rat_tenth     := [1,10],
+   rat_infinity  := [1,0],
+
+   idle 	:= "IDLE",	-- Idle task
+   maintask 	:= "MAINTASK";	-- Logical name of the Main Task
+
+--S+ Variables 
+var
+    emap,
+    stsq,
+    curtask,
+    handler,
+    contents,
+    tasks_declared,
+    proc_name,
+    valstack,
+    envstackt,
+    global_emap,    -- global EMAP at initialization  
+    debugging,
+    current_time,
+    last_clock_tick,
+    last_clock_tick_curtask,
+    next_interrupt_time,
+    task_counts,
+    current_stmt_count,
+    qual_map,
+    taskname_map,
+    null_,
+    full_taskname_map,
+    memory_allocated, -- used to restrict memory usage to predefined limit.
+    representation, 
+    object_representation, -- used to store representation of object
+    tasks_with_raised_exc,
+    ais_prio,
+    ais_code,
+    task_prio,
+    strace,
+        SELECT_MODE,
+        TIME_SLICE,
+        SIMULATE_WAIT,
+        STMTCOUNT,      -- Count of number of statements executed
+        UNINITIALIZED,
+        WAITING_TASKS,
+        READY_TASKS,
+        ACTIVE_TASKS,
+        HELD_TASKS,
+        OPEN_ENTRIES,
+        DELAYED_TASKS,
+        ENTERING,
+        TERMINATED_TASKS,
+        COMPLETED_TASKS,
+        ABNORMAL_TASKS,
+        ACTIVATING_SUBTASKS,
+        TERMINATABLE,
+        MASTER,
+        TASKENV,
+	task_clocks,
+        DELAY_TIMER,
+        CLOCK_TICK,
+        CLOCK_INTERRUPT,
+        SYSTEM_CLOCK;
+
+end int_globals; 

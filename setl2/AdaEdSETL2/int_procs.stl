@@ -1,0 +1,683 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_procs.stl,v 1.1 91/01/02 15:26:11 banner Exp $
+--
+package body int_procs;
+
+  use globals;
+  use int_globals;
+  use int_util;
+
+--T+ SCOPE PROCEDURES (Chap. 6)
+--S+ BIND_ENTER 
+procedure bind_enter(rd formals, rw called_emap, rd caller_valstack);
+--
+-- Used  to  bind actual arguments, which have been evaluated and stored 
+-- on the VALSTACK of the  caller, to the formals of a called  procedure 
+-- or entry.  Parameter formals is the formal parameter list obtained 
+-- from the procedure's IVALUE, caller_valstack is the VALSTACK of the 
+-- caller and called_emap is the environment map of the called procedure
+-- or entry. 
+--        
+--   
+   for i in [1..#formals] loop
+    [formalname, -, -] := formals(i);
+    arg_obj := caller_valstack(#caller_valstack - i + 1);
+    called_emap(formalname) := arg_obj;
+  end loop;
+end bind_enter;
+--S+ BIND_EXIT
+procedure bind_exit(rd formals, rw caller_valstk);
+--
+-- Called  on exit from  an entry or procedure to
+-- unstack the no longer needed arguments from VALSTACK.
+--
+  caller_valstk(#caller_valstk - #formals + 1 ..) := [];
+end bind_exit;
+--T+ELABORATE_CALL 
+procedure elaborate_call(actuals, formals, operation) ;
+
+-- Add to a subprogram or entry call the necessary prelude and postlude
+-- that validate parameters on entry and exit.
+
+[pre_stmt_list, post_stmt_list] := param_eval(actuals, formals) ;
+exec(pre_stmt_list + [ operation ] + post_stmt_list );
+
+end elaborate_call;
+--T+ PARAM_EVAL (Chap.6)
+procedure param_eval(actuals, formals) ;
+int_trace("PARAM_EVAL","actuals formals follow:");
+int_trace(actuals,formals);
+--
+--  Sets up evaluation of actual parameter lists. Actuals is a list of 
+--  o_exprs for the actual parameters. Formals is the signature of the
+--  procedure being called. Operation is an interpreter statement to be
+--  executed when the parameters are evalated onto the VALSTACK.
+--
+--
+-- Semantics of parameter passing in the interpreter:
+--
+--        At the interface between the calling procedure and the called 
+--   procedure (or entry) several distinct operations may be required
+--   by the semantics of ADA beyond the simple identification of the 
+--   formal with the actual parameter (here called 'binding'). These
+--   include constraint checking, type conversions, and for records,
+--   access types and arrays, the imposition of the constraints of the
+--   actual parameter on the formal parameter. 
+--
+--       In order to conveniently perform the various combinations of 
+--   operations required, the operation supplied as a parameter,
+--   ( e.g. a 'call__' or a 'ecall_' statement, which use BIND_ENTER
+--   to do the binding) will be surrounded by various auxiliary 
+--   statements. Binding is done by reference for records and arrays,
+--   and by value for scalars and access parameters. In those cases where
+--   semantics require call by value/return, the auxiliary statements
+--   will create temporary variables into which the value of the actual
+--   parameter will be copied, and the call will be by reference to these
+--   temporaries. Each of the temporaries or actuals (as applicable) is 
+--   evaluated and placed on VALSTACK. After the evaluation sequence,
+--   the first parameter will be on top of the stack, and the other
+--   parameters will be below it, in order.
+
+--
+-- Skeleton statement sequences for the various cases are expressed
+-- below: (Note Tx stands for temporary x, and similarly for Ty)
+--
+--   Scalar in, unconstrained formal:
+--
+--     ['object', Tx, arg]
+--     ['oeval_', Tx]
+--     operation  
+--
+--   Scalar in, constrained formal:
+--
+--     ['object', Tx, ['qual_range', formal_type, arg]]
+--     ['oeval_', Tx]
+--     operation
+--
+--   Scalar out :
+--
+--     ['bind', Ty, arg]
+--     ['object', Tx, formal_type]
+--     ['oeval_', Tx]
+--     operation
+--     [':=', Ty, ['qual_range', actual_type, Tx]]
+--
+--   Scalar in out :
+--
+--     ['bind', Ty, ['qual_range', formal_type, arg]]
+--     ['object', Tx, Ty]
+--     ['oeval_', Tx]
+--     operation
+--     [':=', Ty, ['qual_range', actual_type, Tx]]
+--
+--   Note: for scalar parameters where a type conversion is required,
+--     the actual parameter will appear as a 'convert' operation in 
+--     actuals. In these cases, the above sequences will be modified to
+--     contain the needed 'convert' operations on entry and/or exit from
+--     the called procedure.
+--
+--   Arrays and records in, unconstrained formal:
+--
+--     ['oeval_', arg]
+--     operation
+--
+--   Arrays in, constrained formal:
+--
+--     ['oeval_', [['qual_index', formal_type, arg]]]
+--     operation
+--
+--   Records in, constrained formal:
+--
+--     ['oeval_', [['qual_discr', formal_type, arg]]]
+--     operation
+--
+--   Arrays or records out or in out, unconstrained formal, constrained 
+--   actual:
+--
+--     ['oeval_', arg]
+--     operation
+--
+--   Records out or in out, unconstrained formal, unconstrained actual:
+--   (An optimization - can safely use the next pattern)
+--
+--     ['oeval_', arg]
+--     operation
+--
+--   Records out or in out, constrained formal, unconstrained actual:
+--
+--     ['oeval_', [['make_constrained', ['qual_discr', 
+--         formal_type, arg], formal_type]]]
+--     operation
+--
+--   Arrays out or in out, constrained formal, constrained actual:
+--
+--     ['oeval_', [['qual_index', formal_type, arg]]]
+--     operation
+--
+--   Records out or in out, constrained formal, constrained actual:
+--  
+--     ['oeval_', [['qual_discr', formal_type, arg]]]
+--     operation
+--
+--   Access types:
+--         On entry to a procedure, an access type parameter of mode in
+--      or inout appears as a convert operation of the form:
+--
+--      ['convert', actual_object_type, formal_object_type, access_argument]
+--
+--      to facilitate constraint checks. This convert will generate
+--      a 'qual_access', which will in turn execute the appropriate
+--      'qual_discr' for a record, 'qual_index' for an array, or
+--      'qual_range' for a scalar.
+--
+--
+  param_list := [];
+  pre_stmt_list := [];
+  post_stmt_list := [];
+
+   for fp in formals loop
+    [fname, fmode, ftype] := fp;
+
+--   type name must be supplied for text_io - no corresponding actual
+
+  if ftype = "$type" then 
+        param_list with:= fname;
+  
+  else
+      actual fromb actuals;
+      [kind, atype, -, arg] := actual ;
+      f_itype := get_itype(ftype);
+    
+      case f_itype.type_mark 
+--S+ Scalar types
+      when "integer", "float", "fixed", "enum" =>  
+
+--  create temporary variables for parameter passing by value.
+
+        temp_in := "$temp" + newat_str() ;
+        param_list with := temp_in;
+        if fmode /= "in" then
+              temp_out := "$temp" + newat_str() ;
+        end if;
+
+
+        case fmode 
+
+--H+ Scalar 'in' parameter
+          when "in" => 
+	    if atype /= ftype then
+                arg := ["qual_range", ftype, arg];
+	    end if;
+            pre_stmt_list with:= ["object", temp_in, ftype, arg]; 
+
+--H+ Scalar 'out' parameter
+          when "out" => 
+           if kind = "convert" then
+	       --  Conversion on exit.
+               post_stmt := [":=", temp_out, ["qual_range", atype, 
+				["convert", ftype, atype, temp_in]]];
+
+	   elseif  atype /= ftype then
+		-- Constraint check on exit.
+                post_stmt := [":=", temp_out, 
+				["qual_range", atype, temp_in]];
+	   else
+                post_stmt := [":=", temp_out, temp_in];
+	    end if;
+
+            init_obj := om;
+            pre_stmt_list +:= [ ["bind", temp_out, arg],
+                 	  ["object", temp_in, ftype, init_obj] ]; 
+            post_stmt_list with:= post_stmt ;
+
+--H+ Scalar 'inout' parameter
+          when "inout" => 
+           if kind = "convert" then
+	       -- The actual is a conversion (to the formal type).
+	       --  Conversions and checks needed on exit and entry.
+	       init_obj  := ["qual_range", ftype, actual] ; 
+               post_stmt := [":=", temp_out, ["qual_range", atype, 
+				["convert", ftype, atype, temp_in]]];
+
+	   elseif  atype /= ftype then
+		-- Must also perform constraint check on entry and exit.
+	        init_obj  := ["qual_range", ftype, arg] ;
+                post_stmt := [":=", temp_out, ["qual_range", atype, temp_in]];
+
+	   else
+	        init_obj   := temp_out ;
+                post_stmt  := [":=", temp_out, temp_in];
+	    end if;
+
+            pre_stmt_list +:= [ ["bind", temp_out, arg],
+                 	  ["object", temp_in, ftype, init_obj] ]; 
+            post_stmt_list with:= post_stmt ;
+
+          otherwise =>
+            system_error("PARAM_EVAL");
+          end case;
+
+--S+ Task
+      when "task" => 
+        temp_in := "$temp" + newat_str() ;
+        param_list with := temp_in;
+        pre_stmt_list with:= ["object", temp_in, ftype, arg];
+--S+ Array      
+      when "array" => 
+        [-, index_types, element_type, is_constrained] := f_itype ;
+	case fmode 
+	when "in" => 
+
+	    if is_constrained and atype /= ftype then	-- Apply constraint.
+	           pre_stmt_list +:= [["veval_", 
+				["qual_index", ftype, arg]], ["pop_"]] ;
+            end if;
+            if is_oexpr(arg)  then       -- expression without constraints. 
+           	param_list with:= arg;
+            else
+	   	-- The argument is an array aggregate, array-valued function 
+	   	-- call, or expression. We construct an object for it.
+
+           	temp_obj := "$temp" + newat_str() ;
+                pre_stmt_list with:= ["constant", temp_obj, ftype,arg]; 
+           	param_list with:= temp_obj;
+            end if;
+
+	when "out", "inout" => 
+
+            if kind = "convert" then
+		-- Perform the conversion. Then set the bounds of the actual
+		-- to those of the formal. Reverse this on exit.
+
+	        pre_stmt_list +:= [["oeval_", arg],
+		       	  	["oeval_",["convert_array", atype, ftype]]]; 
+		post_stmt_list +:= [["oeval_", arg],
+		          	["oeval_", ["set_bounds", atype]]] ;
+
+	    elseif is_constrained and atype /= ftype then
+		-- It is sufficient to check that the bounds are correct
+		-- on entry. 
+	        pre_stmt_list +:= [["veval_", 
+				["qual_index", ftype, arg]], ["pop_"]] ;
+
+            end if;
+            param_list with:= arg;
+
+        end case;
+--S+ Access
+      when "access" =>   
+                  
+          temp_in := "$temp" + newat_str() ;
+          param_list with := temp_in;
+          if fmode /= "in" then
+                temp_out := "$temp" + newat_str() ;
+          end if;
+
+          [-, formal_obj_type] := f_itype;
+	  formal_obj_itype := get_itype(formal_obj_type);
+          actual_qual      := qual_map(formal_obj_itype.type_mark);
+	  f_constrained    := is_constrained_access(formal_obj_type);
+
+          case fmode 
+
+          when "in" => 
+            if present(actual_qual) and f_constrained and a_type /= ftype
+    	    then     				-- constraint on entry.
+            arg := ["qual_access", formal_obj_type, arg, actual_qual];
+            end if;
+
+            pre_stmt_list with:= ["object", temp_in, ftype, arg];
+	  
+	  when "out" => 
+            [-, actual_obj_type] := get_itype(atype);
+	    a_constrained := is_constrained_access(actual_obj_type);
+            if present(actual_qual)  and a_constrained and atype /= ftype then
+	       -- Apply constraint on exit.
+               post_stmt_list with:= ["veval_",
+               ["qual_access", actual_obj_type, temp_in,actual_qual] ];
+            end if;
+
+	    init_obj := om ;
+            pre_stmt_list +:= [ ["bind", temp_out, arg],
+                 	    ["object", temp_in, ftype, init_obj] ];	 
+
+            post_stmt_list with:= [":=", temp_out, temp_in];
+
+	  when "inout" => 
+            if present(actual_qual) then     -- constraint on exit, and on
+               if f_constrained then	     -- entry if formal constrained.
+                  pre_stmt_list with := ["veval_",
+                    ["qual_access", formal_obj_type, arg, actual_qual]];
+               end if;
+               [-, actual_obj_type] := get_itype(atype);
+               if is_constrained_access(actual_obj_type) then
+                   post_stmt_list with:= ["veval_",
+                   ["qual_access", actual_obj_type, temp_in, actual_qual]];
+               end if;
+            end if;
+
+	    init_obj := temp_out ;
+            pre_stmt_list +:= [ ["bind", temp_out, arg],
+                 	      ["object", temp_in, ftype, init_obj] ] ;
+
+            post_stmt_list with:= [":=", temp_out, temp_in];
+
+          otherwise =>
+            system_error("PARAM_EVAL");
+          end case;
+--S+ Record
+      when "record" => 
+       [-, -, constr_disc_list] := f_itype ;
+        case fmode 
+
+        when "in" => 
+
+	  if (present(constr_disc_list) and atype /= ftype)
+          then
+	      pre_stmt_list +:= [["veval_", 
+				["qual_discr", ftype, arg]], ["pop_"]] ;
+          end if;
+
+          if is_oexpr(arg) then		
+             param_list with:= arg;
+
+	  else
+	    -- The argument is a record aggregate or record-valued function
+	    -- call. We construct an object for it.
+
+            temp_obj := "$temp" + newat_str() ;
+            pre_stmt_list with:= ["constant", temp_obj, ftype, arg];
+            param_list with:= temp_obj;
+          end if;
+
+        when "out", "inout" => 
+          if present(constr_disc_list)  then
+	      -- The object needs to be marked as constrained for the
+	      -- duration of the call.
+              param_list with:= ["make_constrained", 
+			         ["qual_discr", ftype, arg], ftype] ;
+          else
+              param_list with:= arg;
+          end if;
+        otherwise =>
+          system_error("PARAM_EVAL");
+        end case;
+
+      otherwise =>
+
+        system_error("PARAM_EVAL");
+
+      end case;
+
+    end if;
+
+  end loop;
+
+-- 
+--  Finally add to statement sequence the actual parameter elaboration.
+--
+ while param_list /= [] loop
+    pre_stmt_list with := ["oeval_", param frome param_list];
+end loop;
+
+return [pre_stmt_list, post_stmt_list] ;
+
+end param_eval;
+--S+ is_oexpr
+procedure is_oexpr(xpr);
+ 
+-- Verify that an expression is a valid left hand side
+-- Used  in PARAM_EVAL 
+
+   if is_simple_name(xpr) then 
+      return true;
+   elseif  not is_tuple(xpr)  then
+      return false;
+   else
+      case xpr.opcode 
+      when "[]", "[..]", "." => 
+         return is_oexpr(xpr(2));
+      when "@" => 
+         return true;
+      otherwise =>
+         return false;
+      end case;
+   end if;
+		
+end is_oexpr;
+
+procedure is_constrained_access(desig_type) ;
+-- Determine whether the designated type of an access type is
+-- constrained.
+
+desig_itype := get_itype(desig_type);
+case desig_itype.type_mark 
+when "array" =>   [-, -, -, is_constrained] := desig_itype ;
+
+when "record" =>  [-,-, constr_disc_list] := desig_itype ;
+            is_constrained := present(constr_disc_list) ; 
+
+otherwise =>        is_constrained := false ;
+end case;
+
+return is_constrained;
+end is_constrained_access;
+
+procedure convert_array(array, from_type, to_type) ;
+
+-- Array conversion can occur in the context of an expression, or as the
+-- actual in a call. In the first case we convert an aggregate, in the
+-- second an object. The code for both is almost identical, and is handled
+-- jointly in this procedure.
+
+-- Component types must have the same constraints.
+[-, index_types, t_comp_type, t_constrained] := get_itype(to_type) ;
+[-, -, f_comp_type, -] := get_itype(from_type) ;
+
+if not same_bounds(f_comp_type, t_comp_type) then
+    exec([["raise", "CONSTRAINT_ERROR", "array conversion(1)"]]) ;
+    return ;
+end if;
+
+-- Collect actual bounds of object. For multidimensional null arrays, only
+-- the bounds up to the first null dimension are available.
+obj_bounds := [] ;
+seq := [array] ;
+for i in [1..#index_types] loop 
+    [-, seq, lb, ub] := seq(1) ;		-- representative element.
+
+    if array.opcode = "array_iobject" then
+       -- dereference the bounds.
+       obj_bounds with:= [contents(lb), contents(ub)] ;
+    else
+       -- get actual value of bounds from aggregate.
+       obj_bounds with:= [lb, ub] ;
+    end if;
+    if seq = [] then -- Case of null aggregate.
+        exit; 
+    end if;		
+
+end loop;
+
+-- Collect bounds of indices of target type.
+type_bounds := get_array_bounds(index_types) ;
+
+if not t_constrained then
+   -- unconstrained type. Bounds of non-null index  must belong to type.
+   -- See AI-00313 for general discussion.
+   for [o_lo, o_hi] = obj_bounds(i) loop 
+     [t_lo, t_hi] := type_bounds(i) ;
+     if (o_lo <= o_hi) and (o_lo < t_lo or o_hi > t_hi) then
+        exec([["raise", "CONSTRAINT_ERROR", "array conversion(2)"]]) ;
+        return ;
+     end if;
+   end loop;
+else
+   -- Constrained array. Number of components in each dimension must match,
+   -- unless both are null arrays.
+   if  (exists [o_lo, o_hi] in obj_bounds  | o_lo > o_hi) 
+   and (exists [t_lo, t_hi] in type_bounds | t_lo > t_hi) then
+     null ;			-- both null.
+   else 
+     for [o_lo, o_hi] = obj_bounds(i) loop 
+        [t_lo, t_hi] := type_bounds(i) ;
+        if o_hi - o_lo /= t_hi - t_lo then 
+           exec([["raise", "CONSTRAINT_ERROR", "array conversion(3)"]]) ;
+	   return ;
+	end if;
+     end loop;
+   end if;
+end if;
+
+-- If arrays are convertible, set the bounds to be those of the target
+-- type. A standard implementation would likely copy the dope vector for 
+-- the array. Here we modify the bounds carried with the array object.
+
+set_bounds(array, to_type) ;
+end convert_array;
+
+--S+ set_bounds
+procedure set_bounds(array, to_type) ;
+
+[-, index_types, -, t_constrained] := get_itype(to_type) ;
+bounds := get_array_bounds(index_types) ;
+
+if array.opcode = "array_iobject" then
+    if t_constrained then
+       set_obj_bounds([array], bounds) ;
+    else
+       null;	-- unconstrained context: array retains its bounds.
+    end if;
+else
+    if t_constrained then
+       push(set_aggregate_bounds(array, bounds)) ;
+    else
+       push(array) ;
+    end if;
+end if;
+
+end set_bounds;
+
+--S+ set_obj_bounds
+procedure set_obj_bounds(array, bounds) ;
+-- Traverse recursively an array object, to set its bounds to those of a
+-- specified type. A more conventional implementation would simply copy
+-- a dope vector.
+
+if bounds = [] then 
+   return ; 
+else
+   [lo, hi] := bounds(1) ;
+   for sub_array in array loop 
+       [-, sub2, lb, ub] := sub_array ;
+       contents(lb) := lo ;
+       contents(ub) := hi ;
+       set_obj_bounds(sub2, bounds(2..)) ;
+   end loop;
+end if;
+end set_obj_bounds;
+
+--S+ set_aggregate_bounds
+procedure set_aggregate_bounds(array, bounds) ;
+-- Modify an array aggregte to carry the bounds of a given type. The lengths
+-- are known to match.
+
+if bounds = [] then return array;   	-- down to component. 
+elseif array = [] then return array;	-- null aggregate.
+else
+   [lo, hi] := bounds(1) ;		-- bounds of current dimension
+   [-, seq, -, -] := array ;
+   return ["array_ivalue", 		-- recurse.
+             [set_aggregate_bounds(a, bounds(2..)): a in seq],
+		lo, hi] ;
+end if;
+end set_aggregate_bounds;
+
+--S+ get_array_bounds
+procedure get_array_bounds(index_types) ;
+-- get bounds of indices of array type. Used for array conversions.
+
+type_bounds := [] ;
+for index in index_types loop 
+   [-, lo, hi] := get_itype(index) ;
+   type_bounds with:= [lo, hi] ;
+end loop;
+return type_bounds ;
+end get_array_bounds;
+
+--S+ same_bounds
+procedure same_bounds(t1, t2) ;
+-- verify that the component types of an array and the target type of a
+-- conversion have the same bounds.
+int_trace("SAME_BOUNDS","") ;
+
+it1 := get_itype(t1) ;
+it2 := get_itype(t2) ;
+
+case it1.type_mark 
+
+   when "integer", "enum" => 
+      [-, lo1, hi1, -] := it1 ;
+      [-, lo2, hi2, -] := it2 ;
+     return (lo1 = lo2) and (hi1 = hi2) ;
+
+  when "float" => 
+      [-, lo1, hi1, -, digits1] := it1 ;
+      [-, lo2, hi2, -, digits2] := it2 ;
+     return (lo1 = lo2) and (hi1 = hi2) and digits1=digits2 ;
+
+  when "fixed" => 
+      [-, lo1, hi1, -, delta1] := it1 ;
+      [-, lo2, hi2, -, delta2] := it2 ;
+     return (lo1 = lo2) and (hi1 = hi2) and delta1 = delta2 ;
+
+  when "array" => 
+      [-, index_types1,-] := it1 ;
+      [-, index_types2,-] := it2 ;
+      return forall i in [1..#index_types1] |
+         	same_bounds(index_types1(i), index_types2(i)) ;
+
+  when "record" => 
+      [-, [comp_list1, -],  -, disc_list1] := it1 ;
+      [-, [comp_list2, -],  -, disc_list2] := it2 ;
+      -- Values of discriminants must match.
+      for i in [1 .. # comp_list1] loop 
+         [comp1, [typ1, val1]] := comp_list1(i) ;
+         [comp2, [typ2, val2]] := comp_list2(i) ;
+         if comp1 in disc_list1 and val1 /= val2 then 
+            return false ; 
+	 end if;
+      end loop;
+      return true ;
+
+  when "access" => 
+     [-, desig_type1] := it1;
+     [-, desig_type2] := it2;
+     return same_bounds(desig_type1, desig_type2) ;
+
+otherwise =>
+      return true ;	
+end case;
+end same_bounds;
+
+--S+ FLATTEN_RECORD
+procedure flatten_record (component_list);
+--
+--   This procedure takes a component_list and works its way 
+--   through flattening out all variants. 
+
+     [objdec_list, variant_part] := component_list;
+
+     if variant_part /= [] then
+
+       [discrim_name, altern_list] := variant_part;
+       
+        for [choices, component_list] in altern_list loop
+          objdec_list +:= flatten_record (component_list);
+       end loop;
+     end if;
+
+     return objdec_list;
+
+end flatten_record;
+end int_procs;

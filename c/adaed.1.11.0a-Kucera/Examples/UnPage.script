@@ -1,0 +1,3 @@
+adacomp -nl UnPage -b UnPage
+echo "You can run this against a .src file from SIMTEL20"
+echo "This program does NOT create sub-directories"

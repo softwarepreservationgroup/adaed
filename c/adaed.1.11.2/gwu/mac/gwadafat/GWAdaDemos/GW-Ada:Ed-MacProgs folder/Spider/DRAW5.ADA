@@ -1,0 +1,1 @@
+WITH Spider; Use Spider;PROCEDURE Drawing5 IS BEGIN Reset; Red;Step;Step;Step;Step;Turn;Step;Green;Step;Step;Step;Turn;Red;Step;Step;Step;Step;Step;Quit;END Drawing5;

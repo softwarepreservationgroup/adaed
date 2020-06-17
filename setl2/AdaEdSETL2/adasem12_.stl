@@ -1,0 +1,36 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem12_.stl,v 1.1 90/12/05 16:16:04 ada Exp $
+--
+package adasem12;
+   procedure generic_subprogram_specification(node) ;
+   procedure generic_subprogram_body(prog_name, node) ;
+   procedure generic_package_specification(node) ;
+   procedure generic_object_declaration(node) ;
+   procedure generic_type_declaration(node) ;
+   procedure is_generic_type(type_mark) ;
+   procedure generic_private_declaration(node) ;
+   procedure make_generic_subtype(type_mark) ;
+   procedure check_generic_usage(type_mark) ;
+   procedure generic_subprogram_declaration(node) ;
+   procedure subprogram_instance(kind, new_id, gen_name, instance) ;
+   procedure premature_instantiation(gen_name) ;
+   procedure contains_stubs(decls) ;
+   procedure package_instance(gen_name, instance) ;
+   procedure instantiate_symbol_table(gen_name, new_n, rename_map) ;
+   procedure instantiate_generics (generics, instance) ; 
+   procedure instantiate_object(gen_info, actual_expr, rw type_map) ;
+   procedure instantiate_type(type_expr, g_name, rw type_map) ;
+   procedure valid_type_instance(g_name, actual_type, rw type_map) ;
+   procedure valid_scalar_instance(g_name, actual_type, type_map) ;
+   procedure check_actual_constraint(g_type, a_type) ;
+   procedure valid_private_instance(g_name, actual_type, rw type_map) ;
+   procedure valid_access_instance(g_name, actual_type, type_map) ;
+   procedure valid_array_instance(g_name, actual_type, type_map) ;
+   procedure is_valid_discriminant_instance(g_name, a_name, rw type_map) ;      
+   procedure get_array_information(a_type) ;
+   procedure generic_subprogram_instance(instance, g_name, g_info, rw type_map);
+   procedure replace(expn, mapping) ;
+   procedure check_recursive_instance(nam) ;
+   procedure scan_instance(tree) ;
+   procedure replace_prefix(body_, old_prefix, new_prefix) ;
+end adasem12;

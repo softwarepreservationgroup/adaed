@@ -1,0 +1,24 @@
+
+extern int monitor_type;
+extern int monitor_window_type;
+extern int type_of_delay;
+extern int seconds_per_tick;
+extern int step_rate;
+extern int delay_scaling_factor;
+extern int delay_array[];
+extern int task_step;
+extern int step_monitor;
+extern int  Time_To_Read_Key;
+extern int Exec_Report_Time ;
+extern TASK_REC  CWK_TASKS[];
+extern TASK_REC  CWK_BLKS[];
+extern MON_REC   CWK_MONS[];
+extern FILE_REC_PTR adafile;
+extern int WIN_SIZE;
+extern int LINE_SIZE;
+extern int Block_Level;
+extern int task_monitor;
+extern int exception_monitor;
+extern int monitor_exec_time;
+extern int Large_Monitor;
+extern int Windows_Used;

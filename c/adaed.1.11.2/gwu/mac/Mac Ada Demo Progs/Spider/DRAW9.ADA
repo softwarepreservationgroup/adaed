@@ -1,0 +1,1 @@
+WITH Spider; USE Spider;PROCEDURE Drawing9 ISBEGIN Start;Black;WHILE NOT AtWall LOOP     Step;END LOOP;Turn;  Step;  Turn;  Red;WHILE NOT AtWall LOOP     Step;END LOOP;Quit;END Drawing9;

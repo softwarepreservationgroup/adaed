@@ -1,0 +1,9 @@
+#!/bin/csh
+myada
+adac cname=adac a=io_exceptions.ada aisfile=io_exceptions.ais libfile=predef.lib newlib predef
+adac cname=adac a=system.ada aisfile=system.ais libfile=predef.lib predef
+adac cname=adac a=direct_io.ada aisfile=direct_io.ais libfile=predef.lib predef
+adac cname=adac a=sequential_io.ada aisfile=sequential_io.ais libfile=predef.lib predef
+adac cname=adac a=text_io.ada aisfile=text_io.ais libfile=predef.lib predef
+adac cname=adac a=calendar.ada aisfile=calendar.ais libfile=predef.lib predef
+adac cname=adac a=unchecked.ada aisfile=unchecked.ais libfile=predef.lib predef

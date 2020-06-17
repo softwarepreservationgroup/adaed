@@ -1,0 +1,8 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_attributes_.stl,v 1.2 91/01/09 17:32:04 banner Exp $
+--
+package int_attributes;
+   procedure attribute_eval(attrib_expr);
+   procedure enum_lit_of(enum_map, pos);  
+   procedure enum_ord_of(enum_map, val_ex);
+end int_attributes;

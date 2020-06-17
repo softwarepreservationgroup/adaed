@@ -1,0 +1,856 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem13.stl,v 1.1 90/12/05 16:16:08 ada Exp $
+--
+--
+--T+ 13. Representation Clauses
+ 
+-- Representation clauses are checked for semantic correctness and
+-- the information is stored into the appropriate symbol tables entries.
+
+package body adasem13;
+
+use globals;
+use adasem1;
+use adasem2;
+use adasem3;
+use adasem4;
+use adasem5;
+use adasem6;
+use adasem7;
+use adasem8;
+use adasem9;
+use adasem10;
+use adasem11;
+use adasem12;
+use evalstat;
+use adaio;
+use adalib;
+
+    const
+	storage_unit		 := 32,
+	padding		 	 := 0,
+	size_position		 := 1,
+	has_derived_sub_position := 2,
+	storage_size_position 	 := 3,
+	small_position 		 := 3,
+	pack_position 		 := 3,
+	literal_map_position	 := 3,
+	alignment_position	 := 4;
+
+
+procedure unset(rep_item);
+  return (rep_item(1) = "unset");
+end unset;
+
+--
+-- Currently the representation information is structured as follows:
+--
+-- integer & floating point types
+-- [size, has_derived_sub]
+--
+-- task & access types
+-- [size, has_derived_sub, storage_size]
+--
+-- fixed point types
+-- ['delta', lo, hi, small, delta, size]
+--
+-- array types
+-- [size, has_derived_sub, pack]
+--
+-- record types
+-- [size, has_derived_sub, pack, 
+--        [modulus, [[field, pos, first_bit, last_bit],...]]]
+--
+-- enumeration types
+-- [size, has_derived_sub, literal_map]
+--
+--
+
+--S+ Initialize_Representation_Info
+procedure initialize_representation_info(type_name,tag);
+--
+-- Initialize the representation information of the given type by setting
+-- all its fields to the status 'unset'. The one exception is the first field
+-- which represents whether the type has been forced yet. Initially is is false;
+--
+-- repr_trace_proc_entry(0, "Initialize_Representation_Info");
+if tag = "record" then
+   rep_clause_info(type_name) := 
+	[["unset"],["set", false],["unset"], ["unset"]];
+elseif  tag in ["task", "access", "array_type", "enum", "fixed_type"] then 
+   rep_clause_info(type_name) := 
+        [["unset"],["set",false],["unset"]];
+else
+   rep_clause_info(type_name) := [["unset"],["set",false]];
+end if;
+forced(type_name) := false;
+types_not_chosen_yet(type_name) := {};
+-- repr_trace_proc_exit(0, "Initialize_Representation_Info");
+end initialize_representation_info;
+
+--S+ Inherit_Representation_Info
+procedure inherit_representation_info(derived_type, parent_type);
+--
+-- A derived type inherits all the representation information of its parent.
+-- However, this information is only considered to have a status of a 'default'
+-- representation which may be overidden by an explicit representation clause
+-- given to the derived type. It is therefore necessary to change the status
+-- field of the derived type when the parent had the status of 'set'.
+--
+-- repr_trace_proc_entry(0, "Inherit_Representation_Info");
+-- repr_trace(0, "derived_type: " + str(derived_type) );
+-- repr_trace(0, "is inherited from parent_type: " + str(parent_type) );
+
+-- If the parent type is private we must retrieve its base type from the
+-- private_decls entry
+if ST(parent_type).type_of in  ["private", "limited private"] then
+   p_decls := ST(ST(parent_type).scope_of).private_decls ;
+   vis_decl := p_decls(parent_type);
+-- Check to seem if vis_decl is defined before accessing it. It might be 
+-- undefined in the case of compilation errors.
+   if vis_decl /= om then
+      b_type := vis_decl(2); -- TYPE_OF field in the symbol table
+   else
+      -- repr_trace_proc_exit(0, "Inherit_Representation_Info");
+      return;
+   end if;
+else
+   b_type := base_type(parent_type);
+end if;
+current_rep := rep_clause_info(b_type);
+if current_rep = om then
+   -- repr_trace_proc_exit(0, "Inherit_Representation_Info");
+   return;
+end if;
+-- repr_trace(0, "Its rep clause is " + str(current_rep) ); 
+ for i in  [1..#current_rep] loop 
+   [status, value] := current_rep(i); 
+   if status = "set" then 
+      current_rep(i) := ["default", value];
+   end if;
+end loop;
+rep_clause_info(derived_type) := current_rep;
+forced(derived_type) := false;
+types_not_chosen_yet(derived_type) := {};
+-- repr_trace_proc_exit(0, "Inherit_Representation_Info");
+end inherit_representation_info;
+
+--S+ Explicit_Small_Given
+procedure explicit_small_given(type_name);
+b_type := base_type(type_name);
+rep_value := rep_clause_info(b_type);
+if rep_value = om then 
+   return false;
+end if;
+small_clause := rep_value(small_position);
+if small_clause(1) = "set" then
+   return true;
+else 
+   return false;
+end if;
+end explicit_small_given;
+
+--S+ Apply_Pragma_Pack
+procedure apply_pragma_pack(type_name);
+if is_array(type_name) or is_record(type_name) then
+   b_type := base_type(type_name);
+   current_rep := rep_clause_info(b_type);
+   current_rep(pack_position) := ["set", true];
+   rep_clause_info(b_type) := current_rep;
+end if;
+end apply_pragma_pack;
+
+--S+ Already_Forced
+procedure already_forced(type_name);
+result := forced(type_name);
+if result = om then
+   return true;
+else
+   return result;
+end if;
+end already_forced;
+
+--S+ Force_Representation
+procedure force_representation(type_name);
+-- repr_trace_proc_entry(0, "Force_Representation");
+b_type := base_type(type_name);
+
+-- Check if type has already been forced.
+if already_forced(b_type) then 
+   -- repr_trace_proc_exit(0, "Force_Representation");
+   return; 
+else
+   if is_generic_type(b_type) then
+   -- There is no need to force a generic formal type since any use of this
+   -- type will refer to the generic actual parameter after the instantiation
+   -- and therefore the representation information is just that of the actual.
+   -- Subtypes of generic formal types will be handled differently with the 
+   -- 'delayed_repr' instruction generated in Subtype_Declaration.
+      types_not_chosen_yet(b_type) := om;
+      -- repr_trace_proc_exit(0, "Force_Representation");
+      return;
+   elseif has_generic_component(b_type) then
+   -- If a type has generic components its forcing must be delayed until
+   -- the point of instantiation when the representation of the actuals are
+   -- known, since the representation of the record or array is dependent on
+   -- the representation of the generic components. The replace routine will 
+   -- choose the representation for all
+   -- delayed reprs.
+      delayed_reprs with:= b_type;
+      forced(b_type) := true;
+      -- repr_trace_proc_exit(0, "Force_Representation");
+      return;
+   end if;
+   forced(b_type) := true;
+   current_rep := rep_clause_info(b_type);
+   -- repr_trace(0, "forcing= "+str(type_name) + " base type= "+str(b_type) );
+   -- repr_trace(0, "current rep clause info is " + str(rep_clause_info) );
+    for i in [1..#current_rep] loop
+     [status, value] := current_rep(i);
+     if status = "default" then 
+      current_rep(i) := ["set", value];
+     end if;
+   end loop;
+   rep_clause_info(b_type) := current_rep;
+   -- Force all component fields of the record type before the representation is
+   -- decided for the record type since the component types may affect the size
+   -- of the record.
+   if is_record(b_type) then
+      for field in ST(b_type).signature.invariant_part loop 
+         [-, -, field_type] := field;
+	 force_representation(field_type);
+      end loop;
+   end if;
+   choose_representation(b_type);
+   for sym in types_not_chosen_yet(b_type) loop 
+       choose_representation(sym); 
+   end loop;
+   types_not_chosen_yet(b_type) := om;
+end if;
+-- repr_trace_proc_exit(0, "Force_Representation");
+end force_representation;
+
+--S+ Choose_Representation(type_name)
+procedure choose_representation(type_name);
+-- repr_trace_proc_entry(0, "Choose_Representation");
+b_type := base_type(type_name);
+current_rep := rep_clause_info(b_type);
+
+if current_rep = om then
+   representation(type_name) := [-1, false];
+   -- repr_trace_proc_exit(0, "Choose_Representation");
+   return;
+end if;
+
+for i in [1..#current_rep] loop 
+   [status, value] := current_rep(i);
+   if status = "unset" then 
+     current_rep(i) := ["default", default_representation(type_name,i)];
+    end if;
+end loop;
+representation(type_name) := [value : [status,value] in current_rep];
+--
+-- For fixed point type reset entry for SMALL in signature so that any
+-- new SMALL given by a rep clause is picked up.
+--
+
+if is_fixed_type(type_name)  then
+   ST(type_name).signature.precision_of := current_rep(small_position)(2);
+   if ST(type_name).nature = "type" and ST(type_name).type_of = "$FIXED" then 
+	fixed_type_bounds(type_name); 
+   end if;
+end if;
+emit_repr with:= type_name;
+-- repr_trace(0, "representation of "+str(type_name) + " is " + str(current_rep) );
+-- repr_trace_proc_exit(0, "Choose_Representation");
+end choose_representation;
+
+--S+ Force_All_Types
+procedure force_all_types;
+-- Called at the end of a declarative part, to force all types not already
+-- affected by a forcing occurence.
+
+for b_type in domain types_not_chosen_yet loop 
+      force_representation(b_type);
+end loop;
+end force_all_types;
+
+--S+ Collect_Reprs
+procedure collect_reprs ;
+return collect_forcings() + collect_delayed_reprs();
+end collect_reprs;
+procedure collect_forcings ;
+-- Emit the representation information for types that have been forced by
+-- a declaration, or by the end of a declarative part.
+-- For fixed types, forcing determines the bounds of type and parent type. 
+-- Thus the signature of the type as a whole must be updated. Otherwise, only the
+-- attributes affected by representation clauses are sent to the interpreter.
+
+new_reprs := {} ;
+for t in emit_repr loop 
+   if is_fixed_type(t)  then
+        sig := ST(t).signature ;
+        if is_value(sig(2)) and is_value(sig(3)) then
+            -- Fixed type definition.
+          r := sig with [representation(t)(size_position)] ;
+       else
+          r := representation(t) ;
+       end if;
+   else
+      r := representation(t) ;
+   end if;
+   new_reprs(t) := r ;
+end loop;
+emit_repr := [] ;
+return if new_reprs /= {} then [["repr", new_reprs]] else [] end if; 
+end collect_forcings;
+procedure collect_delayed_reprs ;
+if delayed_reprs /= [] then
+   aix := [["delayed_repr", {t : t in delayed_reprs}]];
+   delayed_reprs := [];
+else
+   aix := [];
+end if;
+return aix;
+end collect_delayed_reprs;
+--S+ Default_Representation
+procedure default_representation(type_name,position);
+   case position 
+      when size_position =>  	return default_size_value(type_name);
+      when has_derived_sub_position =>  return true;
+      when storage_size_position => 
+	  if is_task_type(type_name) or is_access(type_name) then
+	     return default_storage_size_value(type_name);
+      --(small_position)
+	  elseif is_fixed_type(type_name)  then
+	     [-,-,-,small,-] := ST(type_name).signature;
+	     return small;
+      --(pack_position)
+	elseif is_array(type_name) then
+	     return false;
+      --(literal_map_position)
+	elseif ST(type_name).nature = "enum" then
+	     return {};
+        end if;
+        when alignment_position => 
+	    return default_record_value(type_name);
+   end case;
+end default_representation;
+
+--S+ Size_Attribute
+procedure size_attribute(expn);
+[-, -, typ1, -] := expn;
+if is_scalar_type(typ1) then 
+   b_type := base_type(typ1);
+   force_representation(b_type);
+   current_rep := rep_clause_info(b_type);
+   size_rep := current_rep(size_position);
+   if unset(size_rep) then 
+      size_value :=  default_size_value(b_type);
+   else
+      [-,size_value] := size_rep;
+   end if;
+   return ["ivalue", size_value];
+else
+   return expn;
+end if;
+end size_attribute;
+
+--S+ Default_Size_Value
+procedure default_size_value(type_name);
+--
+-- Robert might want to add to this routine.
+--
+-- If there were any errors in the compilation just return a default of 32
+-- rather than any more detailed calculation since the type might be 
+-- an incorrect syntactic form (type 'any' or the like) or semantically 
+-- incorrect. (i.e. using a floating point as the index type of an array)
+
+if errcount >0 then 
+   return 32;
+end if;
+-- repr_trace_proc_entry(0, "Default_Size_Value");
+if is_numeric_type(type_name) then
+   case ST(type_name).root_type 
+        when "INTEGER" =>  	size_v := 32;
+        -- sign (1) + FLOAT_MACHINE_MANTISSA + log2(FLOAT_MACHINE_EMAX)
+        when "FLOAT" =>    	size_v := 33;
+        -- sign (1) + LONG_FLOAT_MACHINE_MANTISSA + log2(LONG_FLOAT_MACHINE_EMAX)
+        when "LONG_FLOAT" => 	size_v := 124;
+        when "$FIXED" =>   	size_v := 32;
+         otherwise => 	  	size_v := 32;
+   end case;
+elseif ST(ST(type_name).root_type).nature = "enum" then
+   -- Some more elaborate code would be here to determine the # of bits
+   -- depending on the # of enumeration values.
+   size_v := 8;
+elseif is_array(type_name) then
+   indices := index_types(type_name);
+   num_of_comps := 1;
+   for i in indices loop 
+      bounds := ST(i).signature;
+      -- The bounds are undefined in the case where one of the indices was
+      -- some incorrect syntactic form (type 'any' or the like).
+
+      if bounds = om then 
+          -- repr_trace_proc_exit(0, "Default_Size_Value");
+          return -1; 
+      end if;
+
+      [-, lo, hi ] := bounds;
+      -- The size of the array can be calculated now only if they are static
+      -- and are integers. Static non-integer values can come about due to
+      -- error conditions such as using a floating point type as the index. 
+      -- Non-static size is indicated with -1.
+
+      if not (is_value(lo) and is_value(hi)
+	      and is_integer(lo(2)) and is_integer(hi(2))) then
+         -- repr_trace_proc_exit(0, "Default_Size_Value");
+	 return -1;
+      end if;
+      num_of_comps *:=  (hi(2) - lo(2) + 1);
+   end loop;
+   component := component_type(type_name);
+   size_v := num_of_comps * default_size_value(component);
+elseif is_record(type_name) then
+   size_v := 0;
+   b_type := base_type(type_name);
+   swap_private := false;
+   r_type := ST(type_name).root_type;
+-- Check to see if either the base_type or the root_type is private and
+-- if it is swap the private decls with the visible part so that the record
+-- components can be made fully visible. We will swap them back at the end.
+   if ST(b_type).type_of in ["private", "limited private"] then
+      swap_private := true;
+   elseif ST(r_type).type_of in ["private","limited private"] then
+      b_type := r_type;
+      swap_private := true;
+   end if;
+
+   if swap_private then
+      vis_decl := ST(ST(b_type).scope_of).private_decls(b_type);
+      -- Check for error condition and if so return standard size.
+      if vis_decl = om then 
+          -- repr_trace_proc_exit(0, "Default_Size_Value");
+          return 32; 
+      end if;
+      priv_decl := ST(b_type) ;
+      ST(b_type) := vis_decl ;
+   end if;
+
+   components := ST(b_type).signature.invariant_part;
+   variant := ST(b_type).signature.variant_part;
+   -- Currently does not work with nested variants
+   if variant /= [] then
+      [-, variants] := variant;
+      for [-, decls] in variants loop 
+         if decls /= ["null"] then
+            components +:= decls(1);
+         end if;
+      end loop;
+   end if;
+
+   for field in components loop 
+      [-, -, field_type] := field;
+      size_v +:= component_size(field_type);
+   end loop;
+
+   if swap_private then
+      ST(b_type) := priv_decl ;
+   end if;
+
+else
+   size_v := 32;
+end if;
+-- repr_trace_proc_exit(0, "Default_Size_Value");
+return size_v;
+end default_size_value;
+
+--S+ Component_Size
+procedure component_size(type_name);
+-- Return the size of a component of a record or an array by first checking its 
+-- representation. At this point since the type of the component should have been
+-- forced already we just need to extract the size given in the representation. 
+-- This was derived by either an explicit rep clause specifying the size or 
+-- computed based on some default formula. In the case where the type was not
+-- forced yet a default size is calculated for it.
+
+if (repr_info := representation(type_name)) /= om then
+   return repr_info(size_position);
+else
+  -- Type was not forced yet. (Probably some error condition)
+  return default_size_value(type_name);
+end if;
+end component_size;
+
+--S+ has_generic_component
+procedure has_generic_component(type_mark) ;
+-- returns a boolean indicating whether the composite type has any components
+-- which are generic. It is necessary to now this when forcing such a 
+-- composite type since its forcing will have to be delayed.
+--
+return is_generic_type(type_mark) 
+
+   or (is_array(type_mark) 
+       and has_generic_component(component_type(type_mark)))
+
+   or (is_record(type_mark) 
+       and (exists [-, comp] in 
+  	         ST(base_type(type_mark)).signature.declared_components 
+			| ((not is_type(comp))
+			  and base_type(ST(comp).type_of) /= base_type(type_mark)
+			  and has_generic_component(ST(comp).type_of)))) ;
+end has_generic_component;
+
+--S+ Default_Storage_Size_Value
+procedure default_storage_size_value(type_name);
+--
+-- Robert might want to add to this routine.
+--
+     if is_access(type_name) then
+        storage_size_v := 32;
+     elseif is_task_type (type_name) then
+ 	storage_size_v := 32;
+     else
+	storage_size_v := 32;
+    end if;
+    return storage_size_v;
+end default_storage_size_value;
+
+--S+ Default_Record_Value
+procedure default_record_value(type_name);
+   -- repr_trace_proc_entry(0, "Default_Record_Value");
+   b_type := base_type(type_name);
+   swap_private := false;
+   r_type := ST(type_name).root_type;
+-- Check to see if either the base_type or the root_type is private and
+-- if it is swap the private decls with the visible part so that the record
+-- components can be made fully visible. We will swap them back at the end.
+   if ST(b_type).type_of in ["private", "limited private"] then
+      swap_private := true;
+   elseif ST(r_type).type_of in ["private","limited private"] then
+      b_type := r_type;
+      swap_private := true;
+   end if;
+
+   if swap_private then
+      vis_decl := ST(ST(b_type).scope_of).private_decls(b_type);
+      priv_decl := ST(b_type) ;
+      ST(b_type) := vis_decl ;
+   end if;
+
+current_offset := 0;
+attribute_list := [];
+components := ST(b_type).signature.invariant_part;
+variant := ST(b_type).signature.variant_part;
+
+-- Currently does not work with nested variants
+if variant /= [] then
+   [-, variants] := variant;
+   for [-, decls] in variants loop 
+      if decls /= ["null"] then
+         components +:= decls(1);
+      end if;
+   end loop;
+end if;
+
+for field in components loop 
+   [-, field_name, field_type] := field;
+   position := current_offset / storage_unit;
+   first_bit := current_offset mod storage_unit;
+   field_size := component_size(field_type) + padding;
+   current_offset +:= field_size + padding;
+   attribute_list with := [field_name, position, 
+			   first_bit, (first_bit + field_size -1)];
+end loop;
+
+-- Ignore record size for now
+record_size := current_offset + padding;
+
+if swap_private then
+   ST(b_type) := priv_decl ;
+end if;
+
+-- repr_trace_proc_exit(0, "Default_Record_Value");
+return [0, attribute_list];
+
+end default_record_value;
+
+--S+ check_repr_type
+procedure check_repr_type (type_name);
+
+-- Check whether the type to which a representation clause applies
+-- occurs within the same declarative part as the clause itself and
+-- precedes it. If the type is a private type it cannot be used before
+-- its full type declaration. The unique name of the type is returned
+-- or '?' in case of error.
+
+if (unq_name := declared (current_scope)(type_name)) = om 
+   then errmsg(type_name," and its rep clause do not appear in same declarative part","13.1");
+        return "?";   
+elseif ST(unq_name).type_of in {"private", "limited private","incomplete"}
+   then errmsg(type_name," appears before its full type declaration", "7.4.1");
+        return "?";
+else return unq_name;
+end if;
+
+end check_repr_type;
+--S+ Length_Clause 
+procedure length_clause (attr_type, attr_prefix, expn);
+
+-- This procedure processes a length clause. 
+-- repr_trace_proc_entry(0, "Length_Clause");
+length_result := [];
+
+if (attr_prefix := check_repr_type(attr_prefix)) = "?" then 
+   -- repr_trace_proc_exit(0, "Length_Clause");
+   return [];
+end if;
+
+if attr_type = "SIZE" then
+
+   if is_type(attr_prefix) then
+      size_value := check_type ("integer_type", expn);
+      if is_value(size_value) then
+	 apply_length_clause(attr_type, attr_prefix, size_value(2));
+      else
+         errmsg("Expression in size spec is not static","","13.2");
+      end if;
+   else
+      errmsg("Prefix of attribute is not type","","13.2");
+   end if;
+
+elseif attr_type = "STORAGE_SIZE" then
+
+   if is_task_type(attr_prefix)  or  is_anonymous_task(attr_prefix) then
+      task_size := check_type ("integer_type", expn);
+      apply_length_clause(attr_type, attr_prefix, task_size(2));
+   elseif is_access(attr_prefix) then
+      access_size := check_type ("integer_type", expn);
+      apply_length_clause(attr_type, attr_prefix, access_size(2));
+   else
+      errmsg("Prefix of attribute is not task type or access type","","13.2");
+   end if;
+
+elseif attr_type = "SMALL" then 
+    if not is_fixed_type(attr_prefix)  then
+	errmsg("expect fixed type for repr.spec. of SMALL","","13.2") ;
+    end if;
+
+    small := check_type("real_type", expn) ;
+    if not is_value(small) then
+	errmsg("length specification must be a static expression","","13.2");
+    else 
+        apply_length_clause(attr_type, attr_prefix, small);
+    end if;
+
+end if;
+
+-- repr_trace_proc_exit(0, "Length_Clause");
+return [];
+end length_clause;
+
+procedure apply_length_clause(attr_type, type_name, clause_value);
+b_type := base_type(type_name);
+current_rep := rep_clause_info(b_type);
+   case attr_type 
+      when "SIZE" => 			  position := size_position;
+      when "STORAGE_SIZE", "SMALL" =>   position := small_position;
+   end case;
+
+current_rep(position) := ["set", clause_value];
+rep_clause_info(b_type) := current_rep;
+end apply_length_clause;
+
+--S+ enum_rep_clause
+procedure enum_rep_clause (type_name, aggregate);
+
+-- This procedure checks the validity of the representation clause for
+-- enumeration types. 
+-- repr_trace_proc_entry(0, "Enum_Rep_Clause");
+if (type_name := check_repr_type(type_name)) = "?" then 
+   -- repr_trace_proc_exit(0, "Enum_Rep_Clause");
+   return []; 
+end if;
+if ST(ST(type_name).root_type).nature /= "enum" then
+   errmsg ("Identifier is not an enumeration type","","13.3");
+   -- repr_trace_proc_exit(0, "Enum_Rep_Clause");
+   return [];
+end if;
+
+-- The representation is given by an aggregate, whose index type is the
+-- given enumeration type, and whose component type is integer. We
+-- build such an array type for type checking, but emit no code for it.
+
+enum_aggr_type := newat_str();
+array_info := [[type_name], "INTEGER"];
+new_constrained_array(enum_aggr_type, array_info) ;
+sequence_type frome newtypes(#newtypes) ;			-- discard
+aggr_object := adasem (aggregate);
+aggr_val := check_type (enum_aggr_type, aggr_object);
+if is_value (aggr_val) then
+  [-, seq, -] := aggr_val(2);
+  for i in [1..#seq -1] loop 
+     if seq(i) >= seq(i+1) then
+        errmsg ("Integer code is not distinct or violates ",
+                "predefined ordering relation of type","13.3");
+        -- repr_trace_proc_exit(0, "Enum_Rep_Clause");
+        return [];
+     end if;
+  end loop;
+  rep_lit_map :=
+      {[lit_name, seq(pos +1)] : [lit_name,pos] in ST(type_name).literal_map};
+
+  apply_enum_clause(type_name, rep_lit_map);
+else
+  errmsg ("Component of aggregate in enumeration representation clause",
+          "is not static","13.3");
+end if;
+-- repr_trace_proc_exit(0, "Enum_Rep_Clause");
+return [];
+
+end enum_rep_clause;
+
+procedure apply_enum_clause(type_name, rep_lit_map);
+b_type := base_type(type_name);
+current_rep := rep_clause_info(b_type);
+if current_rep = om then
+  initialize_representation_info(b_type, "enum"); 
+  current_rep := rep_clause_info(b_type);
+end if;
+current_rep(literal_map_position) := ["set", {}];
+rep_clause_info(b_type) := current_rep;
+end apply_enum_clause;
+
+--S+ Rec_Rep_Clause
+procedure rec_rep_clause (type_name, align_clause, comp_clause_list);
+-- repr_trace_proc_entry(0, "Rec_Rep_Clause");
+if (type_name := check_repr_type(type_name)) = "?" then 
+    -- repr_trace_proc_exit(0, "Rec_Rep_Clause");
+    return []; 
+end if;
+if not is_record (type_name) then 
+   errmsg ("Identifier is not a record type","","13.4");
+   -- repr_trace_proc_exit(0, "Rec_Rep_Clause");
+   return [];
+end if;
+
+	repr_err := false;
+if align_clause = [] 
+  then modulus_value := 0;
+elseif is_value (modulus_value := check_type("integer_type", align_clause))
+  then modulus_value := modulus_value (2);
+else
+  errmsg("Alignment clause must contain a static expression","","13.4");
+  repr_err := true;
+end if;
+
+location_lists := {};
+field_names := domain (ST(base_type(type_name)).signature.declared_components);
+duplic_list := {};
+
+for [field, rel_addr, bit_range] in comp_clause_list loop 
+   
+   if field notin field_names then
+      errmsg ("Component "+ field," does not appear in record type","none");
+      repr_err := true;
+   elseif field in duplic_list then
+      errmsg ("Component "+ field," already occurs in clause","none");
+      repr_err := true;
+   else
+      duplic_list with := field;
+   end if;
+
+   rel_addr := check_type ("integer_type", rel_addr);
+   if is_value (rel_addr) then
+      rel_addr := rel_addr(2);
+   else
+      errmsg ("Expression for component " + field, " must be static","13.4");
+      repr_err := true;
+   end if;
+   
+   if bit_range(1) = "range" then 
+      first_bit := check_type ("integer_type", bit_range(2));
+      last_bit  := check_type ("integer_type", bit_range(3));
+      if is_value (first_bit) and is_value (last_bit) then
+         location_lists with := 
+                  [field, rel_addr, first_bit(2), last_bit(2)];
+      else 
+         errmsg("Range for component "+field," must be static","13.4");
+         repr_err := true;
+      end if;
+
+   -- The constraint is given by a RANGE attribute.
+   -- We get the bounds of the range to construct the new
+   -- subtype.
+
+   elseif not is_range_attribute(bit_range) then
+      errmsg("Invalid expression for range constraint","","3.3");
+      repr_err := true;
+   else 
+      bit_range := range_type(bit_range) ;
+
+      if is_identifier(bit_range) then
+         -- get the bounds from the signature of the range type.
+         [-, lo, hi] := ST(bit_range).signature ;
+         typ := bit_range ;
+      else		-- Unpack subtype expression.
+         [-, typ, [-, lo, hi]] := bit_range ;
+      end if;
+
+      if not compatible_types("INTEGER", typ) then
+         errmsg("RANGE attribute has wrong type for constraint", "","3.3") ;
+         repr_err := true;
+      else
+	 lo := eval_static(["qual_range", type_mark, lo]) ;
+	 hi := eval_static(["qual_range", type_mark, hi]) ;
+	 location_lists with := [field, rel_addr, lo, hi] ;
+      end if;
+   end if;
+
+end loop;
+
+  if not repr_err then
+     apply_record_clause(type_name, modulus_value, location_lists);
+  end if;
+
+-- repr_trace_proc_exit(0, "Rec_Rep_Clause");
+return [];
+end rec_rep_clause;
+
+procedure apply_record_clause( type_name, modulus_value, location_lists);
+b_type := base_type(type_name);
+current_rep := rep_clause_info(b_type);
+
+record_size := 0;
+attribute_list := [];
+field_unique_name := ST(b_type).signature.declared_components;
+for [field, start_unit, start_bit, end_bit] in location_lists loop 
+   offset := storage_unit * start_unit + start_bit;
+   position := offset / storage_unit;
+   first_bit := offset mod storage_unit;
+   field_size := end_bit - start_bit + 1;
+   record_size := record_size max (offset + field_size);
+   attribute_list with := [field_unique_name(field), position, 
+			   first_bit, (first_bit + field_size -1)];
+end loop;
+current_rep(alignment_position) := ["set", [modulus_value, attribute_list]];
+current_rep(size_position) := ["set", record_size];
+rep_clause_info(b_type) := current_rep;
+end apply_record_clause;
+
+--T+ Appendix A. Predefined language attributes.	
+--S+ check_range_attribute
+procedure check_range_attribute(expn) ;
+
+-- Syntactic check: the RANGE attribute, which is a name, cannot appear 
+-- as a primary except as the second argument of a membership operator.
+
+if is_tuple(expn) and expn(1) = "name" and is_tuple(nam := expn(2))
+    and is_range_attribute(nam) then
+    errmsg("Invalid use of attribute RANGE in expression", "", "4.4") ;
+end if;
+
+end check_range_attribute;
+
+end adasem13;

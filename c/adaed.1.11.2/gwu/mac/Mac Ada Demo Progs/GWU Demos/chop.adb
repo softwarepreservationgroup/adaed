@@ -1,0 +1,1 @@
+--::::::::::--chop.adb--::::::::::PACKAGE BODY Chop IS   TASK BODY Stick IS   BEGIN        LOOP      SELECT        ACCEPT Pick_Up;        ACCEPT Put_Down;      OR        TERMINATE;      END SELECT;    END LOOP;   END Stick; END Chop;

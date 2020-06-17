@@ -1,0 +1,30 @@
+Executing file  NYU Ada/Ed 1.11 SUN UNIX Version
+ADAfile:	unchecked.ada
+ASTfile:	
+AISfile:	unchecked.ais
+LIBfile:	predef.lib
+	
+	
+    1   generic
+    2     type OBJECT is limited private;
+    3     type NAME   is access OBJECT;
+    4   procedure UNCHECKED_DEALLOCATION(X : in out NAME);
+    5   generic
+    6     type SOURCE is limited private;
+    7     type TARGET is limited private;
+    8   function UNCHECKED_CONVERSION(S : SOURCE) return TARGET;
+    9   
+   10   procedure UNCHECKED_DEALLOCATION(X : in out NAME) is
+   11   begin
+   12     if x /= null then x := null; end if;
+   13   end UNCHECKED_DEALLOCATION;
+   14   
+   15   function UNCHECKED_CONVERSION(S : SOURCE) return TARGET is
+   16     T : TARGET;
+   17   begin
+   18     raise PROGRAM_ERROR;
+   19     return T;
+   20   end UNCHECKED_CONVERSION;
+   21   
+   
+  No translation errors detected

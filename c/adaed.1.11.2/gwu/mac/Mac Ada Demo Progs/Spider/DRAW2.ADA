@@ -1,0 +1,1 @@
+WITH Spider; Use Spider;PROCEDURE Drawing2 IS BEGIN Reset; Red;Step;Step;Blue;Turn;Step;Green;Step;Step;Step;Turn;Step;Quit;END Drawing2;

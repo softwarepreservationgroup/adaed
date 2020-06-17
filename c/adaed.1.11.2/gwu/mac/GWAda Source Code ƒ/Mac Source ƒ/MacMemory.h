@@ -1,0 +1,1 @@
+/* MacMemory.h */#pragma once#include <stdlib.h>void *mcalloc(size_t nelem, size_t nsize);void mfree(void *p);void *mmalloc(size_t n);void *mrealloc(void *ptr, size_t size);

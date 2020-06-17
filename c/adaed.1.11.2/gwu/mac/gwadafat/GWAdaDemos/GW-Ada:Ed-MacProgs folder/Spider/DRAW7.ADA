@@ -1,0 +1,1 @@
+WITH Spider; USE Spider;PROCEDURE Drawing7 ISBEGIN Start;Red; WHILE NOT AtWall LOOP -- the WHILE statement starts the loop     Step; --  any statements here are repeatedEND LOOP;Green;  --  then execution proceeds from hereTurn;Step;Quit;END Drawing7;

@@ -1,0 +1,33 @@
+--
+--$Header: /cs.b/ada/ada/src/ada9x/evalstat_.stl,v 1.1 90/12/05 16:17:27 ada Exp $
+--
+package evalstat;
+   procedure const_val(obj);
+   procedure eval_static (expn);
+   procedure eval_unary_ops(expn) ;
+   procedure eval_binary_ops(expn) ; 
+   procedure eval_attribute(expn) ; 
+   procedure eval_array_aggregate(expn) ;
+   procedure eval_named_aggregate(expn, indices, nam_list, others) ;
+   procedure get_index_bounds(typ) ;
+   procedure sort_triples(triples) ;
+   procedure eval_conversion(expn) ;
+   procedure eval_qual_range(op1,op2,expn);
+   procedure eval_real_type_attribute(expn);
+   procedure mantissa_from_digits(d) ;
+   procedure fx_mantissa(fixed_type) ;
+   procedure fx_max(fx_low,  fx_high);
+   procedure check_overflow(x); 
+   procedure constraint_error ;
+   procedure storage_error ;
+   procedure check_null_aggregate(seq, lo, indices) ;
+   procedure make_ghost_out_of(sample);
+   procedure is_value(x) ;
+   procedure is_universal_integer(x) ;
+   procedure is_universal_real(x) ;
+   procedure is_float_ivalue(x);
+   procedure is_fixed_ivalue(x) ;
+   procedure fx_small(fixed_type);
+   procedure calculate_small(delta);
+   procedure sem_adaval(typ, number);
+end evalstat;

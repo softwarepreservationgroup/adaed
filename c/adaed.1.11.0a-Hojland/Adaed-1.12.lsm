@@ -1,0 +1,13 @@
+Begin3
+Title:          Ada/Ed
+Version:        1.12
+Entered-date:   28JUN99
+Description:    Ada95 interpreter
+Keywords:       ada interpreter
+Author:         University of New York
+Maintained-by:  Ragnar Hojland Espinosa (ragnar@lightside.ddns.org)
+                Ragnar Hojland Espinosa (ragnar@redestb.es)
+Primary-site:   metalab.unc.edu /pub/Linux/devel/lang/ada
+                906kB Adaed-1.12.tar.gz
+Copying-policy: GPL
+End

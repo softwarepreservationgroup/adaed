@@ -1,0 +1,23 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_tasking_.stl,v 1.1 91/01/02 15:26:20 banner Exp $
+--
+package int_tasking;
+  procedure activate_task(task);
+  procedure check_master(taskid);
+  procedure check_current_rendezvous(taskid, exname, cause);
+  procedure check_unserviced_rendezvous(taskid);
+  procedure create_task(taskid, priority, entryids, t_master, t_taskenv);
+  procedure dependant_tasks(root);
+  procedure direct_dependant_tasks(root);
+  procedure initialize_tasking;
+  procedure kill(task);
+  procedure make_rendezvous(calling_task, called_task, entryid, rendez_body);
+  procedure schedule;
+  procedure terminate_unactivated;
+  procedure uncreate(task);
+  procedure wait_subtasks;
+  procedure service_clock;
+  procedure terminate_execution;
+  procedure start_the_clock;
+  procedure lesstup(RW tname, entry);
+end int_tasking;

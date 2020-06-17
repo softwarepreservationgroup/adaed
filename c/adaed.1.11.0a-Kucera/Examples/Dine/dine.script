@@ -1,0 +1,33 @@
+echo "This puppy takes about 16 minutes (stock 1000)"
+echo "io_libs"
+adacomp -nl dine io_libs
+echo "vtspec"
+adacomp -l dine vtspec
+echo "ranspec"
+adacomp -l dine ranspec
+echo "winspec"
+adacomp -l dine winspec
+echo "chopspec"
+adacomp -l dine chopspec
+echo "philspec"
+adacomp -l dine philspec
+echo "roomspec"
+adacomp -l dine roomspec
+echo "diners"
+adacomp -l dine diners
+echo "vtbody"
+adacomp -l dine vtbody
+echo "ranbody"
+adacomp -l dine ranbody
+echo "winbody"
+adacomp -l dine winbody
+echo "chopbody"
+adacomp -l dine chopbody
+echo "philbody"
+adacomp -l dine philbody
+echo "roombody"
+adacomp -l dine roombody
+echo "binding..."
+adabind dine
+echo "executing..."
+adaexec dine

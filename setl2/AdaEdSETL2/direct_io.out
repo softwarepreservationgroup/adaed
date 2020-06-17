@@ -1,0 +1,104 @@
+Executing file  NYU Ada/Ed 1.11 SUN UNIX Version
+ADAfile:	direct_io.ada
+ASTfile:	
+AISfile:	direct_io.ais
+LIBfile:	predef.lib
+	
+	
+    1   with IO_EXCEPTIONS;
+    2   generic
+    3       type ELEMENT_TYPE is private;
+    4   
+    5   package DIRECT_IO is
+    6   
+    7       type  FILE_TYPE  is limited private;
+    8   
+    9       type    FILE_MODE       is (IN_FILE, INOUT_FILE, OUT_FILE);
+   10       type    COUNT           is range 0 .. INTEGER'LAST;
+   11       subtype POSITIVE_COUNT  is COUNT range 1 .. COUNT'LAST;    
+   12         
+   13   
+   14       -- File management
+   15   
+   16   
+   17       procedure CREATE   (FILE : in out FILE_TYPE;
+   18                           MODE : in FILE_MODE := INOUT_FILE;
+   19                           NAME : in STRING := "";
+   20                           FORM : in STRING := "");
+   21       pragma IO_interface(CREATE, DIO_CREATE, ELEMENT_TYPE);
+   22   
+   23       procedure OPEN     (FILE : in out FILE_TYPE;
+   24                           MODE : in FILE_MODE;
+   25                           NAME : in STRING;
+   26                           FORM : in STRING := "");
+   27       pragma IO_interface(OPEN, DIO_OPEN, ELEMENT_TYPE);
+   28   
+   29       procedure CLOSE    (FILE : in out FILE_TYPE);
+   30       pragma IO_interface(CLOSE, DIO_CLOSE);
+   31   
+   32       procedure DELETE   (FILE : in out FILE_TYPE);
+   33       pragma IO_interface(DELETE, DIO_DELETE);
+   34   
+   35       procedure RESET    (FILE : in out FILE_TYPE; MODE : in  FILE_MODE);
+   36       pragma IO_interface(RESET, DIO_RESET_MODE);
+   37   
+   38       procedure RESET    (FILE : in out FILE_TYPE);
+   39       pragma IO_interface(RESET, DIO_RESET);
+   40   
+   41       function  MODE     (FILE : in FILE_TYPE)  return FILE_MODE;
+   42       pragma IO_interface(MODE, DIO_MODE);
+   43   
+   44       function  NAME     (FILE : in FILE_TYPE)  return STRING;
+   45       pragma IO_interface(NAME, DIO_NAME);
+   46   
+   47       function  FORM     (FILE : in FILE_TYPE)  return STRING;
+   48       pragma IO_interface(FORM, DIO_FORM);
+   49       
+   50       function  IS_OPEN  (FILE : in FILE_TYPE)  return BOOLEAN;
+   51       pragma IO_interface(IS_OPEN, DIO_IS_OPEN);
+   52   
+   53       -- Input and Output Operations:
+   54   
+   55       procedure READ   (FILE : in FILE_TYPE; ITEM : out ELEMENT_TYPE);
+   56       pragma IO_interface(READ, DIO_READ, ELEMENT_TYPE);
+   57       procedure READ   (FILE : in FILE_TYPE; ITEM : out ELEMENT_TYPE;
+   58                                              FROM : in POSITIVE_COUNT);
+   59       pragma IO_interface(READ, DIO_READ_FROM, ELEMENT_TYPE);
+   60   
+   61       procedure WRITE  (FILE : in FILE_TYPE;  ITEM : in ELEMENT_TYPE);
+   62       pragma IO_interface(WRITE, DIO_WRITE, ELEMENT_TYPE);
+   63       procedure WRITE  (FILE : in FILE_TYPE;  ITEM : in ELEMENT_TYPE;
+   64                                               TO   : in POSITIVE_COUNT);
+   65       pragma IO_interface(WRITE, DIO_WRITE_TO, ELEMENT_TYPE);
+   66   
+   67       procedure SET_INDEX(FILE : in FILE_TYPE; TO :in POSITIVE_COUNT);
+   68       pragma IO_interface(SET_INDEX, DIO_SET_INDEX);
+   69      
+   70       function  INDEX    (FILE : in FILE_TYPE)  return POSITIVE_COUNT;
+   71       pragma IO_interface(INDEX, DIO_INDEX);
+   72   
+   73       function  SIZE     (FILE : in FILE_TYPE)  return COUNT;
+   74       pragma IO_interface(SIZE, DIO_SIZE);
+   75         
+   76       function  END_OF_FILE(FILE : in FILE_TYPE) return BOOLEAN;
+   77       pragma IO_interface(END_OF_FILE, DIO_END_OF_FILE);
+   78   
+   79       -- Exceptions:
+   80   
+   81       STATUS_ERROR : exception renames IO_EXCEPTIONS.STATUS_ERROR;
+   82       MODE_ERROR   : exception renames IO_EXCEPTIONS.MODE_ERROR;
+   83       NAME_ERROR   : exception renames IO_EXCEPTIONS.NAME_ERROR;
+   84       USE_ERROR    : exception renames IO_EXCEPTIONS.USE_ERROR;
+   85       DEVICE_ERROR : exception renames IO_EXCEPTIONS.DEVICE_ERROR;
+   86       END_ERROR    : exception renames IO_EXCEPTIONS.END_ERROR;
+   87       DATA_ERROR   : exception renames IO_EXCEPTIONS.DATA_ERROR;
+   88   
+   89   private
+   90       type FILE_TYPE is array (1 .. 1) of INTEGER;
+   91   
+   92   end DIRECT_IO;
+   93   
+   94   package body DIRECT_IO is end ;
+   95   
+   
+  No translation errors detected

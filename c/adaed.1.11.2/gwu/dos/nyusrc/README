@@ -1,0 +1,526 @@
+
+1. INTRODUCTION.
+
+This file is the README file from the distribution of Ada/Ed version
+1.11.1-PC, an Ada interpreter for 386/486 machines running MS-DOS/PC-DOS.
+The distribution consists of a single compressed tar file 
+and is available through anonymous ftp on cs.nyu.edu (128.122.140.24)
+in the directory pub/adaed.  The distribution contains sources and
+executables.  The ftp directory contains another distribution for
+Unix-based machines.
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Purpose License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version. See relevant excerpts below.
+
+Ada/Ed is a translator-interpreter for Ada. It is intended as a teaching
+tool, and does not have the capacity, performance,  or robustness of 
+commercial Ada compilers. Ada/Ed was developed at New York University, as
+part of a long-range project in language definition and software prototyping. 
+The project produced the first validated translator for Ada, in the form of
+an executable definition of the language written in SETL. The SETL system
+served as design document and prototype for the C version being released today.
+
+Ada/Ed was last validated under version 1.7 of the ACVC tests. Therefore it is
+not currently a validated Ada system, and users can expect to find  small
+discrepancies between Ada/Ed and currently validated compilers. 
+
+Apart from the 100-odd tests of ACVC 1.11 that Ada/Ed currently fails, the
+major deficiency of the system is that, being an interpreter, it does not 
+implement most representation clauses, and thus does not support systems 
+programming close to the machine level. 
+
+We trust that even with these limitations, Ada/Ed will be of use to the
+Ada community at large: students, educators, user, and implementors. The 
+sources of the system should be of interest to compiler writers, and we hope 
+that they will encourage the construction of software tools to make the system
+more usable and polished. The NYUADA project does not have the resources to
+promise regular new maintenance releases of the software, but will do its
+best to keep track of reported errors, workarounds, and fixes. We will also
+produce at irregular intervals design notes and additional documentation on
+the front-end of the system.  We  urge users to send comments, corrections 
+and bug reports (reduced to their simplest form!)  to:   adaed@cs.nyu.edu
+ 
+
+All users of Ada/Ed are urged to register themselves by
+sending email to the above address, or to the NYUADA project, New
+York University, 251 Mercer Street, New York, NY 10012. This will allow us to
+notify users of updates and new releases of the system.
+
+
+2. (UN) WARRANTY
+
+This software is release 1.11.1-PC of the Ada/Ed system.
+It is distributed absolutely WITHOUT ANY WARRANTY; without even the implied 
+warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+General Public License for more details.
+
+To receive a copy of the GNU General Public License write to the Free
+Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139.
+
+The following is an excerpt from the GNU General Public License concerning
+warranties:
+
+Because the program is licensed free of charge, there is no warranty
+for the program, to the extent permitted by applicable law.  Except when
+otherwise stated in writing the copyright holders and/or other parties
+provide the program "as is" without warranty of any kind, either expressed
+or implied, including, but not limited to, the implied warranties of
+merchantability and fitness for a particular purpose.  The entire risk as
+to the quality and performance of the program is with you.  Should the
+program prove defective, you assume the cost of all necessary servicing,
+repair or correction.
+
+In no event unless required by applicable law or agreed to in writing
+will any copyright holder, or any other party who may modify and/or
+redistribute the program as permitted above, be liable to you for damages,
+including any general, special, incidental or consequential damages arising
+out of the use or inability to use the program (including but not limited
+to loss of data or data being rendered inaccurate or losses sustained by
+you or third parties or a failure of the program to operate with any other
+programs), even if such holder or other party has been advised of the
+possibility of such damages.
+
+3. INSTALLATION
+
+To intall Ada/Ed choose a directory to contain the executables and
+library files; include this directory on the PATH; set the environment
+variable ADAED to the pathname for this directory; and copy the files
+*.exe, predef.axq, predef.trc, and predef.lib into the directory.
+
+For example, if the directory chosen is C:\ADAED, then the AUTOEXEC.BAT
+might contain lines such as:
+
+PATH=C:;C:\ADAED
+SET ADAED=C:\ADAED
+
+Try some of the supplied demo program (see the readme in the demos directory)
+Also look at the release.notes for more information about the system and
+the changes that have take place.
+
+4. REBUILDING
+
+Ada/Ed is written in C, and built using Intel's 386/486 C Code Builder.  
+The sources and makefile for doing this are part of the distribution.  To
+rebuild, read the makefile and execute "make" and "make predef.lib" or
+just "make predef.lib".  In particular, note the comment in the makefile
+about the include file makeext.  After rebuilding, follow the installation
+instructions above.
+
+
+5. USING Ada/Ed
+
+The Ada/Ed system includes the following commands:
+
+ adacomp     [ -abgsv ] [ -m  main_unit ] [ -n ] [-l library ]  file
+
+ adabind     [ -m  main_unit ]  [-l library]
+
+ adaexec     [ -h heap] [ -m   bound_main_unit ] [-p pstack] [-s  tstack]
+             [ -r nb_stmts] [ -t [acerst] ]   [-l library]
+
+ adalib      [-l library]
+
+Description
+
+Ada/Ed is a translator/interpreter for the Ada programming language that
+is intended primarily for educational use.
+
+Adacomp compiles an Ada program; it invokes in succession the two
+compilation phases: parsing and semantic analysis (the front end) ,and 
+code generation.  The file argument refers to the source file; if no 
+extension is given for it, the extension ADA is assumed. The file argument 
+may contain drive and directory specifications.  The output of the compiler 
+is an instruction stream for an abstract Ada machine, which is then 
+interpreted.
+
+Adabind binds a given library with the specified main unit to form an
+executable program.
+
+Adaexec invokes the Ada machine interpreter for the bound program given in 
+the specified library. 
+
+Adalib displays the contents of the specified library.
+
+Note :  All options must precede the file name and may be in either lower or
+        upper case.
+
+Program Library
+
+All compilations require a library. A library is a directory, which is
+created or reinitialized when the user invokes a command containing a -n
+option such as:
+
+    adacomp   -n  -l  libname   adafile
+
+Intermediate files appear in directory libname. This directory is created by
+the command if it does not already exist. Only the listing files are created
+in the directory from which adacomp is invoked. The libname directory should
+only be used to hold files created by the adacomp command (i.e. those
+produced by the Ada/Ed system); confusion and grief may result if you attempt
+to use a library directory to hold other files. The libname argument may
+contain drive and path specifications.
+
+The libname argument can be omitted if the environment variable ADALIB is
+defined. For example, if you are doing several compilations referring to
+the same library you can use the command
+        SET  ADALIB=C:\MYLIB
+to indicate the library to be used. In this way the -l option (including
+its library name argument) to adacomp, adabind, adaexec and adalib can be 
+omitted.
+
+A given utility library UL (e.g. one that contains mathematical functions)
+may be used by several unrelated programs. It may then be convenient to
+create independent libraries for each program, and initialize each library
+with the contents of UL. This can be done simply by creating directories
+for each library, and copying the contents of UL into each of these, using
+DOS commands.
+
+
+Options
+
+The options for adacomp are as follows:
+
+ -a    Generates instructions for use by the interpreter (adaexec) to
+       trace the ada source lines, and is used in conjunction with the
+       -t a option of adaexec.  This is also necessary to get at run-time
+       the source line number at which an exception is raised.
+
+ -b    Indicates that the binding of the library is to be performed if
+       the current compilation is completed without errors.
+
+ -g    Specifies that the compiler is to produce a listing of the
+       generated instructions for the Ada machine (of little interest
+       to most users).
+
+ -l library
+       Uses the specified library to satisfy references to compilation
+       units not present in the file being compiled. If the compilation
+       is successful, the units defined in the file are added to the
+       library. If  the -l option is not used, the environment symbol
+       ADALIB specifies the library.
+
+ -m unit_name
+       Specifies the name of the unit which is to serve as a main unit.
+       When the library contains only one main program - which must be a
+       parameterless procedure - this option is not needed. This is an
+       option to the binder and is only relevant if the -b option is used.
+
+ -n    Indicates that a new library is to be created for this compilation.
+       The name of the library is indicated by the -l option or by use of
+       the ADALIB environment symbol. The -n option must be specified if
+       the library referenced by the -l  option does not already exist or
+       if the user wants to reinitialize it.
+
+ -s    Obtain a listing of the source file. The filename of the listing
+       file is the input file name with a filename extension of LST, and
+       is written in the directory from which the adacomp command is
+       invoked. By default a listing is not generated unless there are
+       warnings, errors or informational messages to report.
+
+ -v    Give a descriptive trace showing the subsidiary programs invoked
+       by the adacomp command, the arguments passed to them, and their
+       exit status. This is used primarily for system checkout.
+
+
+The options for adabind are as follows:
+
+ -l library
+       Specifies the library which together with the main unit will produce 
+       a bound program which can be executed by adaexec.  If  this option is
+       not specified explicitly, a default library is implicitly defined by
+       the environment symbol ADALIB.
+
+ -m unit_name
+       Specifies the name of the unit which is to serve as a main unit.
+       When the library contains only one main program - which must be a
+       parameterless procedure - this option is not needed.
+
+
+The options for adaexec are as follows:
+
+ -l library
+       Specifies the library which contains the bound program to be executed.
+       If this option is not specified explicitly, a default library is 
+       implicitly defined by the environment symbol ADALIB.
+
+ -m unit_name
+      Specifies the name of the bound main unit, i.e. the main unit that
+      was specified to adabind or adacomp. Note that a given library may
+      have been bound several times with different main units. When the
+      library has been bound with only one main unit this option is not
+      needed.
+
+ -h heap
+      Specifies the size of the heap increment in kilowords, by which the
+      heap is expanded when the elaboration of a new entity requires it.
+      The heap expands to fill available memory. The default increment is
+      32. This parameter limits the size of the largest object that can be
+      created in a program.
+
+ -p pstack
+      Specifies the size in bytes of the program stack size for the main
+      task. The default is 4096. Argument values in the range 1..31 are
+      multiplied by 1024 to obtain the stack size in bytes. The maximum
+      value is 32767.
+
+ -s tstack
+      Specifies the size in bytes of the stack size for each new task.
+      The default is 2048. Argument values in the range 1..31 are multiplied
+      by 1024 to obtain the stack size in bytes. Use of small stack sizes
+      may be appropriate when executing programs with many tasks, each of
+      which can run with a small stack.  The maximum value is 32767.
+
+ -r number_of_statements (an integer)
+      Invoke a 'round-robin' scheduling policy instead of the 'run-until-
+      -block' default scheduling policy and specify the maximum number of
+      interpreted statements that a given task can execute before switching 
+      to another task. (the minimum value is 1).
+
+ -t [acerst]
+      Specify the kind of trace requested for the execution of the program:
+      a    Display the source line numbers.  This requires that the program
+           be compiled with the -a option.
+      c    Display the name of each routine as it is entered and exited.
+      e    Display the name of each exception as it is raised.
+      r    Trace each rendezvous.
+      s    Display the context-switches between tasks.
+      t    Display task creation, activation, and termination.
+
+Examples
+
+The following examples show typical usage:
+
+1.   Compile T1.ADA into a new library called TSTLIB and bind the library,
+     and then execute it. The listing is written to T1.LST. The -s option
+     is used to force a listing file to be created.
+
+        adacomp  -s  -n  -l  tstlib  -b   t1
+        adaexec  -l tstlib
+
+2.   Compile a package specification in P.SPC and the corresponding body
+     in P.BOD, into a new library called TSTLIB. Then compile T2.ADA into
+     the same library, bind the main program, and then execute it.
+
+        adacomp  -n  -l  tstlib  p.spc
+        adacomp  -l  tstlib  p.bod
+        adacomp  -l  tstlib  -b  t2
+        adaexec  -l tstlib
+
+3.   In the example above, the binding could be done in a separate phase.
+     This is achieved by replacing the third command above with:
+
+        adacomp -l  tstlib t2
+        adabind -l tstlib
+
+4.   Example 2 above could be done without explicitly specifying the
+     library by defining the environment symbol adalib as follows:
+
+        set  adalib=c:\mylib
+        adacomp  -n  p.spc
+        adacomp  p.bod
+        adacomp  -b t2
+        adaexec
+
+5.   Compile a program with line numbers included in the generated code.
+     Execute it displaying source line numbers as they are encountered.
+
+        adacomp  -a  -l  -b  tstlib   t1
+        adaexec  -t  a  -l tstlib
+
+6.   Compile a program with two parameterless procedures (potential main
+     programs) which are named MAIN1 and MAIN2 and bind the library TSTLIB
+     using MAIN1 as the main program.
+
+        adacomp  -n  -l  tstlib p1
+        adacomp  -l  tstlib p2
+        adabind  -m  main1 -l tstlib
+        adaexec  -l tstlib
+
+7.   Suppose we wish to add another program to the library TSTLIB (created
+     in Example 6) whose main program unit is named MAIN3 and appears in
+     file P3.ADA.  The following commands will compile and execute MAIN3.
+     As TSTLIB was previously bound with MAIN1 as a main unit, it is now
+     necessary to use the -m option on the adaexec command in order to
+     select the desired bound main unit.
+
+        adacomp  -l  tstlib  p3
+        adabind  -m  main3  -l tstlib
+        adaexec  -m  main3  -l tstlib
+
+8.   The contents of a library can be examined with:
+        adalib  -l tstlib
+     Adalib writes to the standard output the name, type and compilation
+     date of each compilation unit. In addition, it writes the current
+     status (active or obsolete) of each unit.  Units which may be main
+     programs are noted by "(Main)"; if there is more than one such unit,
+     the -m option of adabind must be specified during binding. Libraries
+     that have been bound will contain at least one unit labelled "binding
+     unit". If several of those are active, the -m option must be specified
+     for adaexec.
+
+9.   The DOS redirection facilities can be used with the adaexec and
+     adalib commands. In particular, use with the adaexec command permits
+     a program to associate the default input and output files with
+     specified files; for example,
+        adaexec  -l tstlib  <i.dat  >o.dat
+     causes execution of the bound program in library TSTLIB with standard
+     input taken from I.DAT and standard output written to O.DAT.  The
+     output from adalib may also re redirected.
+
+
+
+Diagnostics, Exit Codes and Termination
+
+Adaed commands return an exit code of 0 in the case of success, and
+nonzero otherwise. An error code of 1 indicates errors in usage of the
+Ada language, 2 is returned if there is an internal system error, and
+3 denotes some invalid usage of the system. Error messages regarding
+invalid system usage are directed to the standard error file. Ada-language
+related messages detected by adacomp are written to the listing file,
+while those detected by adabind or adaexec appear on standard output.
+
+Note that an error in a given compilation unit may cause subsequent
+compilation units (within the same compilation) not to be recognized.
+
+Any compilation or execution that terminates abnormally with the error
+message "capacity limit exceeded" indicates a program that is too large
+for the compiler. Any compilation or execution that terminates abnormally
+with mention of "internal error" has uncovered a bug that should be
+reported to the NYU Ada group (adaed@cs.nyu.edu).
+
+6. APPENDIX F
+
+    (1)  The form, allowed places, and effect of implementation dependent
+         pragmas.
+
+       NYU Ada/Ed does not recognize any implementation dependent pragmas.
+       The language  defined  pragmas  are  correctly recognized and their
+       legality is checked, but, with the exception of LIST, PRIORITY, and
+       INTERFACE they  have  no  effect  on  the execution of the program. 
+       A warning message  is  generated  to  indicate  that  the  pragma  
+       is ignored by Ada/Ed.
+
+    (2)  The name and the type of every implementation dependent attribute.
+
+       There are no implementation dependent attributes in NYU Ada/Ed.
+
+    (3)  The specification of the package system (see 13.7).
+
+
+             package SYSTEM is
+
+                type SEGMENT_TYPE is new INTEGER range 0..255;
+                type OFFSET_TYPE  is new INTEGER range 0..32767;
+                type ADDRESS is record
+                   SEGMENT: SEGMENT_TYPE := SEGMENT_TYPE'LAST;
+                   OFFSET: OFFSET_TYPE := OFFSET_TYPE'LAST;
+                end record;
+
+                type NAME    is (ELXSI_BSD, ELXSI_ENIX, PC_DOS, 
+                                   SUN_UNIX, VAX_UNIX, VAX_VMS) ; 
+
+                SYSTEM_NAME  : constant NAME := PC_DOS;
+
+                STORAGE_UNIT    : constant  :=  8;
+                MEMORY_SIZE     : constant  :=  2**16 - 1;
+
+                -- System Dependent Named Numbers:
+
+                MIN_INT         : constant  :=  -2**31;
+                MAX_INT         : constant  :=  2**31 - 1;
+                MAX_DIGITS      : constant  :=  6;
+                MAX_MANTISSA    : constant  :=  31;
+                FINE_DELTA      : constant  :=  2.0 ** (-30);
+                TICK            : constant  :=  0.01;
+
+                -- Other System Dependent Declarations
+
+                subtype PRIORITY is INTEGER range 0 .. 4;
+
+                SYSTEM_ERROR  :  exception;
+                                -- raised if internal check fails
+
+             end SYSTEM;
+
+
+    (4)  The list of all restrictions on representation clauses (see 13.1).
+
+       NYU Ada/Ed supports the representation clauses for SMALL for
+       fixed points specifying powers of 2 and 10.  NYU Ada/Ed  supports 
+       no other representation  clauses,  and  a  program containing any
+       instance of any representation clause is  considered to be illegal.
+
+    (5)  The  conventions  used  for  any   implementation-generated  name
+         denoting  implementation-dependent  components (see 13.4).
+
+       NYU Ada/Ed  does  not  provide  any system generated names denoting
+       system   dependent  entities,  since  in  any case,  representation
+       specifications  are not permitted.
+
+    (6)  The interpretation of expressions that appear in address clauses.
+
+       Addresses  in  NYU  Ada/Ed  are  fully  supported. The ADDRESS type
+       defined in the package SYSTEM is a record consisting of two fields.
+       The  first  is  an unsigned byte which contains the segment number.
+       The  second  is  the  offset  within  the  segment,  ranging from 0
+       to 32767.
+
+    (7)  Any restriction on unchecked conversions (see 13.10.2).
+
+       NYU Ada/Ed will correctly recognize and check the validity  of  any
+       use  of unchecked  conversion.  However, any program which executes
+       an  unchecked  conversion  is  considered to be erroneous, and  the
+       exception  PROGRAM_ERROR  will be raised.
+
+    (8)  Any implementation-dependent characteristics of the  input-output
+         packages (see 14).
+
+       A) Temporary files are fully supported. The names are generated 
+          using the "tmpnam" C library function and therefore will not 
+          interfere with any existing file.
+
+       B) Deletion of files is fully supported.
+
+       C) Only one internal file may be associated  with the same external
+          file (No multiple accessing of files allowed).
+
+       D) File names used in the CREATE and OPEN procedures  are  standard
+          Unix file names.  The  function FORM returns the string given as
+          FORM  parameter  when  a  file  is  created. No system-dependent
+          characteristics  are  associated  with that parameter.
+
+       E) A  maximum  of  20  files  can  be open at any given time during
+          program execution.
+
+       F) The  standard  input file is  stdin; the  standard  output  file
+          is stdout.
+
+       G) SEQUENTIAL_IO  and  DIRECT_IO  support  constrained array types,
+          record  types  without  discriminants  and  record  types  with
+          discriminants with defaults. SEQUENTIAL_IO and DIRECT_IO are not
+          supported for unconstrained types.
+
+       H) I/O on  access types is possible, but  usage  of  access  values
+          read  in  another program execution is erroneous.
+
+       I) Normal termination of the main  program  causes  all  open files
+          to  be closed, and all temporary files to be deleted.
+
+       J) LOW_LEVEL_IO is not supported.
+
+       K) The  form  feed  character  (ASCII.FF)  is  used  as  the  page
+          terminator  indicator.  Its  use as a data element of a file is
+          therefore undefined.
+
+    (9)  The Implementation Limitations.
+
+       The maximum identifier length (number of characters):   120
+       The maximum number of characters in a source line:      120
+       The maximum number of lines in a source file:         32767
+
+       Generic  declarations  and  their corresponding bodies must appear
+       in the same compilation. Subunits of a generic must be part of the
+       same compilation (see 10.3(9)).
+

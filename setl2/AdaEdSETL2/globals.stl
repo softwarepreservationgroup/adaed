@@ -1,0 +1,29 @@
+package body globals;
+ procedure sbreak(rw s, c);
+  orig_s := s;
+  x := break(s, c);
+  if x = orig_s then
+     s := orig_s;
+     return om;
+  else
+     return x;
+  end if;
+ end sbreak;
+
+ procedure srbreak(rw s, c);
+  orig_s := s;
+  x := rbreak(s, c);
+  if x = orig_s then
+     s := orig_s;
+     return om;
+  else
+     return x;
+  end if;
+ end srbreak;
+
+ procedure newat_str;
+   tmp := str(newat());
+   return "#" + tmp(7..#tmp-1);
+ end newat_str;
+
+end globals; 

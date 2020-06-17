@@ -1,0 +1,1 @@
+/* DrawTextColumn.h */void DrawStringColumn( StringPtr string, short columnWidth );void DrawTextColumn( Ptr theText, short firstByte,	short textLength, short columnWidth );

@@ -1,0 +1,3 @@
+adacomp -nl bench benhtools
+adacomp -l bench benchdhry
+adabind bench

@@ -1,0 +1,357 @@
+Executing file  NYU Ada/Ed 1.11 SUN UNIX Version
+ADAfile:	report.ada
+ASTfile:	
+AISfile:	report.ais
+LIBfile:	report.lib
+	
+	
+    1   -- REPSPEC.ADA
+    2   
+    3   -- PURPOSE:
+    4   --      THIS REPORT PACKAGE PROVIDES THE MECHANISM FOR REPORTING THE
+    5   --      PASS/FAIL/NOT-APPLICABLE RESULTS OF EXECUTABLE (CLASSES A, C,
+    6   --      D, E, AND L) TESTS.
+    7   
+    8   --      IT ALSO PROVIDES THE MECHANISM FOR GUARANTEEING THAT CERTAIN
+    9   --      VALUES BECOME DYNAMIC (NOT KNOWN AT COMPILE-TIME).
+   10   
+   11   -- HISTORY:
+   12   --      JRK 12/13/79
+   13   --      JRK 06/10/80
+   14   --      JRK 08/06/81
+   15   --      JRK 10/27/82
+   16   --      JRK 06/01/84
+   17   --      PWB 07/30/87  ADDED PROCEDURE SPECIAL_ACTION.
+   18   --      TBN 08/20/87  ADDED FUNCTION LEGAL_FILE_NAME.
+   19   --      BCB 05/17/90  ADDED FUNCTION TIME_STAMP.
+   20   
+   21   PACKAGE REPORT IS
+   22   
+   23        SUBTYPE FILE_NUM IS INTEGER RANGE 1..3;
+   24   
+   25     -- THE REPORT ROUTINES.
+   26   
+   27        PROCEDURE TEST           -- THIS ROUTINE MUST BE INVOKED AT THE
+   28                                 -- START OF A TEST, BEFORE ANY OF THE
+   29                                 -- OTHER REPORT ROUTINES ARE INVOKED.
+   30                                 -- IT SAVES THE TEST NAME AND OUTPUTS THE
+   31                                 -- NAME AND DESCRIPTION.
+   32           ( NAME : STRING;      -- TEST NAME, E.G., "C23001A-AB".
+   33             DESCR : STRING      -- BRIEF DESCRIPTION OF TEST, E.G.,
+   34                                 -- "UPPER/LOWER CASE EQUIVALENCE IN " &
+   35                                 -- "IDENTIFIERS".
+   36           );
+   37   
+   38        PROCEDURE FAILED         -- OUTPUT A FAILURE MESSAGE.  SHOULD BE
+   39                                 -- INVOKED SEPARATELY TO REPORT THE
+   40                                 -- FAILURE OF EACH SUBTEST WITHIN A TEST.
+   41           ( DESCR : STRING      -- BRIEF DESCRIPTION OF WHAT FAILED.
+   42                                 -- SHOULD BE PHRASED AS:
+   43                                 -- "(FAILED BECAUSE) ...REASON...".
+   44           );
+   45   
+   46        PROCEDURE NOT_APPLICABLE -- OUTPUT A NOT-APPLICABLE MESSAGE.
+   47                                 -- SHOULD BE INVOKED SEPARATELY TO REPORT
+   48                                 -- THE NON-APPLICABILITY OF EACH SUBTEST
+   49                                 -- WITHIN A TEST.
+   50           ( DESCR : STRING      -- BRIEF DESCRIPTION OF WHAT IS
+   51                                 -- NOT-APPLICABLE. SHOULD BE PHRASED AS:
+   52                                 -- "(NOT-APPLICABLE BECAUSE)...REASON...".
+   53           );
+   54   
+   55        PROCEDURE SPECIAL_ACTION -- OUTPUT A MESSAGE DESCRIBING SPECIAL
+   56                                 -- ACTIONS TO BE TAKEN.
+   57                                 -- SHOULD BE INVOKED SEPARATELY TO GIVE
+   58                                 -- EACH SPECIAL ACTION.
+   59           ( DESCR : STRING      -- BRIEF DESCRIPTION OF ACTION TO BE
+   60                                 -- TAKEN.
+   61           );
+   62   
+   63        PROCEDURE COMMENT        -- OUTPUT A COMMENT MESSAGE.
+   64           ( DESCR : STRING      -- THE MESSAGE.
+   65           );
+   66   
+   67        PROCEDURE RESULT;        -- THIS ROUTINE MUST BE INVOKED AT THE
+   68                                 -- END OF A TEST.  IT OUTPUTS A MESSAGE
+   69                                 -- INDICATING WHETHER THE TEST AS A
+   70                                 -- WHOLE HAS PASSED, FAILED, IS
+   71                                 -- NOT-APPLICABLE, OR HAS TENTATIVELY
+   72                                 -- PASSED PENDING SPECIAL ACTIONS.
+   73   
+   74     -- THE DYNAMIC VALUE ROUTINES.
+   75   
+   76        -- EVEN WITH STATIC ARGUMENTS, THESE FUNCTIONS WILL HAVE DYNAMIC
+   77        -- RESULTS.
+   78   
+   79        FUNCTION IDENT_INT       -- AN IDENTITY FUNCTION FOR TYPE INTEGER.
+   80           ( X : INTEGER         -- THE ARGUMENT.
+   81           ) RETURN INTEGER;     -- X.
+   82   
+   83        FUNCTION IDENT_CHAR      -- AN IDENTITY FUNCTION FOR TYPE
+   84                                 -- CHARACTER.
+   85           ( X : CHARACTER       -- THE ARGUMENT.
+   86           ) RETURN CHARACTER;   -- X.
+   87   
+   88        FUNCTION IDENT_BOOL      -- AN IDENTITY FUNCTION FOR TYPE BOOLEAN.
+   89           ( X : BOOLEAN         -- THE ARGUMENT.
+   90           ) RETURN BOOLEAN;     -- X.
+   91   
+   92        FUNCTION IDENT_STR       -- AN IDENTITY FUNCTION FOR TYPE STRING.
+   93           ( X : STRING          -- THE ARGUMENT.
+   94           ) RETURN STRING;      -- X.
+   95   
+   96        FUNCTION EQUAL           -- A RECURSIVE EQUALITY FUNCTION FOR TYPE
+   97                                 -- INTEGER.
+   98           ( X, Y : INTEGER      -- THE ARGUMENTS.
+   99           ) RETURN BOOLEAN;     -- X = Y.
+  100   
+  101   -- OTHER UTILITY ROUTINES.
+  102   
+  103        FUNCTION LEGAL_FILE_NAME -- A FUNCTION TO GENERATE LEGAL EXTERNAL
+  104                                 -- FILE NAMES.
+  105           ( X : FILE_NUM := 1;  -- DETERMINES FIRST CHARACTER OF NAME.
+  106             NAM : STRING := ""  -- DETERMINES REST OF NAME.
+  107           ) RETURN STRING;      -- THE GENERATED NAME.
+  108   
+  109        FUNCTION TIME_STAMP      -- A FUNCTION TO GENERATE THE TIME AND
+  110                                 -- DATE TO PLACE IN THE OUTPUT OF AN ACVC
+  111                                 -- TEST.
+  112             RETURN STRING;      -- THE TIME AND DATE.
+  113   
+  114   END REPORT;
+  115   
+  116   -- REPBODY.ADA
+  117   
+  118   -- HISTORY:
+  119   --      DCB 04/27/80
+  120   --      JRK 6/10/80
+  121   --      JRK 11/12/80
+  122   --      JRK 8/6/81
+  123   --      JRK 10/27/82
+  124   --      JRK 6/1/84
+  125   --      JRK 11/18/85  ADDED PRAGMA ELABORATE.
+  126   --      PWB 07/29/87  ADDED STATUS ACTION_REQUIRED AND
+  127   --                    PROCEDURE SPECIAL_ACTION.
+  128   --      TBN 08/20/87  ADDED FUNCTION LEGAL_FILE_NAME.
+  129   --      BCB 05/17/90  MODIFIED TO ALLOW OUTPUT TO DIRECT_IO FILE.
+  130   --                    ADDED TIME-STAMP.
+  131   --      LDC 05/17/90  REMOVED OUTPUT TO DIRECT_IO FILE.
+  132   
+  133   WITH TEXT_IO, CALENDAR;
+  134   USE TEXT_IO, CALENDAR;
+  135   PRAGMA ELABORATE (TEXT_IO, CALENDAR);
+  136   
+  137   PACKAGE BODY REPORT IS
+  138   
+  139        TYPE STATUS IS (PASS, FAIL, DOES_NOT_APPLY, ACTION_REQUIRED, 
+  140                        UNKNOWN);
+  141   
+  142        TYPE TIME_INTEGER IS RANGE 0 .. 86_400;
+  143   
+  144        TEST_STATUS : STATUS := FAIL;
+  145   
+  146        MAX_NAME_LEN : CONSTANT := 15;     -- MAXIMUM TEST NAME LENGTH.
+  147        TEST_NAME : STRING (1..MAX_NAME_LEN);
+  148   
+  149        NO_NAME : CONSTANT STRING (1..7) := "NO_NAME";
+  150        TEST_NAME_LEN : INTEGER RANGE 0..MAX_NAME_LEN := 0;
+  151   
+  152        ACVC_VERSION : CONSTANT STRING := "1.12";  -- VERSION OF ACVC BEING
+  153                                                   -- RUN (X.XX).
+  154   
+  155        PROCEDURE PUT_MSG (MSG : STRING) IS
+  156             -- WRITE MESSAGE.  LONG MESSAGES ARE FOLDED (AND INDENTED).
+  157             MAX_LEN : CONSTANT INTEGER RANGE 50..150 := 72;  -- MAXIMUM
+  158                                           -- OUTPUT LINE LENGTH.
+  159             INDENT : CONSTANT INTEGER := TEST_NAME_LEN + 9;  -- AMOUNT TO
+  160                                           -- INDENT CONTINUATION LINES.
+  161             I : INTEGER := 0;             -- CURRENT INDENTATION.
+  162             M : INTEGER := MSG'FIRST;     -- START OF MESSAGE SLICE.
+  163             N : INTEGER;                  -- END OF MESSAGE SLICE.
+  164        BEGIN
+  165             LOOP
+  166                  IF I + (MSG'LAST-M+1) > MAX_LEN THEN
+  167                       N := M + (MAX_LEN-I) - 1;
+  168                       IF MSG (N) /= ' ' THEN
+  169                            WHILE N >= M AND THEN MSG (N+1) /= ' ' LOOP
+  170                                 N := N - 1;
+  171                            END LOOP;
+  172                            IF N < M THEN
+  173                                 N := M + (MAX_LEN-I) - 1;
+  174                            END IF;
+  175                       END IF;
+  176                  ELSE N := MSG'LAST;
+  177                  END IF;
+  178                  SET_COL (STANDARD_OUTPUT, TEXT_IO.COUNT (I+1));
+  179                  PUT_LINE (STANDARD_OUTPUT, MSG (M..N));
+  180                  I := INDENT;
+  181                  M := N + 1;
+  182                  WHILE M <= MSG'LAST AND THEN MSG (M) = ' ' LOOP
+  183                       M := M + 1;
+  184                  END LOOP;
+  185                  EXIT WHEN M > MSG'LAST;
+  186             END LOOP;
+  187        END PUT_MSG;
+  188   
+  189        FUNCTION TIME_STAMP RETURN STRING IS
+  190             TIME_NOW : CALENDAR.TIME;
+  191             YEAR,
+  192             MONTH,
+  193             DAY,
+  194             HOUR,
+  195             MINUTE,
+  196             SECOND : TIME_INTEGER := 1;
+  197   
+  198             FUNCTION CONVERT (NUMBER : TIME_INTEGER) RETURN STRING IS
+  199                  STR : STRING (1..2) := (OTHERS => '0');
+  200                  DEC_DIGIT : CONSTANT STRING := "0123456789";
+  201                  NUM : TIME_INTEGER := NUMBER;
+  202             BEGIN
+  203                  IF NUM = 0 THEN
+  204                       RETURN STR;
+  205                  ELSE
+  206                       NUM := NUM MOD 100;
+  207                       STR (2) := DEC_DIGIT (INTEGER (NUM MOD 10 + 1));
+  208                       NUM := NUM / 10;
+  209                       STR (1) := DEC_DIGIT (INTEGER (NUM + 1));
+  210                       RETURN STR;
+  211                  END IF;
+  212             END CONVERT;
+  213        BEGIN
+  214             TIME_NOW := CALENDAR.CLOCK;
+  215             SPLIT (TIME_NOW, YEAR_NUMBER (YEAR), MONTH_NUMBER (MONTH),
+  216                     DAY_NUMBER (DAY), DAY_DURATION (SECOND));
+  217             HOUR := SECOND / 3600;
+  218             SECOND := SECOND MOD 3600;
+  219             MINUTE := SECOND / 60;
+  220             SECOND := SECOND MOD 60;
+  221             RETURN (CONVERT (TIME_INTEGER (YEAR)) & "-" &
+  222                     CONVERT (TIME_INTEGER (MONTH)) & "-" &
+  223                     CONVERT (TIME_INTEGER (DAY)) & " " &
+  224                     CONVERT (TIME_INTEGER (HOUR)) & ":" &
+  225                     CONVERT (TIME_INTEGER (MINUTE)) & ":" &
+  226                     CONVERT (TIME_INTEGER (SECOND)));
+  227        END TIME_STAMP;
+  228   
+  229        PROCEDURE TEST (NAME : STRING; DESCR : STRING) IS
+  230        BEGIN
+  231             TEST_STATUS := PASS;
+  232             IF NAME'LENGTH <= MAX_NAME_LEN THEN
+  233                  TEST_NAME_LEN := NAME'LENGTH;
+  234             ELSE TEST_NAME_LEN := MAX_NAME_LEN;
+  235             END IF;
+  236             TEST_NAME (1..TEST_NAME_LEN) :=
+  237                       NAME (NAME'FIRST .. NAME'FIRST+TEST_NAME_LEN-1);
+  238   
+  239             PUT_MSG ("");
+  240             PUT_MSG (",.,. " & TEST_NAME (1..TEST_NAME_LEN) & " " &
+  241                      "ACVC " & ACVC_VERSION & " " & TIME_STAMP);
+  242             PUT_MSG ("---- " & TEST_NAME (1..TEST_NAME_LEN) & " " &
+  243                      DESCR & ".");
+  244        END TEST;
+  245   
+  246        PROCEDURE COMMENT (DESCR : STRING) IS
+  247        BEGIN
+  248             PUT_MSG ("   - " & TEST_NAME (1..TEST_NAME_LEN) & " " &
+  249                      DESCR & ".");
+  250        END COMMENT;
+  251   
+  252        PROCEDURE FAILED (DESCR : STRING) IS
+  253        BEGIN
+  254             TEST_STATUS := FAIL;
+  255             PUT_MSG ("   * " & TEST_NAME (1..TEST_NAME_LEN) & " " &
+  256                      DESCR & ".");
+  257        END FAILED;
+  258   
+  259        PROCEDURE NOT_APPLICABLE (DESCR : STRING) IS
+  260        BEGIN
+  261             IF TEST_STATUS = PASS OR TEST_STATUS = ACTION_REQUIRED THEN
+  262                  TEST_STATUS := DOES_NOT_APPLY;
+  263             END IF;
+  264             PUT_MSG ("   + " & TEST_NAME (1..TEST_NAME_LEN) & " " &
+  265                      DESCR & ".");
+  266        END NOT_APPLICABLE;
+  267   
+  268        PROCEDURE SPECIAL_ACTION (DESCR : STRING) IS
+  269        BEGIN
+  270             IF TEST_STATUS = PASS THEN
+  271                  TEST_STATUS := ACTION_REQUIRED;
+  272             END IF;
+  273             PUT_MSG ("   ! " & TEST_NAME (1..TEST_NAME_LEN) & " " &
+  274                      DESCR & ".");
+  275        END SPECIAL_ACTION;
+  276   
+  277        PROCEDURE RESULT IS
+  278        BEGIN
+  279             CASE TEST_STATUS IS
+  280             WHEN PASS =>
+  281                  PUT_MSG ("==== " & TEST_NAME (1..TEST_NAME_LEN) &
+  282                           " PASSED ============================.");
+  283             WHEN DOES_NOT_APPLY =>
+  284                  PUT_MSG ("++++ " & TEST_NAME (1..TEST_NAME_LEN) &
+  285                           " NOT-APPLICABLE ++++++++++++++++++++.");
+  286             WHEN ACTION_REQUIRED =>
+  287                  PUT_MSG ("!!!! " & TEST_NAME (1..TEST_NAME_LEN) &
+  288                           " TENTATIVELY PASSED !!!!!!!!!!!!!!!!.");
+  289                  --PUT_MSG ("!!!! " & (1..TEST_NAME_LEN => ' ') &
+  290                           --" SEE '!' COMMENTS FOR SPECIAL NOTES!!");
+  291             WHEN OTHERS =>
+  292                  PUT_MSG ("**** " & TEST_NAME (1..TEST_NAME_LEN) &
+  293                           " FAILED ****************************.");
+  294             END CASE;
+  295             TEST_STATUS := FAIL;
+  296             TEST_NAME_LEN := NO_NAME'LENGTH;
+  297             TEST_NAME (1..TEST_NAME_LEN) := NO_NAME;
+  298        END RESULT;
+  299   
+  300   FUNCTION IDENT_INT (X : INTEGER) RETURN INTEGER IS
+  301        BEGIN
+  302             RETURN X;
+  303        END IDENT_INT;
+  304   
+  305        FUNCTION IDENT_CHAR (X : CHARACTER) RETURN CHARACTER IS
+  306        BEGIN
+  307             RETURN X;
+  308        END IDENT_CHAR;
+  309   
+  310        FUNCTION IDENT_BOOL (X : BOOLEAN) RETURN BOOLEAN IS
+  311        BEGIN
+  312             RETURN X;
+  313        END IDENT_BOOL;
+  314   
+  315        FUNCTION IDENT_STR (X : STRING) RETURN STRING IS
+  316        BEGIN
+  317             RETURN X;
+  318        END IDENT_STR;
+  319   
+  320        FUNCTION EQUAL (X, Y : INTEGER) RETURN BOOLEAN IS
+  321        BEGIN
+  322             RETURN X = Y;
+  323        END EQUAL;
+  324   
+  325        FUNCTION LEGAL_FILE_NAME (X : FILE_NUM := 1;
+  326                                  NAM : STRING := "")
+  327                                 RETURN STRING IS
+  328             SUFFIX : STRING (2..6);
+  329        BEGIN
+  330             IF NAM = "" THEN
+  331                  SUFFIX := TEST_NAME(3..7);
+  332             ELSE
+  333                  SUFFIX := NAM(3..7);
+  334             END IF;
+  335   
+  336             CASE X IS
+  337                  WHEN 1 => RETURN ('X' & SUFFIX);
+  338                  WHEN 2 => RETURN ('Y' & SUFFIX);
+  339                  WHEN 3 => RETURN ('Z' & SUFFIX);
+  340             END CASE;
+  341        END LEGAL_FILE_NAME;
+  342   
+  343   BEGIN
+  344   
+  345        TEST_NAME_LEN := NO_NAME'LENGTH;
+  346        TEST_NAME (1..TEST_NAME_LEN) := NO_NAME;
+  347   
+  348   END REPORT;
+   
+  No translation errors detected

@@ -1,0 +1,19 @@
+Executing file  NYU Ada/Ed 1.11 SUN UNIX Version
+ADAfile:	hello.ada
+ASTfile:	
+AISfile:	hello.ais
+LIBfile:	hello.lib
+	
+	
+    1   with text_io; use text_io;
+    2   procedure main is
+    3   begin
+    4   put_line("hello");
+    5   end;
+   
+  No translation errors detected
+   
+  Begin Ada execution
+   
+ 
+  Execution complete

@@ -1,0 +1,138 @@
+OBJS = globals.obj edauxi.obj edit.obj ada.obj error.obj  \
+	window.obj bind.obj open.obj color.obj codes.obj int.obj compile.obj \
+	menus.obj lib.obj  pars.obj ascii.obj prompt.obj template.obj  \
+	save.obj load.obj READIN.OBJ WRITE.OBJ close.obj question.obj dir.obj \
+	block.obj dos.obj find.obj info.obj tab.obj SCREEN.OBJ GOTO.OBJ \
+	NUMBER.OBJ FREE.OBJ EXIT.OBJ DELETE.OBJ CLEAR.OBJ cursor.obj snow.obj \
+	tell.obj parser.obj
+
+
+GWADA.EXE : ${OBJS}
+	icc   /e gwada  @gwada.lnk    e:\intelc\lib\graphics.lib
+	copy gwada.exe ..
+
+snow.obj  : snow.asm macros.inc
+	tasm snow
+
+close.obj : close.c  edit.h
+	icc  /d0      /c /O3  close.c 
+
+parser.obj : parser.c  edit.h defines.h
+	icc  /d0      /c /O3  parser.c 
+
+tell.obj : tell.c  edit.h
+	icc  /d0      /c /O3  tell.c 
+
+cursor.obj : cursor.c  edit.h
+	icc  /d0     /c /O3  cursor.c  
+
+screen.obj : screen.c  edit.h
+	icc  /d0      /c /O3  screen.c 
+
+goto.obj : goto.c  edit.h
+	icc  /d0      /c /O3  goto.c 
+
+number.obj : number.c  edit.h
+	icc  /d0      /c /O3  number.c 
+
+free.obj : free.c  edit.h
+	icc  /d0      /c /O3  free.c 
+
+exit.obj : exit.c  edit.h
+	icc  /d0      /c /O3  exit.c 
+
+delete.obj : delete.c  edit.h
+	icc  /d0      /c /O3  delete.c 
+
+clear.obj : clear.c  edit.h
+	icc  /d0      /c /O3  clear.c 
+
+info.obj : info.c  edit.h
+	icc  /d0      /c /O3  info.c 
+
+tab.obj : tab.c  edit.h
+	icc  /d0      /c /O3  tab.c 
+
+find.obj : find.c  edit.h
+	icc  /d0      /c /O3  find.c 
+
+dos.obj : dos.c  edit.h
+	icc  /d0      /c /O3  dos.c 
+
+block.obj : block.c  edit.h
+	icc  /d0      /c /O3  block.c 
+
+dir.obj : dir.c  edit.h
+	icc  /d0      /c /O3  dir.c 
+
+question.obj : question.c  edit.h
+	icc  /d0      /c /O3  question.c 
+
+prompt.obj : prompt.c  edit.h
+	icc  /d0      /c /O3  prompt.c 
+
+readin.obj : readin.c  edit.h
+	icc  /d0      /c /O3  readin.c 
+
+write.obj : write.c  edit.h
+	icc  /d0      /c /O3  write.c 
+
+save.obj : save.c  edit.h
+	icc  /d0      /c /O3  save.c 
+
+load.obj : load.c  edit.h
+	icc  /d0      /c /O3  load.c 
+
+
+template.obj : template.c  edit.h
+	icc  /d0      /c /O3  template.c 
+
+ascii.obj : ascii.c  edit.h
+	icc  /d0      /c /O3  ascii.c 
+
+pars.obj : pars.c  edit.h
+	icc  /d0      /c /O3  pars.c 
+
+int.obj : int.c  edit.h
+	icc  /d0      /c /O3  int.c 
+
+lib.obj : lib.c  edit.h
+	icc  /d0      /c /O3  lib.c 
+
+menus.obj : menus.c  edit.h
+	icc  /d0      /c /O3  menus.c 
+
+compile.obj : compile.c  edit.h
+	icc  /d0      /c /O3  compile.c 
+
+bind.obj : bind.c  edit.h
+	icc  /d0      /c /O3  bind.c 
+
+globals.obj : globals.c  edit.h
+	icc  /d0      /c /O3  globals.c 
+
+color.obj : color.c  edit.h
+	icc  /d0      /c /O3  color.c 
+
+codes.obj : codes.c  edit.h
+	icc  /d0      /c /O3  codes.c 
+
+window.obj : window.c  edit.h
+	icc  /d0      /c /O3  window.c 
+
+open.obj : open.c  edit.h
+	icc  /d0      /c /O3  open.c 
+
+edauxi.obj : edauxi.c  edit.h
+	icc  /d0      /c /O3  edauxi.c 
+
+error.obj : error.c    edit.h
+	icc  /d0      /c /O3  error.c 
+
+
+edit.obj   : edit.c    edit.h
+	icc  /d0     /c /O3   edit.c 
+
+ada.obj    : ada.c    edit.h
+	icc  /d0     /c /O3   ada.c 
+

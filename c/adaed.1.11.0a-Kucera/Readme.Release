@@ -1,0 +1,41 @@
+AdaEd Amiga Release 1.11.0b
+---------------------------
+
+Since the first release of my port of AdaEd, I received feedback from a
+user regarding the failing of AdaEd on a 68000 amiga.
+
+This release fixes this very serious bug.
+
+This version of AdaEd was compiled from version 1.11.0a, however, I have
+moved the version letter up for the purposes of upload.
+
+NOTES FOR USING ADAED AMIGA
+---------------------------
+
+- Re-compiling a module of source into a library will not necessarily
+  properly update the library and hence either the compile or bind
+  will fail.  If your re-compiles start failing for no good reason,
+  remove the entire old compiled directory and recompile.
+
+- While waiting for input from the keyboard device, CTRL-C will not
+  break the ada task.  This is an unfortunate side affect of using the
+  ixemul.library.  The patch-up-solution to this problem is to open
+  a second CLI and use the "break" command on the task number given
+  by "status" for adaexec.
+
+- The "Adacomp" command will not operate when using "ixemul.trace".
+  If you wish to trace the operation of the compiler, compile using
+  "adacomp -v" and take note of each stage that is executed as well
+  as the parameters to each command.  Then install the ixemul.trace
+  library and run each compiler step manually.
+
+- This compiler has been tested most thoroughly with version 39.45
+  of the ixemul.library.  The new release of ixemul.library 39.47
+  seems to work, however, if you have a problem with the compiler
+  while using this version of the library, try moving down to 39.45
+  first.
+
+GOOD LUCK!
+
+Dylan Kucera
+djkucera@undergrad.math.uwaterloo.ca

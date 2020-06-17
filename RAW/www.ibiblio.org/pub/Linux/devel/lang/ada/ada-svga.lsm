@@ -1,0 +1,12 @@
+Begin3
+Title:          GNAT SVGA Bindings
+Version:       	0.01 
+Entered-date:  	17/03/95 
+Description:   	Ada95 bindings for the Linux SVGA Library 
+Keywords:       gnat ada svga 
+Author:         Darren J Moffat <moffatd@dcs.gla.ac.uk> 
+Maintained-by:  Darren J Moffat <moffatd@dcs.gla.ac.uk> 
+Primary-site:   sunsite.unc.edu:/pub/linux/development 
+Platform:       i486 or any platform with GNAT and SVGAlib
+Copying-policy: As for SVGALib 
+End

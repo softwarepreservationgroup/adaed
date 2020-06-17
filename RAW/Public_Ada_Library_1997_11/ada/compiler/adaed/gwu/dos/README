@@ -1,0 +1,25 @@
+GW-Ada/Ed DOS Distribution
+--------------------------
+January 1996
+
+Michael B. Feldman
+Department of Electrical Engineering and Computer Science
+The George Washington University
+Washington, DC 20052
+(202) 994-5919 (voice)
+(202) 994-0227 (fax)
+mfeldman@seas.gwu.edu
+http://www.seas.gwu.edu/faculty/mfeldman
+
+This directory contains only the source code (in C) for the DOS
+version of NYU Ada/Ed (nyusrc.zip) and the GW-Ada/Ed editor
+environment (gwusrc.zip). This source code is free software,
+released under the GNU General Public License.
+
+The binary distribution has been re-packaged, with no change in
+functionality, and moved (as the files adaed1.zip and adaed2.zip)
+to the ez2load directory. This is located at ftp.gwu.edu, in the
+directory pub/ada/ez2load, and at the Public Ada Library,
+wuarchive.wustl.edu, in the directory languages/ada/compiler/ez2load.
+
+Please see the README file in that directory.

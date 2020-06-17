@@ -1,0 +1,10 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem11_.stl,v 1.1 90/12/05 16:15:56 ada Exp $
+--
+package adasem11;
+    procedure except_decl(id_list) ;
+    procedure exception_part(node) ;
+    procedure exception_handler(node) ;
+    procedure raise_statement(opt_id) ;
+end adasem11;
+

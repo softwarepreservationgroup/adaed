@@ -1,0 +1,2836 @@
+--
+--$Header: /cs.b/ada/ada/src/ada9x/adasem3.stl,v 1.3 91/01/28 13:38:51 banner Exp $
+--
+--T+ 3. Declarations and types.
+--S+ 3.2 Objects and Named Numbers
+--S+ 3.2.1 Object_Declaration
+
+package body adasem3;
+
+use globals;
+use adasem1;
+use adasem2;
+use adasem4;
+use adasem5;
+use adasem6;
+use adasem7;
+use adasem8;
+use adasem9;
+use adasem10;
+use adasem11;
+use adasem12;
+use adasem13;
+use evalstat;
+use adalib;
+use adaio;
+use adaarith;
+
+procedure object_declaration(node) ;
+
+-- Object declarations are normalized by the parser into single declarations.
+-- The same is done for constant, number, and component declarations. Their
+-- static semantic processing creates a symbol table entry for each, and for
+-- the anonymous types introduced by the subtype indication.
+sem_trace_proc_entry(3, "Object_Declaration");
+
+[-, id_node, type_indic_node, init_node] := ast(node) ;
+
+name := find_new(adasem(id_node));
+opt_init := adasem(init_node) ;
+type_mark := set_type_mark(name, type_indic_node) ;  
+force_representation(base_type(type_mark));
+
+check_fully_declared(type_mark) ;
+
+-- If an initialization is provided, verify that it has the specified type. 
+
+if opt_init = [] then 
+   init_val := om ;	
+else
+   [-, init_val] := check_init(type_mark, opt_init) ;
+end if;
+
+if is_unconstrained(type_mark) then
+   errmsg("Unconstrained "+ST(type_mark).nature," in object declaration", "3.6.1, 3.7.2");
+end if;
+
+ST(name).nature := "obj" ; 
+
+sem_trace_proc_exit(3, "Object_Declaration");
+
+return [["object", name, ST(name).type_of, init_val]];
+
+end object_declaration;
+
+--H+ Constant_Declaration
+procedure constant_declaration(node) ;
+
+-- Process constant declarations. This may be a new declaration, or the
+-- full declaration of a deferred constant in the private part of a
+-- package. In this later case, recover the names of the constants, and
+-- update their definitions.
+-- 
+sem_trace_proc_entry(3, "Constant_Declaration");
+
+[-, id_node, type_indic_node, init_node] := ast(node) ;
+
+id  := adasem(id_node) ;
+opt_init := adasem(init_node) ;
+
+if ST(current_scope).nature = "private_part" then
+
+-- Check whether the item is a deferred constant otherwise it is asummed to 
+-- be a fully private constant
+
+    if declared(current_scope)(id) /= om then
+	return constant_redeclaration(id, type_indic_node,opt_init);
+    end if;
+end if;
+  
+name := find_new(id);
+type_mark := set_type_mark(name, type_indic_node) ;
+
+-- Check for case of deferred constant.
+ 
+if opt_init = [] then
+    init_val := [] ;
+
+    if ST(base_type(type_mark)).type_of ? "" notin	 priv_types then
+	errmsg("Missing initialization in constant declaration","", "3.2");
+
+    elseif ST(type_mark).scope_of /= current_scope then
+	errmsg("Wrong scope for type of deferred constant", "", "7.4");
+
+    elseif ST(current_scope).nature notin {"package_spec","generic_package_spec"}
+	then errmsg("Invalid context for deferred constant","", "3.2, 7.4") ;
+
+    elseif is_generic_type(type_mark) 
+	or is_generic_type(base_type(type_mark)) then	      
+	errmsg("constants of a generic type cannot be deferred","", "12.1.2") ;
+
+    elseif is_anonymous(type_mark) then		 
+	errmsg("a deferred constant must be defined with a type mark", "","7.4.3") ;
+    end if;
+else 
+    force_representation(base_type(type_mark));
+    -- t_m is an anonymous type created from the bounds of init_val
+
+    [t_m, init_val] := check_init(type_mark, opt_init) ;
+    if t_m /= type_mark then
+	ST(name).type_of := t_m ; 
+    end if;
+end if;
+
+ST(name).signature := init_val; 
+ST(name).nature := "constant";
+
+sem_trace_proc_exit(3, "Constant_Declaration");
+
+-- If the constant is a static scalar constant, there is no need to
+-- emit code for it: it is constant-folded wherever used. If it is 
+-- a deferred constant, code is not emitted either : it will be 
+-- emitted when the private declaration is processed.
+
+if (is_value(init_val) and is_scalar_type(type_mark)) or 
+    init_val = [] then
+    return [];
+else
+     return [["constant", name, ST(name).type_of, init_val]];
+end if;
+end constant_declaration;
+
+--H+ Constant_Redeclaration
+procedure constant_redeclaration(id, type_indic_node, opt_init) ;
+
+-- Process the full declaration of deferred constants. The identifier
+-- is already declared in the visible part of the current scope. 
+-- The type indication must be a subtype indication .
+sem_trace_proc_entry(3, "Constant_Redeclaration");
+sem_trace(3, "id: "+ str(id) );
+sem_trace(3, "type: "+ str(type_indic_node) );
+sem_trace(3, "opt_init: "+ str(opt_init) );
+
+if node_kind(type_indic_node) = "subtype_indic" then
+    type_mark := promote_subtype(make_subtype(adasem(type_indic_node)));
+else
+
+-- An anonymous array is syntactically possible, but incorrect.
+-- Type checking will diagnose this.
+
+    type_mark := anonymous_array(type_indic_node) ;
+end if;
+
+-- The id is known to exist
+
+name := declared(current_scope)(id) ;
+
+if ST(name).nature /= "constant" or ST(name).signature /= [] then 
+    errmsg("Invalid redeclaration of ", id,"8.3") ;
+
+elseif	(ut := ST(name).type_of) /= type_mark
+
+-- They may still be the same subtype of some private type.
+
+	and (ST(ut).type_of /= ST(type_mark).type_of or
+	ST(ut).signature /= ST(type_mark).signature) then
+    errmsg("incorrect type in full declaration of ", id,"7.4, 7.4.1") ;
+
+-- Check for no initialization
+
+elseif opt_init = [] then
+    errmsg("Missing initialization in full declaration of ", id,"7.4");
+
+else
+    [-,	init_val] := check_init(type_mark, opt_init) ;
+    ST(name).signature := init_val ;
+end if;
+
+sem_trace_proc_exit(3, "Constant_Redeclaration");
+
+return [["constant", name, ST(name).type_of, init_val]] ;
+end constant_redeclaration;
+--H+ Set_Type_Mark
+
+procedure set_type_mark(name, type_indic_node) ;
+sem_trace_proc_entry(4, "Set_Type_Mark");
+sem_trace(4, "name: "+ str(name) );
+sem_trace(4, "type_indic_node: " + str(type_indic_node) );
+
+-- Establish the type mark for object or constant declarations. The type 
+-- indication is a subtype indication or an array definition. In the later 
+-- case, an anonymous array type must be created for each item in the name 
+-- list. For the interpreter, any of these types will do.
+
+if node_kind(type_indic_node) = "subtype_indic" then
+    type_mark := promote_subtype(make_subtype(adasem(type_indic_node)));
+else
+    type_mark := anonymous_array(type_indic_node) ;
+end if;
+
+ST(name).type_of := type_mark ;
+sem_trace_proc_exit(4, "Set_Type_Mark");
+return type_mark ;
+
+end set_type_mark;
+
+--H+ Check_Init
+procedure check_init(type_mark, opt_init) ;
+
+-- Validate the initialization of an object or constant declaration.
+-- Return the resolved expression, and the type (or a subtype of it
+-- in the case of constants of unconstrained type).
+
+sem_trace_proc_entry(4, "Check_Init");
+
+if is_limited_type(type_mark) then
+    errmsg("Initialization not available for entities of limited type","","7.4.4") ;
+end if;
+
+init_val := check_type(type_mark, opt_init) ;
+
+-- If there is a constraint check remove it sincethe interpreter performs it in 
+-- any case.
+
+if is_tuple(init_val) and init_val(1) = "qual_discr" then
+    init_val := init_val(3) ;
+end if;
+
+if ST(type_mark).nature = "array" and is_value(init_val) then
+
+   -- Constant definition: bounds are given by the initial expression.
+   -- Create an anonymous subtype for the constant with those bounds.
+
+   [-, init_array] := init_val ;
+   new_indices := [] ;
+
+   -- Unpack aggregate to obtain actual bounds on each dimension,
+   -- and create constrained index for each.
+
+   for index in index_types(type_mark) loop 
+       [-, components, lo, hi] := init_array ;
+       -- Its new subtype
+
+       new_index := anonymous_type() ;
+       ST(new_index) := 
+	      ["subtype", index, 
+	         ["range", ["ivalue", lo, index], ["ivalue", hi, index]],
+		 {}, current_scope, ST(index).root_type];
+       new_indices with:= new_index ;
+
+       -- Select a representative element
+
+       init_array := components(1) ;
+
+   end loop;
+
+   new_array := anonymous_type() ;
+   ST(new_array) := 
+      ["subtype", type_mark, [new_indices, component_type(type_mark)],
+   	ST(type_mark).misc_type_attributes, current_scope, 
+        ST(type_mark).root_type] ;
+
+   type_mark := new_array ;
+end if;
+sem_trace_proc_exit(4, "Check_Init");
+return [type_mark, init_val] ;
+end check_init;
+
+--H+ Is_Deferred_Constant
+procedure is_deferred_constant(c) ;
+
+   return   is_identifier(c) 
+	and ST(c).nature = "constant" 
+	and is_empty(ST(c).signature) ;
+
+end is_deferred_constant;
+--S+ 3.2.2 Number_Declaration
+
+procedure number_declaration(node) ;
+sem_trace_proc_entry(3, "Number_Declaration");
+
+-- A number declaration differs from a constant declaration in that the 
+-- type of the declared object is a universal numeric type, obtained from 
+-- the value of the  literal expression supplied for it.
+-- No interpretable code is generated for them: they act as macros, and are 
+-- always replaced by their value wherever they occur.
+
+[-, id_node, expn] := ast(node) ;
+
+name := find_new(adasem(id_node));
+
+num_val := check_type("universal_type", adasem(expn)) ;
+number_type := expression_type(num_val) ;
+
+if not is_value(num_val) then
+    errmsg("Expect literal expression in number declaration", "","3.2");
+    number_type := "any" ;
+end if;
+
+ST(name) := ["constant", number_type, num_val, {}, current_scope, om] ;
+sem_trace_proc_exit(3, "Number_Declaration");
+return [] ;
+end number_declaration;
+
+--T+ 3.3 Types and Subtypes
+--S+ 3.3.1 Type_Declaration
+procedure type_declaration(id, opt_disc, type_def) ;
+sem_trace_proc_entry(3, "Type_Declaration");
+
+-- Process a type declaration. Create new name for type, or find unique
+-- name already given for incomplete declaration.
+
+type_name := find_type_name(id) ;
+
+-- Return any in the case of an invalid redeclarion, etc.
+if type_name = "any" then 
+   return "any" ;
+end if;
+
+if opt_disc /= []  and ST(type_name).type_of in incp_types then
+
+    -- full declaration of incomplete or private type. Verify that
+    -- discriminant declarations are conmforming.
+    discriminant_redeclaration(type_name, opt_disc) ;
+    
+elseif ST(type_name).type_of in incp_types and has_discriminants(type_name) then
+    errmsg("missing discriminants in full type declaration", "", "3.8");
+end if;	       
+
+kind := ST(type_name).type_of ;
+
+build_type(type_name, opt_disc, type_def) ;
+
+if opt_disc /= [] and not is_record(type_name) then
+     errmsg("Invalid use of discriminants in type declaration", "", "3.7.1") ;
+end if;
+
+if kind in priv_types then 
+    check_private_declaration(kind, type_name) ;
+end if;
+
+sem_trace_proc_exit(3, "Type_Declaration");
+return type_name ;
+end type_declaration;
+
+--H+ Find_Type_Name
+procedure find_type_name(id) ;
+sem_trace_proc_entry(4, "Find_Type_Name");
+
+-- Create a unique name for a type definition, or find the unique name
+-- already created, in the case of the full declaration of an incomplete
+-- or private type. 
+-- First find incomplete declaration, if some was given.
+
+incomplete := declared(current_scope)(id) ;
+
+-- Check whether this is a new type declaration or if a previous declaration
+-- exists.
+
+if incomplete = om then
+    type_name := find_new(id) ;
+else
+    type_name := incomplete ;
+    -- The entity is legal only if it is an incomplete type, or a private
+    -- type which is not a generic type.
+    if ST(incomplete).type_of notin incp_types 
+    or is_generic_type(incomplete) then
+	errmsg("Invalid redeclaration of ", id,"8.3") ;
+        sem_trace_proc_exit(4, "Find_Type_Name");
+	return  "any" ;
+    end if;
+
+    if ST(incomplete).type_of = "incomplete" then
+        for a_t in ST(incomplete).private_dependents | 
+			is_access(a_t) and ST(a_t).scope_of = current_scope loop 
+	    -- access type is now dereferenceable.
+	    ST(a_t).misc_type_attributes less:= "incomplete" ;
+	end loop;
+    else		
+
+	-- Full declaration for private type. Save visible declaration in
+	-- private decls for this package, so that full declaration can
+	-- be installed.
+        if ST(current_scope).nature notin 
+		["private_part", "package", "generic_package"] then
+        errmsg("invalid context for full declaration of private type","","7.4");
+        end if;
+        ST(current_scope).private_decls(type_name) := ST(type_name) ;
+    end if;
+end if;
+sem_trace_proc_exit(4, "Find_Type_Name");
+return type_name ;
+end find_type_name;
+--H+ Build_Type
+
+procedure build_type(type_name, opt_disc, type_def) ;
+sem_trace_proc_entry(3, "Build_Type");
+sem_trace(4, "args: type_name opt_disc type_def");
+
+kind := ast(type_def)(1) ;
+ 
+case kind 
+ 
+when "enum" =>            new_enumeration_type(type_name, type_def);
+
+when "int_type" =>        new_integer_type(type_name, type_def) ;
+
+when "float_type" =>      new_floating_type(type_name, type_def) ;
+
+when "fixed_type" =>      new_fixed_type(type_name, type_def) ;
+
+when "array_type" =>      new_array_type(type_name, type_def);
+
+when "record" =>          new_record_type(type_name, opt_disc, type_def) ;
+
+when "derived_type" =>    derive_type(type_name, type_def) ;
+
+when "access_type" =>     new_access_type(type_name, type_def);    
+
+end case;
+
+parent := ST(type_name).type_of;
+ST(type_name).root_type := ST(parent).root_type ? parent ;  
+sem_trace_proc_exit(3, "Build_Type");
+end build_type;
+--H+ ais_type
+
+procedure ais_type(type_name) ;
+sem_trace_proc_entry(3, "Ais_Type");
+
+-- This utility formats a type declaration for the interpreter. It
+-- is called for type declarations and for anonymous type processing
+-- (see procedure New_Type_List ). Note that in the case of types
+-- for which no specific reformating is provided here, the routine
+-- returns the symbol table entry for the type, which is thus assumed
+-- to already be in the format the interpreter requires.
+
+    case ST(type_name).nature 
+    
+	when "array" =>  
+	  ais_rep :=  [ "array_former", index_types(type_name),
+				component_type(type_name)] ;
+		    
+	when "record" =>  
+
+	  -- Anonymous types  generated during the  elaboration of  component
+	  -- declarations  may depend on discriminants, in which case they
+          -- will only be elaborated when a discriminant constraint is applied
+          -- to the record type. In order to delay their evaluation, they are
+          -- emitted within the record declaration itself.
+          -- If the record has no discriminants, anonymous  types are emitted 
+	  -- by New_type_list before the type declaration that  produces them. 
+
+          if has_discriminants(type_name) then 
+	      anon := new_type_list() ;
+	      newtypes with:= [] ;
+          else anon := [];
+          end if;
+    
+	  ais_rep := ["record_former", 
+	             [anon + ST(type_name).signature.invariant_part, 
+		      ST(type_name).signature.variant_part]];
+    
+	when "type", "task_type", "task_type_spec" =>
+	  ais_rep := ST(type_name).type_of;
+	  sem_trace(5,"ais_rep="+ str(ais_rep) );
+	  --sem_trace(5,"signature="+ str(ST.signature) ;
+	  if ais_rep = "$FIXED" then
+	     ais_rep := ["fixed_former"] + ST(type_name).signature(2..) ; 
+	  end if;
+    
+	when "enum"  =>  
+	  [-,lo, hi] := ST(type_name).signature ;
+	  enum_map := { [v, nam]: [nam, v] in ST(type_name).literal_map } ;
+	  ais_rep := ["enum_former", lo(2), hi(2), enum_map] ;
+    
+	when "subtype" => 
+	  if is_array(type_name) then
+	      ais_rep := ["subtype", base_type(type_name),
+		         ["index", index_types(type_name)]] ;
+	  elseif is_access(type_name) then
+	      ais_rep := ["access_former", ST(type_name).designated_type];
+          elseif is_task_type(type_name) then
+              [-, typ, -, -, -] := ST(type_name) ;
+              ais_rep := ["subtype", typ, []] ;
+	  else 
+	      [-, typ, sig, -, -] := ST(type_name) ;
+              ais_rep := ["subtype", typ, sig];
+	  end if;
+    
+	when "access" => 
+	  ais_rep := ["access_former", ST(type_name).designated_type];
+    
+	when "entry_former" => 
+	  ais_rep := ["entry_former", ST(type_name).type_of, build_signature(type_name)];
+	otherwise => 
+	  ais_rep := ST(type_name) ;
+    
+    end case;
+
+    sem_trace_proc_exit(3, "Ais_Type");
+    if (pr := private_ancestor(type_name)) /= om and pr /= type_name then
+	return ["delayed_type", type_name, ais_rep, pr] ;
+    elseif ais_rep(1) = "subtype" and ST(type_name).scope_of = ST(type_name).type_of 
+    -- Unusual case of an anonymous subtype of an enclosing record (e.g.e38104a).
+    then
+ 	return ["delayed_type", type_name, ais_rep, ST(type_name).scope_of] ;
+    else
+	return ["type", type_name, ais_rep] ;
+    end if;
+end ais_type;
+
+--S+ 3.3.2 Subtype Declarations
+procedure subtype_declaration(id,subt);
+sem_trace_proc_entry(3, "Subtype_Declaration");
+sem_trace(3, "id="+str(id) +" subt="+str(subt) );
+
+-- Process a subtype declaration. id is the source id of the new entity,
+-- and subt is the subtype description. If the subtype indication does not 
+-- include a constraint, subt is either an anonymous array, or a subtype 
+-- indication that fucntions as a renaming of a type. In that case the new 
+-- id denotes the same entity, and does not needs a new symbol table entry,
+-- except that for conformance purposes it is not equivalent to the original 
+-- type. For now we only introduce a new subtype in the case of scalar  and
+-- task types (to catch invalid uses of subtypes of task types in the body
+-- of the corresponding unit).
+
+    name := find_new(id) ;
+    if is_identifier(subt) then
+	if is_array(subt) and is_anonymous(subt) then 
+	    ST(name) := ST(subt) ;
+	    ST(name).scope_of := current_scope;
+	elseif is_scalar_type(subt) or is_task_type(subt) then 
+	    ST(name).nature    := "subtype" ;
+	    ST(name).type_of   := base_type(subt) ;
+	    ST(name).signature := ST(subt).signature ;
+	else
+	    declared(current_scope)(id) := subt ;
+
+	-- No declaration needed in this case.
+            sem_trace_proc_exit(3, "Subtype_Declaration");
+	    return [] ;
+	end if;
+	
+    else
+
+	-- an explicit constraint on a type mark.
+	ST(name) := subt ;	 
+	ST(name).scope_of := current_scope;
+    end if;
+    
+    parent := ST(name).type_of ;		      
+    ST(name).root_type := ST(parent).root_type ;		  
+    ST(name).misc_type_attributes := ST(parent).misc_type_attributes ;
+
+    -- If this is a fixed-point subtype then we must adjust the
+    -- precision to that of the parent type, and disregard the given one.
+
+    if is_fixed_type(name) then
+	-- type_precision(name) := type_precision(parent) ;
+	ST(name).signature.precision_of(2) := type_precision(parent) ;
+    end if; 
+
+    repr_stmt := om;
+
+    -- In the case of a subtype of a generic formal type we delay the
+    -- representation until the instantiation. At that point the representation
+    -- of the parent is known and we can then fill in the representation
+    -- for the subtype. The routine REPLACE will transform the 'delayed_repr'
+    -- instruction to the 'repr' instruction with the representation of the
+    -- actual.
+
+    if is_generic_type(base_type(parent)) then
+       repr_stmt := ["delayed_repr", {name}];
+    elseif already_forced(base_type(parent)) then
+       choose_representation(name);
+    else
+      types_not_chosen_yet(base_type(parent)) with:= name;
+    end if;
+
+    -- if the type is not a subtype of a generic type then repr_stmt is
+    -- undefined and the following tuple has a single component. 
+
+    sem_trace_proc_exit(3, "Subtype_Declaration");
+    return [ais_type(name), repr_stmt] ;
+end subtype_declaration;
+--H+ Make_Subtype 
+
+procedure make_subtype(subtype_indic) ;
+sem_trace_proc_entry(3, "Make_Subtype");
+
+-- Process a subtype indication.
+
+[name, constraint] := subtype_indic ; 
+sem_trace(3,"new subtype: "+str(name) );
+sem_trace(3,"constraint: "+ str(constraint) ) ;
+type_mark := find_old(name) ;
+
+if type_mark = "?" then
+    sem_trace_proc_exit(3, "Make_Subtype");
+    return [] ;
+end if;
+
+if not is_identifier(type_mark) or not is_type(type_mark) then
+
+    -- If its type_of field is "any" is was an undeclared identifier, and 
+    -- was already reported. Otherwise report the type_mark in error.
+
+    if ST(type_mark) /= om and ST(type_mark).type_of /= "any"  then
+	errmsg("Invalid type_mark in subtype indication","","3.3") ;
+    end if;
+    sem_trace_proc_exit(3, "Make_Subtype");
+    return "any" ;
+
+elseif base_type(type_mark) in open_scopes 
+       and ( not is_task_type(type_mark)
+           or original_name(base_type(type_mark)) =
+	       (if is_identifier(name) then name
+	       elseif name(1) = "." then name(3)
+	       else name end if))
+then 
+
+    -- Component of record is subtype of record type itself, or task type
+    -- is used within its own body, rather than a defined subtype.
+
+    errmsg("invalid use of type " + original_name(type_mark) ,
+	      " within its definition or body", "3.3,9.1");
+    sem_trace_proc_exit(3, "Make_Subtype");
+    return type_mark ;	
+
+elseif constraint = [] then 
+    check_incomplete(type_mark) ;
+    sem_trace_proc_exit(3, "Make_Subtype");
+    return type_mark ; 
+
+else
+    -- If the type is a access type, the constraint applies to the type 
+    -- being accessed. We create the corresponding subtype of it, promote
+    -- it to an anonymous type, and return an access to it.
+
+    if (is_acc:= is_access(type_mark)) then
+	acc_t := type_mark ;
+	type_mark := ST(type_mark).designated_type ;
+    end if;
+
+    if is_acc and 
+       not is_array(type_mark) and not is_record(type_mark) then
+	errmsg("Invalid constraint on access type","","3.8") ;
+        sem_trace_proc_exit(3, "Make_Subtype");  
+	return type_mark ;
+    end if;
+
+    case ST(type_mark).nature 
+
+    when "type" => 	if is_scalar_type(type_mark) then
+		    subtype := constrain_scalar(type_mark, constraint) ;
+
+	   -- Private type with discriminants, hopefully.
+		else
+		    subtype := constrain_record(type_mark, constraint) ;
+		end if;
+
+    when "enum" => 	subtype := constrain_scalar(type_mark, constraint) ;
+
+    when "array" => 	subtype := constrain_array(type_mark, constraint) ;
+
+    when "record" =>  	subtype := constrain_record(type_mark, constraint) ;
+
+    when "subtype" =>  if is_array(type_mark) or is_record(type_mark) then
+		    errmsg("Invalid subtype indication: type is already constrained",
+		           "","3.6.1, 3.7.2") ;
+		    subtype := ST(type_mark) ;
+		else
+		    subtype := constrain_scalar(type_mark,constraint);
+		end if;
+
+    otherwise =>
+		errmsg("Invalid type mark in subtype indication: ",
+		original_name(type_mark),"3.3, 3.6.1") ;
+		subtype := type_mark ;
+    end case;
+
+end if;
+
+sem_trace_proc_exit(3, "Make_Subtype");
+
+return if is_acc then ["subtype", acc_t, promote_subtype(subtype) ] 
+       else  subtype end if;
+
+end make_subtype ;
+--T+ 3.4 Derived Types
+procedure derive_type(derived_subtype, def_node) ;
+const
+   unconstrained_natures := ["enum", "array", "record", 
+			     "access", "task_type", "task_type_spec"] ;
+
+sem_trace_proc_entry(3, "Derived_Type");
+[-, subtype] := adasem(def_node) ;
+if is_identifier(subtype) then
+    parent_subtype := subtype ;
+    if is_fixed_type(parent_subtype) then 
+       -- We regard a fixed subtype indication as a forcing occurence, because
+       -- the bounds of the type must be elaborated, and they depend on 'small.
+       force_representation(base_type(parent_subtype)) ;
+    end if; 
+
+    -- The constraint of the parent subtype is inherited by the derived subtype
+    constraint := ST(parent_subtype).signature ;
+else
+
+    -- parent_subtype designates the type mark in the subtype
+    -- indication, which carries an explicit constraint.
+
+    [-, parent_subtype, constraint] := subtype ;   
+end if;
+
+if parent_subtype = subtype and
+  (ST(subtype).nature in  unconstrained_natures
+  -- private or derived from.
+  or ST(ST(subtype).root_type).type_of in priv_types) then
+    derived_type := derived_subtype ;
+else
+
+    -- If the derived type definition includes a constraint, or if the
+    -- old type is constrained, we first derive an anonmyous type, and
+    -- then construct a subtype of it. 
+
+    derived_type := named_type(original_name(derived_subtype) + "'base") ;
+    newtypes(#newtypes) with:= derived_type ;
+end if;
+sem_trace(3, "derive type: " + str(parent_subtype) +" to " + str(derived_type) ) ;
+parent_type := base_type(parent_subtype) ;
+
+-- A derived type defined in a package specification cannot be used for
+-- further derivation until the end of its visible part. This means that
+-- derivation in the private part of the package is allowed.
+
+if (is_derived_type(parent_type) and in_visible_part(ST(parent_type).scope_of))
+   or 
+    is_incomplete_type(parent_subtype)
+   then
+    errmsg("premature derivation of derived or private type ",
+		  original_name(parent_type), "3.4, 7.4.1") ;
+end if;
+build_derived_type(parent_type, derived_type) ;
+
+if derived_subtype /= derived_type then
+
+   -- Introduce derived subtype separately.
+   ST(derived_subtype) := 
+	["subtype", derived_type, constraint, {}, current_scope, om] ;
+
+   if types_not_chosen_yet(derived_type) /= om 
+   then 
+       types_not_chosen_yet(derived_type) with:= derived_subtype;
+   end if;
+end if;
+
+derive_subprograms(parent_subtype, derived_type) ;
+
+sem_trace_proc_exit(3, "Derived_Type");
+end derive_type;
+
+--S+ build_derived_type
+procedure build_derived_type(parent_type, derived_type) ;
+
+sem_trace_proc_entry(3, "build_derived_Type");
+scope := current_scope;
+root := ST(parent_type).root_type;
+misc := if (l := private_kind(parent_type)) /= om then {l} else {} end if;
+
+case ST(parent_type).nature 
+ 
+  when "type", "subtype" => 
+       ST(derived_type) := 
+	    ["type", parent_type, ST(parent_type).signature, misc, scope, root];
+ 
+  when "array" => 
+ 	    array_info := ST(parent_type).signature ;
+	    new_unconstrained_array(derived_type, array_info) ;
+ 
+  -- A derived record type has the same fields and types as the parent.
+  -- All we need to do is introduce an aggregate under the new type mark.
+  -- The declaration may have a discriminant part, in which case they
+  -- must conform to the discriminants of the parent type. We assume that
+  -- the discriminant names, types, and default values must be the same.
+
+  when "record" =>  
+	    if ST(derived_type).type_of in incp_types then
+		dl1 := discriminant_list(derived_type) ;
+		dl2 := discriminant_list(parent_type) ;
+		if #dl1 /= #dl2 
+		    or (exists i in [1..#dl1] |
+		       ((ST(d1 := dl1(i)).type_of /= ST(d2 := dl2(i)).type_of
+		       or ST(d1).default_expr /= ST(d2).default_expr
+		       or original_name(d1) /= original_name(d2)))) 
+		then
+		    errmsg("discriminant mismatch in declaration", "","3.8");
+		end if;
+	    end if;
+	    ST(derived_type) := [ST(parent_type).nature, derived_type,
+		  		      ST(parent_type).record_declarations,
+				      misc, scope, root]; 
+	    declared(derived_type) := declared(parent_type) ; 
+ 
+  -- A derived enumeration type has the literals of its parent, but these
+  -- are marked as derived, to enforce the overloading rules.
+ 
+  when "enum" =>  
+	    lit_map := ST(parent_type).literal_map;
+	    for nam in domain lit_map loop 
+		new_lit_name:=chain_overloads(nam, ["literal",derived_type, [], nam]);
+		ST(new_lit_name).alias := nam ;
+	    end loop;
+	    ST(derived_type) :=["enum", derived_type, ST(parent_type).signature,
+			        lit_map, scope, root];
+ 
+  when "access" => 
+	    ST(derived_type) := ST(parent_type);
+	    ST(derived_type).scope_of := scope;
+
+  when "task_type", "task_type_spec" => 
+	    ST(derived_type)  := ST(parent_type) ;
+	    declared(derived_type) := declared(parent_type) ;
+	    -- The derived type is a task type, even if parent is spec.
+	    ST(derived_type).nature   := "task_type" ;
+	    ST(derived_type).scope_of := scope;
+
+   otherwise =>
+	    errmsg("cannot obtain derived type from ", 
+		   original_name(parent_type),"3.4") ;
+	    -- To have something.
+	    ST(derived_type) := ST(parent_type) ; 
+
+end case;
+
+
+inherit_representation_info(derived_type, parent_type);
+end build_derived_type;
+--S+ is_derived_type
+procedure is_derived_type(mark) ;
+    return base_type(mark) /= ST(mark).root_type and not is_generic_type(mark);
+
+-- Incomplete for composite types.
+
+end is_derived_type;
+procedure in_visible_part(scope) ;
+
+-- Determine whether a declaration occurs within the visible part of a
+-- package specification. The package must be on the scope stack, and the
+--  corresponding private part must not.
+
+return
+  ST(scope).nature in ["package_spec", "generic_package_spec"] and scope in open_scopes ; 
+end in_visible_part;
+--S+ derive_subprograms 
+procedure derive_subprograms(parent_subtype, d_type) ;
+sem_trace_proc_entry(3, "Derive_Subprograms");
+-- In order to derive the subprograms of the parent type, the parent type
+-- must be defined in  the visible part of a package, and the derivation
+-- must take place after the end of this visible part.
+--
+-- We introduce in the symbol table the new subprograms with the derived
+-- signature, but do not emit code for them. We produce instead a
+-- mapping from the derived subprogram to its parent, and replace
+-- the name at the point of call, in macro-like fashion.
+--
+-- If the  parent type is a private type whose full declaration is a first-named
+-- subtype, then  its base type is declared in the private part. Then if the
+-- derivation takes place in the private part itself, the parent type does not
+-- appear in the visible part of the package, but the parent subtype does. This 
+-- anomaly must be checked for explicitly. 
+
+parent_type     := base_type(parent_subtype) ;
+parent_scope    := ST(parent_type).scope_of ;
+first_kind_derived := {} ;
+
+if (ST(parent_scope).nature in ["package", "package_spec"] 
+      -- parent is defined in visible part of package.
+      and
+       (v := visible(parent_scope)) /= om and
+       (exists [-,t] in v | t = parent_type)
+      -- We are no longer in this visible part.
+      and
+       not in_visible_part(parent_scope))
+
+   or ((ST(parent_scope).nature = "private_part"
+      -- Which is a currently open scope.
+      or (ST(parent_scope).nature = "package" and parent_scope in open_scopes))
+      -- verify that parent SUBTYPE is defined in visible part of package.
+      and
+       (v := visible(parent_scope)) /= om and
+       (exists [-,t] in v | t = parent_subtype))
+
+  then
+    -- Determine derivable subprograms.
+    for [-,subp] in v | is_subprogram(subp)
+    				and not is_derived_subprogram(subp) loop 
+	if derive1_subprogram(subp, parent_type, d_type, subp) 
+                 then first_kind_derived with:= subp ; 
+	end if;
+    end loop;
+else
+   -- Parent type is not declared in visible part of package.
+   null;
+end if;
+if is_derived_type(parent_type) and  parent_scope /= "STANDARD#0" then
+    -- If the parent type is a derived type, its derived subprograms 
+    -- are further derived. If such exist, they are aliased subprograms
+    -- declared in the same scope as the parent type.
+
+    for [-,subp] in declared(parent_scope) | 
+	is_subprogram(subp) and is_derived_subprogram(subp)
+			and not hidden_derived(subp, first_kind_derived) loop 
+	   derive1_subprogram(subp, parent_type, d_type, ST(subp).alias) ;
+    end loop;
+
+end if;
+sem_trace_proc_exit(3, "Derive_Subprograms");
+end derive_subprograms;
+
+--S+ derive1_subprogram
+procedure derive1_subprogram(subp, parent_type, d_type, parent_subp) ;
+
+-- subp is a subprogram declared in the same scope as parent_type. If 
+-- some type in its profile is compatible with parent_type, produce
+-- a derived subprogram by replacing the parent_type with the derived
+-- one, and introduce a subprogram declaration with this new profile.
+-- The parent subprogram is either subp itself, or ALIAS(subp) if subp is
+-- already a derived subprogram.
+
+sem_trace_proc_entry(4, "Derive1_Subprogram");
+new_sig := [];
+new_typ := ST(subp).type_of ;
+is_new	:= false ;
+
+for formal in ST(subp).signature loop 
+    nat := ST(formal).nature ;
+    id	:= original_name(formal) ;
+    tf	:= ST(formal).type_of ;
+    dx	:= ST(formal).default_expr ;
+
+    if compatible_types(tf, parent_type) then 
+	tf := d_type ;
+	is_new := true ;
+    end if;
+    new_sig with:= [id, nat, tf, dx] ;
+end loop;
+
+if compatible_types(new_typ, parent_type) then
+    new_typ := d_type ;
+    is_new := true ;
+end if;
+
+if is_new then
+
+    -- subprogram is derived. Insert it in current scope, with
+    -- the new signature, and recall its lineage.
+    -- Its nature is a subprogram, not a spec, because no body
+    -- will be defined for it.
+
+    nat := ST(subp).nature ;
+    rmatch(nat, "_spec") ;
+    id := original_name(subp) ;
+
+    new_subp:= chain_overloads(id,[nat, new_typ, new_sig, parent_subp]);
+    if new_subp /= "" then		
+	-- The derived subprogram is not hidden by an explicit declaration
+	-- with the same name. Indicate that this is a derived subprogram
+	-- and that a call to it is in fact a call to the parent. 
+
+	ST(new_subp).alias := ST(parent_subp).alias ? parent_subp ;    
+
+    end if;
+end if;
+sem_trace_proc_exit(4, "Derive1_Subprogram");
+return is_new ;
+
+end derive1_subprogram;
+
+procedure is_subprogram(subp) ;
+return ST(subp).nature in
+    {"procedure", "function", "procedure_spec", "function_spec"};
+end is_subprogram;
+
+--S+ is_derived_subprogram
+procedure is_derived_subprogram(name) ;
+-- Derived subprograms are given the same identifier as their parents.
+-- Operators are never explicitly derived.
+
+return (s := ST(name).alias) /= om 
+    and original_name(s) = original_name(name) ;
+
+end is_derived_subprogram;
+
+procedure hidden_derived(subp, first_kind_derived) ;
+--RM+ 3.4(11)
+
+-- Prior to its rederivation, determine whether a derived subprogram is hidden 
+-- by an explicit subprogram declaration in  the visible part of a package. 
+-- The explicit declarations have already been
+-- derived and collected in derive_subprograms. A More efficient implementation
+-- would flag hidden subprograms in the symbol table. Here we recalculate them
+-- for each derivation of the type.
+
+return  exists s in first_kind_derived |
+        original_name(s) = original_name(subp) and  
+	same_signature(s, subp) and same_type(ST(s).type_of, ST(subp).type_of) ;
+
+end hidden_derived;
+--T+ 3.5 Scalar Types
+--S+ 3.5.1 Enumeration Types
+--H+ New_Enumeration_Type
+procedure new_enumeration_type(type_name, def_node) ;
+
+[-, literals] := adasem(def_node) ;
+lit_map := {} ;
+new_lit := {} ;
+
+for i in [1..#literals] loop 
+    -- insert each literal in symbol table, as an overloadable identifier
+    -- Each enumeration type is mapped  into a sequence	of integers, and
+    -- each literal is defined as a constant with integer value.
+ 
+    new_lit(i) := chain_overloads(literals(i), ["literal", type_name, [] ]) ;
+    lit_map(literals(i)) := i-1 ;
+end loop;
+
+ST(type_name) := ["enum", type_name, ["range", ["ivalue", 0], 
+		  ["ivalue", #literals-1]], lit_map, current_scope, type_name] ;
+initialize_representation_info(type_name,"enum");
+
+end new_enumeration_type;
+--S+ 3.5.4 Integer Types
+--H+ New_Integer_Type
+procedure new_integer_type(type_name, def_node) ;
+sem_trace_proc_entry(3, "New_Integer_Type");
+ 
+-- Create a new integer, and apply the constraint to obtain a
+-- subtype of it.
+
+    [-,constraint] := adasem(def_node) ; 
+    newtype := anonymous_type() ;
+    ST(newtype) := ST("INTEGER") ;
+    ST(newtype).scope_of := current_scope;
+    inherit_representation_info(newtype, "INTEGER");
+    [-,lo, hi] := constraint ;
+    lo := check_type("integer_type", lo) ;
+    hi := check_type("integer_type", hi) ;
+    
+    -- if universal
+
+    lo := specialize(lo, "INTEGER") ;
+    hi := specialize(hi, "INTEGER") ;
+    
+    if not is_value(lo) or not is_value(hi) then
+	errmsg("bounds in an integer type definition must be static", "","3.5.4") ;
+    elseif not is_integer(lo(2)) or not is_integer(hi(2)) then
+	errmsg("bounds in integer type definition must be of some integer type","","3.5.4") ;
+    end if;
+    
+    ST(type_name) := 
+	["subtype", newtype, ["range", lo, hi], {}, current_scope, "INTEGER"] ;
+    types_not_chosen_yet(newtype) := {type_name};
+    sem_trace_proc_exit(3, "New_Integer_Type");
+end new_integer_type;
+ 
+--T+ 3.5.7 Floating Point Types
+procedure new_floating_type(type_name, definition_node) ;
+sem_trace_proc_entry(3, "New_Floating_Type");
+
+-- Process a floating point type definition.
+
+    [-, accuracy] := adasem(definition_node) ; 
+    [-, declared_precision, optional_range] := accuracy ;
+    
+-- The minimum number of significant decimal digits is specified by then value
+-- of the static expression of the floating accuracy definition.  This value 
+-- must belong to some integer type ... [LRM 3.5.7(3)]
+
+    declared_precision := check_type("integer_type", declared_precision) ;
+
+-- Cease processing the declaration if the precision specified did not belong
+-- to some integer type 
+
+    if declared_precision = [] then
+	return ;
+    end if;
+    
+-- The minimum number of significant decimal digits is specified by the value
+-- of the static expression of the floating accuracy definition.
+-- [LRM 3.5.7(3)]
+
+    if not static_expression(declared_precision) then
+	errmsg("Expect static expression for digits","","3.5.7") ;
+	return ;
+     elseif expression_type(declared_precision) = "universal_integer" then
+	declared_precision := specialize(declared_precision,"INTEGER");
+    end if;
+    
+    [-, digits] := declared_precision ;
+
+-- This value must belong to some integer type and must be positive (nonzero).
+-- [LRM 3.5.7(3)]
+
+    if digits < 1 then
+       errmsg("Invalid digits value in real type definition","","3.5.7");
+       return ;
+    end if;
+
+-- A floating point type declaration of one of the two forms (that is, with 
+-- or without the optional range constraint indicated by the square brackets):
+
+-- ^\bf type~ T ^\bf is digits~ D [^\bf range~ L .. R];
+-- \smallskip
+-- is, by definition, equivalent to the following declarations:
+-- \smallskip
+-- ^\bf type~ floating_point_type ^\bf is new~ predefined_floating_point_type;
+-- \smallskip
+-- ^\bf subtype~ T ^\bf is~ floating_point_type ^\bf digits~ D
+-- 	[^\bf range~ floating_point_type(L) .. floating_point_type(R)];
+-- \smallskip
+-- where floating_point_type is an anonymous type, and where the predefined
+-- floating point type is implicitly selected by the implementation so that 
+-- its model numbers include the model numbers defined by D; furthermore if 
+-- a range L .. R is supplied, then both L and R must belong to the range
+-- of safe numbers. The floating point declaration is illegal if none of the
+-- predefined floating point types satisifies these requirements, excepting 
+-- universal_real.  [LRM 3.5.7(10/12)]
+-- 
+
+    -- Now generate a new anonymous type for the base type.
+
+    floating_point_type := anonymous_type() ;
+
+    -- The range constraint is optional. If absent, the range is that of
+    -- the base type chosen. If present, the bounds need not be of the same
+    -- type, but must belong to some real type, and be static. Their
+    -- resolution is done in procedure Convert_Real_Bound.
+
+    if optional_range /= [] then
+	[-, l, r] := optional_range ;
+	l := check_real_bound(l);
+	r := check_real_bound(r);
+        if l = om or r = om then 
+           return ; 
+        end if;
+    end if;
+
+    -- Choose one of the predefined floating point types so that the range
+    -- if supplied is within the safe numbers of the type and the digits
+    -- value is at least as precise as that requested.
+
+    predefined_floating_type:= choose_floating_point_type(digits, l, r);
+
+    if predefined_floating_type = om then
+       errmsg("No predefined type satisifies this floating point constraint","","3.5.7");
+       return;
+    end if;
+
+    ST(floating_point_type) := ST(predefined_floating_type) ;
+    ST(floating_point_type).scope_of := current_scope;
+    ST(floating_point_type).root_type := predefined_floating_type;
+    inherit_representation_info(floating_point_type, predefined_floating_type);
+
+    if optional_range = [] then	
+       [-, l, r, -, -]:= ST(floating_point_type).signature ; 
+    else 
+       l := convert_real_bound(l, floating_point_type, "float_type");
+       r := convert_real_bound(r, floating_point_type, "float_type");
+    end if;
+
+    [-,-,-,used_precision,-] := ST(floating_point_type).signature;
+    constraint := ["digits", l, r, used_precision,declared_precision];
+
+    -- Adjust the bounds of the anonymous type ;
+    --sem_trace(3,"Sig of new floating type " + str(type_name) + " is ");
+    --sem_trace(3,constraint);
+    
+    ST(type_name) := 
+	["subtype", floating_point_type, constraint, {}, 
+				current_scope, predefined_floating_type] ;
+    types_not_chosen_yet(floating_point_type) := {type_name};
+    
+    sem_trace_proc_exit(3, "New_Floating_Type");
+end new_floating_type;
+--S+ Choose_Floating_Point_Type
+procedure choose_floating_point_type(digits, l, r);
+
+-- ...
+-- where floating_point_type is an anonymous type, and where the predefined
+-- floating point type is implicitly selected by the implementation so that 
+-- its model numbers include the model numbers defined by D; furthermore if 
+-- a range L .. R is supplied, then both L and R must belong to the range
+-- of safe numbers. The floating point declaration is illegal if none of the
+-- predefined floating point types satisifies these requirements, excepting 
+-- universal_real.  [LRM 3.5.7(10/12)]
+
+   range_not_supplied := (l = om);
+   available_floating_point_types := {};
+
+-- The predefined floating point types are the type FLOAT. An implementation may
+-- also have predefined types such as SHORT_FLOAT and LONG_FLOAT, which have 
+-- subtantially) less and more accuracy, respectively, than FLOAT. [LRM 3.5.7(8)]
+
+-- This formal definition has decided to have a LONG_FLOAT but not a SHORT_FLOAT.
+-- AI-459 which is currently under discussion has attempted to clarify 
+-- what are acceptable ranges for SHORT_FLOAT and LONG_FLOAT with respect to the
+-- range of FLOAT.
+sem_trace_proc_entry(4, "Choose_Floating_Point_Type");
+    for predefined_type in {"FLOAT", "LONG_FLOAT"} loop
+     if digits <= type_precision(predefined_type) then
+
+        if range_not_supplied then
+	   available_floating_point_types with:= predefined_type;
+        else
+           [-, pre_low, pre_high, -, -] := ST(predefined_type).signature;
+
+           converted_l:= convert_real_bound(l, predefined_type,"float_type");
+           converted_r:= convert_real_bound(r, predefined_type,"float_type");
+
+-- Since it is possible that some of the predefined floating points will not have
+-- a range wide enough for the L and R values given their must be a check for 
+-- overflow done before the before comparison for the range check is done.
+-- If their is an overflow we discount that predefined floating point as the
+-- base type here.
+
+	   if (converted_l(2) = "OVERFLOW" or converted_r(2) = "OVERFLOW") then
+	      continue;
+	   end if;
+
+	   if float_leq(pre_low(2),converted_l(2)) and 
+	      float_geq(pre_high(2),converted_r(2)) then
+	      available_floating_point_types with:= predefined_type;
+           end if;
+        end if;
+
+     end if;
+  end loop;
+
+-- If none of the predefined floating point type was acceptable we signal an
+-- error condition. Otherwise one of the floating point types that match the
+-- precision and range conditions is chosen arbitrarily. Note that their is
+-- nothing forcing use to choose the smallest floating point type that meets
+-- the condition. This approach would be an overspecification.
+  sem_trace_proc_exit(4, "Choose_Floating_Point_Type");
+  if available_floating_point_types = {} then
+     return om;
+  else
+     return arb available_floating_point_types;
+  end if;
+
+end choose_floating_point_type;
+--H+ Check_Real_Bound
+procedure check_real_bound(bound) ;
+sem_trace_proc_entry(4, "Check_Real_Bound");
+sem_trace(4, "bound: " + str(bound) );
+
+-- If the floating point constraint is used as a real type definition and 
+-- includes a range constraint, then each bound of the range must be 
+-- defined by a static expression of some real type, but the two bounds need
+-- not have the same real type. [LRM 3.5.7(3)].
+
+    bound  := check_type("real_type", bound) ;		
+
+--  Check that each bound is defined by a static expression. [LRM 3.5.7(3)]
+--  [LRM 3.5.9(3)]
+
+    sem_trace_proc_exit(4, "Check_Real_Bound");
+    if not static_expression(bound) then
+	errmsg("Bound in range constraint of type definition must be static",
+	       "","3.5.7, 3.5.9") ;
+	return om ;
+    else
+        return bound;
+    end if;
+end check_real_bound;
+
+procedure convert_real_bound(bound, real_type, kind);
+
+-- This procedure converts a bound that was given in either a floating point 
+-- type defintion or a fixed point type definition to the approriate type and 
+-- precision needed in the type defintion.
+
+    sem_trace_proc_entry(4, "Convert_Real_Bound");
+    b_type := expression_type(bound) ;
+    b_precis := type_precision(b_type) ;
+    r_type := ST(b_type).root_type ;
+    precis := type_precision(real_type);
+    sem_trace(4,"bound " + str(bound) + ", b_type=" + str(b_type) );
+    sem_trace(4,"b_precis=" + str(b_precis) + ", r_type=" + str(r_type) );
+    sem_trace(4,"kind=" + str(kind) + ", precis=" + str(precis) );
+
+-- In a type definition of the form digits D range L ..R. L and R need not
+-- be expression having the same floating point type, nor need they have a 
+-- floating point type -- L or R could be fixed point expressions.
+-- [IG 3.5.7 S17]
+
+    if kind = "float_type" then	
+        if r_type = "FLOAT"or r_type = "LONG_FLOAT" then
+           return ["ivalue",float_convert(bound(2),precis), real_type]; 
+	elseif r_type = "universal_real" then
+	   return ["ivalue",float_fra(bound(2), precis), real_type] ;
+
+        -- It is a fixed point type so convert to a floating point type
+
+        elseif r_type = "$FIXED" then
+           return ["ivalue",fix_tfl(bound(2), b_precis, precis), real_type] ;
+	else
+	   errmsg("Problem in check_real_bound","","") ;
+        end if;
+    
+    elseif kind = "fixed_type" then
+       if r_type = "$FIXED" then 
+            return ["ivalue", fix_convert(bound(2), b_precis, precis), real_type];
+       elseif r_type = "universal_real" then 
+	    return ["ivalue",fix_fra(bound(2), precis), real_type] ; 
+       elseif r_type = "FLOAT" or r_type = "LONG_FLOAT"  then 
+	    return ["ivalue", fix_ffl(bound(2), precis), real_type] ;
+       else        
+	   errmsg("Problem in check_real_bound","","") ; 
+       end if;
+    end if;
+sem_trace_proc_exit(4, "Convert_Real_Bound");
+end convert_real_bound;
+--S+ Upper Bound
+procedure upper_bound(digits, max_e) ;
+sem_trace_proc_entry(3, "Upper_Bound");
+sem_trace(4, "digits: " + str(digits) );
+
+-- Return the largest safe number corresponding to a specified digits.
+
+b := ceil((float(digits)* log(10.0)/log(2.0)) + 1.0) ;
+
+-- the largest safe number has a mantissa consisting of all ones,
+-- and an exponent of E. We build it here using the representation
+-- described in the arithmetic module, where the mantissa is a sequence
+-- of digits base 1024.
+
+-- 10 bits per digit in representation.
+-- max_e is the safe exponent.
+-- trailing digits are all 2 ** 10  -1.
+
+digs := 10 ;
+m := [1023] * (b / digs) ;
+
+-- compute leading digit. 
+
+if b mod digs /= 0 then
+   m := [2 ** (b mod digs) -1] + m ;
+end if;
+sem_trace_proc_exit(3, "Upper_Bound");
+return [1, m, max_e] ;
+end upper_bound;
+ 
+--S+ 3.5.9 Fixed Point Types
+procedure new_fixed_type(type_name, def_node) ;
+sem_trace_proc_entry(3, "New_Fixed_Type");
+-- Process a fixed point declaration. Similar to floating case.
+-- We introduce an anonymous type AFT whose accuracy is the same as that 
+-- of the new type FT. We then resolve the bounds of the range constraint.
+-- In this implementation the mantissa of fixed point numbers can take
+-- any value of up to a maximum, and thus FT and AFT have the same mantissa.
+-- We then set the bounds of AFT to be FT'LARGE (== FT'SAFE_LARGE).
+ 
+    [-, accuracy] := adasem(def_node) ;
+    [-, precision,opt_range] := accuracy ;
+    
+    predefined_fixed := anonymous_type() ;
+     -- Set symbol table to predfined fixed to start.
+    ST(predefined_fixed) := ST("$FIXED") ;
+    ST(predefined_fixed).scope_of := current_scope;
+    ST(type_name) := ST(predefined_fixed) ;
+    
+    precision := check_type("real_type", precision) ;
+    p_type := expression_type(precision) ;
+    
+    -- Return in case of type error.
+
+    if precision = [] then
+	return ;
+    elseif not is_value(precision) then
+	errmsg("Expect static expression for ", "delta", "3.5.7") ;
+	return ;
+    end if;
+    [-, delta] := precision ;
+    sem_trace(5,"Calculating delta, precision="+ str(precision) );
+    if ST(p_type).root_type = "universal_real" then 
+	null;
+
+    elseif is_fixed_type(p_type) then
+	 sem_trace(5,"Converting fixed delta back to universal_real") ;
+
+	 -- It may have been a qualified simple expression, in which
+    	 -- case it will already be a fixed number. In this case we
+	 -- must convert it back to a universal real to calculate 'small.
+	 
+	 delta := fix_tra(delta,type_precision(p_type)) ;
+
+    elseif ST(p_type).root_type = "FLOAT" then
+	 sem_trace(5,"Converting FLOAT delta back to universal_real") ;
+
+	 -- It may have been a qualified simple expression.
+	 -- Convert as above. 
+	 
+	 delta := float_tra(delta) ;
+    else 
+	sem_trace(5,"p_type="+ str(p_type) ) ;
+	errmsg("CHAOS : delta not a real type","","") ;
+	return;
+    end if;
+    if delta(1) = 0 then
+      errmsg("Expect non null value for", "delta", "3.5.7") ;
+      return ;
+    end if; 
+
+    -- We use the smallest power of 2 closest to the given delta.
+
+    small := calculate_small(delta);
+
+    idelta := ["ivalue", delta] ;
+    ismall := ["ivalue", small] ;
+
+    if opt_range = [] then
+	errmsg ("Missing range in Fixed type declaration","","3.5.9");
+	return ;
+    else
+	[-, lo, hi] := opt_range ;
+	lo := check_real_bound(lo);
+	hi := check_real_bound(hi);
+     
+    end if;
+    constraint := ["delta", lo, hi, ismall, idelta] ;
+    ST(predefined_fixed) := 
+	["type", "$FIXED", constraint, {}, current_scope, "$FIXED"];
+    ST(type_name) := 
+	["subtype", predefined_fixed, constraint, {}, current_scope, "$FIXED"] ;
+
+    initialize_representation_info(predefined_fixed,"fixed_type");
+    types_not_chosen_yet(predefined_fixed) with:= type_name;
+
+    -- The actual bounds of the type are calculated when the type is forced,
+    -- because their exact value depends on 'small, which may be set by a
+    -- subsequent representation clause.
+sem_trace_proc_exit(3, "New_Fixed_Type");
+end new_fixed_type;
+
+--S+ fixed_type_bounds
+procedure fixed_type_bounds(predefined_fixed) ;
+-- The base type of a fixed type is always a implementation-defined type. Find
+-- the user-defined type and compute the bounds with the given ( or the
+-- default) 'SMALL. The user-defined type is the unique type dependent on the
+-- representation of predefined_Fixed, because a fixed point subtype declaration
+-- is a forcing occurrence in Ada/Ed.
+
+    type_name := arb (types_not_chosen_yet(predefined_fixed));
+    -- Verify that the type has not been forced yet.
+    if type_name = om then return ; end if;
+    [-,  lo, hi, ismall, idelta] := ST(predefined_fixed).signature  ;
+
+    -- Check for type error in computation of bounds..
+    if lo = om or hi = om then 
+        ST(predefined_fixed) := ST(type_name) := ST("$FIXED") ;
+       return ; 
+    end if; 
+
+    lo := convert_real_bound(lo, predefined_fixed, "fixed_type");
+    hi := convert_real_bound(hi, predefined_fixed, "fixed_type");
+ 
+    [-,lower] := lo ; [-,upper] := hi ;
+    if fix_geq(fix_abs(upper), fix_abs(lower)) then 
+        hi := check_pow2(hi); 
+    end if;
+    if fix_geq(fix_abs(lower), fix_abs(upper)) then 
+        lo := check_pow2(lo); 
+    end if;
+    ST(type_name).signature := ["delta", lo, hi, ismall, idelta] ;
+
+    -- We compute the bounds of the parent type as the 'large of the
+    -- new type. The bounds are symmetric about zero.
+
+    [-,lower] := lo ; [-,upper] := hi ;
+    mantissa := bit_nbr(lower(2)) max bit_nbr(upper(2)) ;
+    if mantissa > 31 then   
+        errmsg("type requires precision greater than MAX_MANTISSA(31)",
+				"","3.5.9");
+    end if;
+    -- IF the "predefined" type is actually defined in STANDARD, its bounds
+    -- are already set.
+    if predefined_fixed in ["$FIXED", "DURATION"] then return ; end if;
+    
+    -- For any fixed point type T, T'SMALL is represented by +1.
+    -- Thus, Ada/Ed precludes the possibility of using additional bits of
+    -- precision, for example for subtypes with a larger 'small.
+
+    t_small := [1, [1]] ;
+
+    -- t_large equals (2**n - 1) * t_small, where n is the mantissa.
+    t_large := t_small ;
+    for i in [1..mantissa] loop 
+        t_large := fix_add(t_large, t_large) ;
+    end loop;
+
+    t_large := fix_sub(t_large, t_small) ;
+
+
+    constraint := ["delta", ["ivalue", fix_umin(t_large), predefined_fixed],
+			    ["ivalue", t_large, predefined_fixed], 
+				ismall, idelta] ;
+    
+    ST(predefined_fixed).signature := constraint ;		    
+
+end fixed_type_bounds;
+procedure is_pow2(mantissa) ;
+-- Determine whether an integer represented as a vector of digits in base 2 ** n
+-- is a positive power of 2.
+
+return  mantissa(1) in [1,2,4,8,16,32,64,128,256,512] and 
+        bit_nbr(mantissa) > 1 and
+	(forall d in mantissa(2..) | d = 0) ;
+end is_pow2;
+
+procedure check_pow2(bound) ;
+-- If the bound of a fixed type is an exact power of two, a valid representation
+-- is to use one less bit to exclude the bound itself from the values of the type
+-- In this fashion the model number is still delta away form the bound.
+
+[-,[sg, mt], fix_t] := bound;
+if is_pow2(mt) then
+    return ["ivalue", fix_sub([sg, mt], [sg,[1]]), fix_t];
+else return bound ;
+end if;
+end check_pow2;
+
+--H+ constrain_scalar
+procedure constrain_scalar(type_mark, constraint) ;
+sem_trace_proc_entry(3, "Constrain_Scalar");
+sem_trace(3,"type_mark=" + str(type_mark) );
+sem_trace(3,"constraint=" + str(constraint) ) ;
+
+-- Constrain a discrete type or a floating type .
+
+    constr_type := constraint(1);
+    base_mark := base_type(type_mark) ;
+    if is_fixed_type(type_mark) then 
+      force_representation(base_mark) ;
+    end if;
+    sem_trace(3,"constr_type=" + str(constr_type) ) ;
+    case constr_type 
+ 
+    when "range" => 
+
+     -- In this case, the bounds expressions have not been
+     -- type-checked yet. Do it now that the desired base
+     -- type is known.
+
+	bt := ST(type_mark).root_type ;
+	if not is_scalar_type(bt) then
+	    errmsg("Invalid RANGE constraint for type","","3.3, 3.6.1") ;
+	    return type_mark ;
+	end if;
+	[-,lo,hi] := constraint ;
+	sem_trace(3,"bt="+str(bt) ) ;
+	if bt in {"FLOAT", "LONG_FLOAT", "$FIXED"} then
+	-- Range constraint on floating type. Use
+	-- precision that was specified for type itself.
+
+	    [constr, -, -, used_precision, given_precision] := ST(type_mark).signature ;
+
+	    sem_trace(3,"SIGNATURE("+str(type_mark) +")=" + str(ST(type_mark).signature) );
+	    new_c := [constr, check_type(base_mark,lo),
+		  	check_type(base_mark,hi), used_precision, given_precision] ;
+
+	-- Discrete type.
+	else
+	    new_c := ["range", check_type(base_mark, lo),
+		     check_type(base_mark, hi)] ;
+	end if;
+    
+    when "digits","delta" =>
+	kind := if constr_type = "digits" then {"FLOAT","LONG_FLOAT"}
+			  	          else {"$FIXED"} end if;
+	sem_trace(3,"kind="+str(kind) ) ;
+	if ST(type_mark).root_type notin kind then
+	    errmsg("Invalid constraint for type","","3.3") ;
+	    return type_mark ;
+	end if;
+
+	[-, precision, [-, lo, hi]] := constraint ;
+	sem_trace(3,"Orig precision="+ str(precision) );
+	given_precision := check_type(if constr_type="digits" then 
+				    "INTEGER" else "universal_real" end if,
+	       			    precision);
+	sem_trace(3,"New precision="+ str(given_precision) );
+        [-,-,-,-, base_precision] := ST(base_mark).signature ;
+	if precision /= [] then
+	    used_precision := ST(base_mark).signature.precision_of ;
+
+	    if constr_type = "delta" then
+
+		if not is_value(given_precision) then
+		    errmsg("Expect static expression for DELTA","","3.5.7") ;
+		else null;
+		end if;
+		-- TBSL possible bounds check.
+	    elseif constr_type= "digits" then
+		if not is_value(given_precision) then
+		    errmsg("Expect static expression for DIGITS","","3.5.7") ;
+		else digits := given_precision(2) ;
+		    if digits < 1 then
+		      errmsg("Invalid value for DIGITS","","3.5.7") ;
+
+		    -- i.e. base not generic
+		    elseif is_value(base_precision) 
+			and digits > base_precision(2) then
+
+			-- Can't have greater precision than parent.
+
+			given_precision := constraint_error() ;
+		    end if;
+		end if;
+	    end if;
+	end if;
+
+	if lo /= om then
+	    lo := check_type(base_mark, lo) ;
+	    hi := check_type(base_mark, hi) ;
+	else
+
+	-- Only the precision was given in the constraint.
+	-- Obtain the bounds from the type itself.
+
+	    [-,lo,hi] := ST(type_mark).signature ;
+	end if;
+
+	new_c := [constr_type, lo, hi, used_precision, given_precision] ;
+
+    when "name" => 
+
+    -- The constraint is given by a RANGE attribute.
+    -- We get the bounds of the range to construct the new subtype.
+
+	range_expr := find_old(constraint) ;
+	if not is_range_attribute(range_expr) then
+	    errmsg("Invalid expression for range constraint","","3.3");
+	    return type_mark ;
+	else 
+	    range_expr := check_type(base_mark, range_expr) ;
+	    new_c := apply_range(range_expr) ;		
+	end if;
+	
+    otherwise =>
+	if #constraint = 1 and constraint(1)(1) = "name" then
+
+	-- Case of an index constraint given by a subtype name.
+
+	    subtype := find_old(constraint(1)(2)) ;
+	    if not is_type(subtype) or
+		not compatible_types(type_mark, subtype) then	
+		errmsg("Invalid subtype name in	 constraint", "","3.3, 3.6.1");
+		return [] ;
+	    else
+		-- TBSL. What should this be ?
+		null;
+	    end if;
+	else
+	    errmsg("invalid constraint "," for type","3.3");
+	    new_c := [] ;
+	end if;
+    end case;
+
+    -- Verify that a discriminant does not appear in a scalar constraint.
+    -- This must be special-cased because discriminants are otherwise
+    -- allowed to appear in index and discriminant constraints, and in
+    -- initial values, i.e. arbitrary expressions.
+
+    check_discriminant(new_c) ;
+
+    sem_trace(3,"returning " + str(type_mark) + str(new_c) ) ;
+    sem_trace_proc_exit(3, "Constrain_Scalar");
+    return ["subtype", type_mark, new_c] ;
+end constrain_scalar;
+
+--H+ apply_range
+procedure apply_range(range_expr) ;
+
+-- A'RANGE is equivalent to A'FIRST..A'LAST. When the range attribute
+-- is used as a constraint, the bounds are expressed according to the
+-- above equivalence. This is not strictly correct if the elaboration
+-- of A has side-effects, but we ignore this detail for now.
+
+-- There was a  previous type error. but format is right.
+
+if range_expr = [] then
+    return ST("INTEGER").signature ;
+end if;
+
+-- discard check for now; (could apply to each)
+
+if range_expr(1) = "qual_range" then
+    [-, typ, range_expr] := range_expr ;
+end if;
+
+[-, attr, arg1, arg2, typ] := range_expr ;
+
+-- The attribute is either O_RANGE or T_RANGE, according as arg1 is an
+-- object or a type. FIRST and LAST must be marked accordingly.
+
+attr_prefix := attr(1..2) ;
+return ["range", ["'", attr_prefix + "FIRST", arg1, arg2, typ],
+	 ["'", attr_prefix + "LAST",  arg1, arg2, typ]	 ];
+
+end apply_range;
+
+--T+ 3.6 Array Types
+--S+ Array_Typedef 
+procedure array_typedef(index_list, element_type) ;
+sem_trace_proc_entry(3, "Array_Typedef");
+-- Validate an array type definition.
+
+if exists indx in index_list | is_tuple(indx) and indx(1) = "box" then
+
+   -- Unconstrained array . Verify that all indices are unconstrained.
+
+   if exists indx1 in index_list|not is_tuple(indx1) or indx1(1) /="box" then
+      errmsg("Constraints apply to all indices ", "or none","3.6.1") ;
+   end if;
+   
+end if;
+
+if is_unconstrained(element_type) then
+    errmsg("Unconstrained element type in array declaration","","3.6.1, 3.7.2");
+end if;
+check_fully_declared2(element_type) ;		
+
+if is_fixed_type(element_type) then
+   force_representation(element_type);
+end if;
+
+sem_trace_proc_exit(3, "Array_Typedef");
+return ["array", [index_list, element_type] ] ;
+end array_typedef;
+
+--S+ New_Array_Type 
+procedure new_array_type(array_type, def_node) ;
+sem_trace_proc_entry(3, "New_Array_Type");
+-- This procedure is called whenever an array type is created. For each 
+-- new array type we create a corresponding sequence type, which is an 
+-- unconstrained array. Unconstrained array types have nature 'array', 
+-- while constrained arrays have nature 'subtype'.
+
+[-, array_info] := adasem(def_node) ; 
+[indx, comp] := array_info ;
+if is_tuple(indx(1)) and indx(1)(1) = "box" then
+
+    -- Unconstrained array definition. In this case, introduce only the
+    -- unconstrained type, and ignore the actual array type.
+
+    indx := [i(2) : i in indx] ;
+    array_info := [indx, comp] ;
+    new_unconstrained_array(array_type, array_info) ;
+else
+    new_constrained_array(array_type, array_info) ;
+end if;
+sem_trace_proc_exit(3, "New_Array_Type");
+end new_array_type;
+--S+ 3.6(5) Unconstrained Arrays
+--H+ New_Unconstrained_Array
+procedure new_unconstrained_array(sequence_type, array_info) ;
+
+[indx, comp] := array_info ;
+
+ST(sequence_type) := 
+	["array", sequence_type, array_info, {}, current_scope, sequence_type];
+
+-- Mark the type as limited if the component type is.
+
+ST(sequence_type).misc_type_attributes := 
+    if is_access(comp) then {}			
+    elseif (l:= private_kind(comp)) /= om then {l} 
+    else {}   
+    end if;
+
+-- For each unconstrained array type, we introduce an instance of the
+-- 'aggregate' pseudo-operator for that array.
+
+maybe_private_dependent(sequence_type) ;
+initialize_representation_info(sequence_type,"array_type");
+end new_unconstrained_array;
+--S+ 3.6(6) Constrained Arrays
+--H+ New_Constrained_Array
+procedure new_constrained_array(array_type, array_info) ; 
+
+    -- Construct meaningful name for anonymous parent type.
+    nam := original_name(array_type) ;
+    if nam = "" then 
+       nam := "Anonymous_Array" ; 
+    end if;
+    
+    sequence_type := nam + "'base" + newat_str() ;
+    declared(current_scope)(sequence_type) := sequence_type ;
+    -- Initial field entries for sequence_type with the remained to be 
+    -- filled in by new_unconstrained_type
+    ST(sequence_type) := ["void", sequence_type, [], 
+			  {}, current_scope, sequence_type];
+    
+    -- emit sequence type as an anonymous type. It is used in aggregates
+    -- that are assigned to slices, and in other unconstrained contexts.
+    -- (This should only be needed for one dimensional arrays).
+
+    newtypes(#newtypes) with:= sequence_type ;
+    new_unconstrained_array(sequence_type, array_info) ;
+    
+    -- Make the actual array type into a subtype of the unconstrained one
+    
+    ST(array_type) := ["subtype", sequence_type, array_info,
+	  ST(sequence_type).misc_type_attributes, current_scope, sequence_type];
+    types_not_chosen_yet(sequence_type) with:= array_type;
+    
+end new_constrained_array;
+--S+ 3.6(7) Anonymous Arrays
+--H+ Anonymous_Array
+procedure anonymous_array(node) ;
+sem_trace_proc_entry(3, "Anonymous_Array");
+
+-- Process an array definition in an object or constant declaration.
+-- The node is an array_type node.
+-- Create a name for it , elaborate definition and Insert into type stack
+
+    typ := find_new("anon" + newat_str()) ;
+    new_array_type(typ, node) ;	
+    newtypes(#newtypes) with:= typ ;
+
+    sem_trace_proc_exit(3, "Anonymous_Array");
+    return typ ;
+end anonymous_array;
+
+--S+ 3.6(9) Constrained Arrays
+--H+ constrain_array
+procedure constrain_array(type_mark, constraint) ;
+sem_trace_proc_entry(3, "Constrain_Array");
+
+-- Apply index constraints to array type.
+
+    if not can_constrain(type_mark) then
+	errmsg("Array type is already constrained","","3.6.1") ;
+	return type_mark ;
+    end if;
+    
+    if #constraint /= no_dimensions(type_mark) then 
+	errmsg("Incorrect no. of index constraints for type ",
+		    original_name(type_mark),"3.6.1") ;
+	return type_mark ;
+    end if;
+    
+    if constraint = [] then
+	new_array := type_mark;
+    else
+	-- apply constraints to each index type.
+	indices := index_types(type_mark) ;
+	new_indices := [constrain_index(indices(i), constraint(i)):
+			    i in [1..#constraint]] ;
+    end if;
+    
+    new_array := promote_subtype(["subtype", type_mark,
+		    [new_indices, component_type(type_mark)]]) ;
+    sem_trace_proc_exit(3, "Constrain_Array");
+    return new_array ;
+end constrain_array;
+
+--S+ 3.6.1 Index Constraints and Discrete Ranges
+--S+ Make_index
+procedure make_index(subtype) ;
+
+-- Process and index in an array declaration, an entry family declaration, 
+-- or a loop iteration. The index is given by an index declaration (a 'box'), 
+-- or by a discrete range. The later can be the name of a discrete type, or a 
+-- subtype indication.
+sem_trace_proc_entry(3, "Make_Index");
+ 
+if is_tuple(subtype) and subtype(1) = "name" then
+
+    -- The discrete range is the name of a discrete (sub)type, or a range
+    -- attribute (syntactically, a name also).
+    subtype := find_old(subtype) ;
+end if;
+
+if is_identifier(subtype) then
+    new_sub := subtype ;
+
+elseif subtype(1) = "box" then
+
+    -- Unconstrained index definition. Verify that the type_mark is
+    -- discrete.
+
+    type_mark := find_old(subtype(2)) ;
+    if not is_type(type_mark) or not is_discrete_type(type_mark) then
+	errmsg("Invalid type mark in subtype definition", original_name(type_mark), "3.6.1") ;
+    end if;
+    return ["box", type_mark] ;
+
+elseif is_range_attribute(subtype) then
+    range_expr := check_type("discrete_type", subtype) ;
+    typ := expression_type(range_expr) ;
+    new_sub := ["subtype", base_type(typ), apply_range(range_expr)];   
+
+elseif subtype(1) = "subtype" then
+
+    -- the index is given by a subtype with a range constraint.
+
+    [-,type_name, constraint] := subtype ;
+ 
+    if type_name = [] then
+	new_sub := check_type("discrete_type", subtype) ;
+	
+    -- Type name is an identifier.
+    else
+
+    -- Discrete range is a type mark.
+	if constraint = [] then
+	    new_sub := type_name ;
+
+	-- Check bounds of constraint.
+	else
+	    new_sub  := check_type(base_type(type_name), subtype) ;
+	end if;
+
+    end if;
+else
+    errmsg("Invalid expression for index definition","","3.6.1");
+    return "any" ;
+end if;
+
+if is_identifier(new_sub) then 
+    typ := new_sub ;
+
+-- new_sub is a subtype
+elseif new_sub /= om then
+    [-,typ,-] := new_sub ;
+end if;
+ 
+-- Check that a type for the range was found, and that it is
+-- discrete, and generate an anonymous type for it.
+ 
+-- Check for condition where rrror message was emitted already.
+
+sem_trace_proc_exit(3, "Make_Index");
+
+if noop_error then
+    return "any" ;
+
+elseif typ = om then
+    errmsg("Invalid bounds expressions in range","","3.3, 3.6.1") ;
+    return "any" ;
+
+elseif not is_discrete_type(typ) then
+    errmsg("expect discrete type  in discrete range","","3.3, 3.6.1") ;
+    return "any" ;
+end if;
+return promote_subtype(new_sub) ;
+return sub_name ;
+end make_index;
+
+--H+ Constrain_Index
+procedure constrain_index(index, constraint) ;
+sem_trace_proc_entry(3, "Constrain_Index");
+
+-- Process an index constraint in a constrained array declaration.
+-- The constraint can be a subtype name, or a range with or without
+-- an explicit type mark. The index has been obtained from the signature
+-- of the unconstrained array.
+
+base_index := base_type(index) ;
+case constraint(1) 
+    
+    when "name" => 
+	new_index := find_old(constraint(2)) ;
+
+	if is_range_attribute(new_index) then
+
+	    -- Obtain subtype of range, but construct as non-static.
+
+	    range_expr := check_type("discrete_type", new_index) ;
+	    new_index := expression_type(range_expr) ;
+	    sig := apply_range(range_expr) ;	       
+
+	-- named subtype.
+	else
+	    sig := ST(new_index).signature ;
+	end if;
+
+	if not compatible_types(index, new_index) then	      
+	    errmsg("Invalid index constraint for ",original_name(index),"3.6.1");
+	    return base_index ;
+	else
+
+	    -- Apply bounds of given subtype to original index type.
+	    new_index := ["subtype", index, sig] ;
+	end if;
+
+    when "subtype" => 
+
+      -- The type name in the given constraint must be the same as the
+      -- original unconstrained index.
+
+	[-, type_name, cons] := constraint ;
+	if base_type(type_name) /= base_index then 
+	    errmsg("Invalid index constraint for ", original_name(index),"3.6.1");
+	    return base_index ;
+	end if;
+	new_index := check_type(index, ["subtype", type_name, cons]) ;
+
+      -- If type_name is not the index itself, the constraint must be
+      -- be checked for compatibility against both.
+
+	if type_name /= index then
+	    anon_index := promote_subtype(new_index) ;
+	    new_index := ["subtype", index, ST(anon_index).signature] ;
+	end if;
+
+    when "range" => 
+
+      -- The expressions defining the range must be compatible with
+      -- the unconstrained index. 
+ 
+	new_index := check_type(base_index, ["subtype",index,constraint]);
+    otherwise =>
+	errmsg("Invalid index constraint for ", original_name(index),"3.6.1") ;
+	return base_index ;
+    
+end case;
+sem_trace_proc_exit(3, "Constrain_Index");
+if new_index /= [] then
+    return promote_subtype(new_index) ;
+end if;
+
+errmsg("Invalid index constraint for ", original_name(index),"3.6.1") ;
+return base_index ;
+end constrain_index;
+
+--T+ 3.7 Record Types
+--S+ New_record_type
+procedure new_record_type(type_name, opt_disc, type_def) ;
+sem_trace_proc_entry(3, "new_record_type");
+-- Records constitute a scope for the component declarations within.
+-- The scope is created prior to the processing of these declarations.
+-- Discriminants are processed first, so that they are visible when 
+-- processing the other components. After the discriminants have been 
+-- processed we set the nature of the type to 'record'.
+--
+
+    if ST(type_name).record_declarations /= [] then
+
+	-- an  incomplete or private  type declaration  was already given for
+	-- the type, and the discriminants have been declared. Install scope.
+	newscope(type_name) ;
+    else
+	process_discriminants(type_name, opt_disc) ;
+    end if;
+    ST(type_name).nature := "record" ;
+
+    -- A record type is its own base and root type
+    ST(type_name).root_type := ST(type_name).type_of := type_name ;
+    
+    -- Now process remaining field declarations.
+    [-, invar_part, var_part] := adasem(type_def) ;
+    
+    ST(type_name).signature.invariant_part +:= invar_part ;
+    ST(type_name).signature.variant_part := var_part ;
+    ST(type_name).signature.declared_components := declared(current_scope) ;
+    
+    ST(type_name).misc_type_attributes := {} ;
+    if exists [-,comp] in declared(current_scope) |
+      (not is_access(ST(comp).type_of)		    
+      and  (l := private_kind(ST(comp).type_of)) /= om)	    
+    then 
+       ST(type_name).misc_type_attributes with:= l ;
+    end if;
+    
+    -- The nature of the record components is given as 'field' while the
+    -- record is being processed, in order to catch invalid dependencies
+    -- among component declarations. Reset the nature  of each to 'obj'
+    -- (except for discriminants of course).
+    
+    for [-,n] in declared(current_scope) | ST(n).nature = "field" loop 
+	ST(n).nature := "obj" ;
+    end loop;
+    
+    -- Exit record scope.
+    popscope() ;
+    
+    -- For each record type we create an aggregate of the corresponding
+    -- type.
+
+    maybe_private_dependent(type_name) ;
+    initialize_representation_info(type_name,"record");
+sem_trace_proc_exit(3, "new_record_type");
+end new_record_type;
+
+--H+ Is_Record
+procedure is_record(typ) ; 
+
+-- This predicate is used to validate selected component notation and
+-- the examination of discriminant lists.
+
+return typ /= om and (ST(r := ST(typ).root_type).nature = "record"
+      		or (ST(r).type_of in incp_types and has_discriminants(r))) ;
+
+end is_record;
+
+--S+ 3.7.1 Discriminants
+--H+ Process_Discriminants
+procedure process_discriminants(type_name, opt_disc) ;
+sem_trace_proc_entry(3, "Process_Discriminants");
+
+-- Process discriminants, or reprocess them in a full type declaration.
+-- Introduce the record scope. It is exited after the call, in 
+-- type_declaration or record declaration.
+
+    newscope(type_name) ;
+
+    ST(type_name).record_declarations := [[],[]] ;
+
+    [disc_decls, ST(type_name).discr_decl_tree] := 
+					discriminant_declaration(opt_disc) ;
+    ST(type_name).signature.invariant_part := disc_decls ;
+    disc_names := [ d(2): d in disc_decls] ;		
+
+    -- Check that all discriminants have default values, or none.
+
+    if (exists d1 in disc_names | ST(d1).default_expr /= om) and
+       (exists d2 in disc_names | ST(d2).default_expr  = om) then
+       errmsg("Incomplete specification of default values for discriminants",
+	      "", "3.7.1") ;
+    end if;
+
+    -- discriminant_list(type_name) := disc_names ;
+
+    -- Make names of discriminants visible at this point, because they 
+    -- may be used in constraints to access types of the current record
+    -- type.
+
+    ST(type_name).signature.declared_components := declared(current_scope) ;
+
+sem_trace_proc_exit(3, "Process_Discriminants");
+end process_discriminants;
+
+--S+ 3.7(1) Discriminant_Declaration
+procedure discriminant_declaration(discr_list) ;
+sem_trace_proc_entry(3, "Discriminant_Declaration");
+
+-- Process discriminant declarations. Discriminants are processed like
+-- variable declarations, except that the type of a discriminant must be
+-- discrete, and the nature of a discriminant is, naturally enough
+-- 'discriminant'. This insures that discriminants cannot appear on the
+-- left of an assignment, nor in expressions. We delay setting the nature
+-- until all of the discriminants have been processed in order to
+-- detect invalid uses in the same discriminant part. 
+-- The original tree is also saved to check for conformance upon 
+-- redeclaration.
+
+decls := [] ;
+discr_tree := [] ;
+discr_nam_list := [] ;
+
+for discr_spec in discr_list loop 
+
+    [id_list, type_id, opt_init] := discr_spec ;
+    nam_list := [find_new(id): id in id_list] ;
+    discr_nam_list +:= nam_list ; 
+    type_mark := find_old(type_id) ;
+
+    if not is_discrete_type(type_mark) then
+        errmsg("Discriminant must have discrete type","","3.7.1") ;
+	type_mark := "any" ;
+    end if;
+
+    init_val  := if opt_init = [] then om
+	      else check_type(type_mark, opt_init) end if;
+
+    for n in nam_list loop 
+	ST(n).type_of := type_mark;
+	ST(n).default_expr := init_val;
+	decls with:=   ["object", n, type_mark, init_val] ;	
+    end loop;
+
+    init_norm := normalize(type_mark, opt_init) ;
+    discr_tree with:= discr_spec + [type_mark, init_norm];
+
+end loop;
+
+for n in discr_nam_list loop 
+     ST(n).nature := "discriminant" ;
+end loop;
+sem_trace_proc_exit(3, "Discriminant_Declaration");
+return [decls, discr_tree] ;
+end discriminant_declaration;
+
+--H+ Discriminant_Redeclaration
+procedure discriminant_redeclaration(type_name, opt_disc) ;
+
+-- Verify conformance of discriminant part on redeclarations of types.
+sem_trace_proc_entry(3, "Discriminant_Redeclaration");
+
+old_decl := ST(type_name).discr_decl_tree ;
+if #old_decl /= #opt_disc then 
+    conformance_error ;	 
+    return ;
+end if;
+
+for i in [1..#old_decl] loop 
+    [id_list, type_id, opt_init] := opt_disc(i) ;
+    [oid_list, otype_id, oopt_init, otype_mark, oinit_norm] := old_decl(i) ;
+
+    if id_list /= oid_list or not conform(type_id, otype_id) then
+	conformance_error ;    
+    end if;
+
+    type_mark := find_old(type_id) ;
+    init_norm := normalize(type_mark, opt_init) ;
+
+    if init_norm /= oinit_norm
+      or type_mark /= otype_mark
+      or not conform(opt_init, oopt_init)
+    then
+	conformance_error ;
+    end if;
+end loop;
+
+-- Discard discriminant declaration tree after verifying conformance.
+
+ST(type_name).discr_decl_tree := om ;		
+sem_trace_proc_exit(3, "Discriminant_Redeclaration");
+end discriminant_redeclaration;
+--H+ Conformance_Error
+procedure conformance_error ;
+    errmsg("non conformance to previous declaration","","6.3.1") ;
+end conformance_error;
+
+--S+ 3.7(3) Component_Declaration 
+procedure component_declaration(id, type_mark, opt_init);
+
+-- Process record component declaration.
+-- Verify that the type is a constrained one, or that default values
+-- exist for the discriminants of the type. 
+sem_trace_proc_entry(3, "Component_Declaration");
+
+name := find_new(id) ;
+check_fully_declared2(type_mark) ;	    
+
+-- Type-check the initial value, if provided. 
+
+    if opt_init = [] then 
+	if is_access(type_mark) then
+	    init_val := "NULL" ;
+	else
+	    init_val := om ;	    
+	end if;
+    else
+	[-, init_val] := check_init(type_mark, opt_init) ;  
+    end if;
+
+-- Try to catch self-reference within a record type (a frequent mistake).
+
+    if type_mark in open_scopes then
+	errmsg("Invalid self-reference in definition of ", original_name(type_mark),"3.1") ;
+    end if;
+    if is_unconstrained(type_mark) then
+	errmsg("Unconstrained "+ST(type_mark).nature," in component declaration", "3.6.1, 3.7.2");
+    end if;
+
+    ST(name) := ["field", type_mark, [], {}, current_scope, om] ;
+
+sem_trace_proc_exit(3, "Component_Declaration");
+
+return [["field", name, type_mark, init_val]] ; 
+
+end component_declaration;
+--S+ 3.7.2 Discriminant Constraints
+--H+ Constrain_Record
+procedure constrain_record(type_mark, constraint) ;
+sem_trace_proc_entry(3, "Constrain_Record");
+sem_trace(4, "type_mark: "+ type_mark + " constraint: " + str(constraint) );
+-- Process discriminant constraints of record type.
+-- Verify that values have been provided for all discriminants, that
+-- the original type is unconstrained, and that the types of the
+-- supplied expressions match the discriminant types.
+
+if not is_record(type_mark) then
+    errmsg("Invalid type for constraint", "","3.3, 3.7.2") ;
+    return type_mark ;			    
+end if;
+
+d_list := discriminant_list(type_mark) ;
+
+if d_list = [] or d_list = om then
+    errmsg("Invalid constraint: Record type has no discriminant","","3.7.1, 3.7.2") ;
+    return type_mark ;			    
+end if;
+
+-- To verify that all discriminants were given values.
+d_seen := {} ;
+
+-- Look for named associations in discriminant constraint list.
+
+if exists ct = constraint(i) | is_tuple(ct) and ct(1) = "choice_list" then
+    first_named := i ;
+    if exists nam in constraint(i+1..) | is_tuple(nam) and nam(1) /= "choice_list" then
+	errmsg("Positional associations after named ones","","3.7.2") ;
+	return type_mark ;		    
+   end if;
+else 
+    first_named := #constraint + 1 ;
+end if;
+
+named_constraint := constraint(first_named..) ;
+
+discr_map := {} ;
+
+for i in [1..first_named-1] loop 
+ 
+    d_name := d_list(i) ;
+    -- Exhausted discriminant list
+    if d_name = om then
+	errmsg("Too many constraints for record type", "","3.7.2") ;
+	return type_mark ;		    
+    end if;
+    discr_map(d_name) := constraint(i) ;
+    d_seen with:= d_name ;
+end loop;
+
+for [-, choice_list, expn] in named_constraint loop 
+    c_list := [] ;
+
+    for [choice_type, name] in choice_list loop 
+	if choice_type /= "simple_choice" then
+	    errmsg("Expect discriminant names only in discriminant constraint","","3.7.1, 3.7.2");
+	    return  type_mark ;		    
+	elseif	not is_identifier (d_id := name(2)) or
+	    not is_map(comps := ST(type_mark).signature.declared_components) or
+	    (d_name := comps(d_id)) = om or
+	    ST(d_name).nature /= "discriminant" then
+	    errmsg("Invalid discriminant name in discriminant constraint","","3.7.1, 3.7.2");
+	    return type_mark ;		    
+	elseif d_name in d_seen then
+	    errmsg("Duplicate constraint for discriminant ",d_id,"3.7.1, 3.7.2");
+	else 
+	    c_list with:= d_name ;
+	    d_seen with:= d_name ;
+	end if;
+     end loop;
+     if #{base_type(ST(d).type_of): d in c_list} > 1 then
+	errmsg("all discriminants in an association  must have the same type",
+				"","3.7.2(4)") ;
+     end if;
+     for c in c_list loop 
+	 discr_map(c) := expn ;
+     end loop; 
+end loop;
+
+-- If the discriminant constaint itself depends on discriminants, the 
+-- subtype is a component subtype of a record type. In that case the check
+-- that the discriminant constraint is compatible with the discriminant type
+-- is delayed until the outer subtype is elaborated (see eg c37213a, lines 67
+-- and 68). In that case the discriminant constraints do not carry a range
+-- check. If one of the constraints is given by an (outer) discriminant, all
+-- the constraints are checked against the base type of the corresponding
+-- discriminant, to insure that no constraint check is indicated. The checks 
+-- are then performed explicitly in APPLY_DISCR. 
+
+for expn = discr_map(d_name) loop 
+        discr_map(d_name) := check_type(base_type(ST(d_name).type_of), expn) ? [] ;
+end loop;
+
+has_discr_refs := exists [-, expn] in discr_map | check_discriminant(expn) ;
+
+if not has_discr_refs then
+   -- The subtype indication does not depend on an enclosing record. Note the
+   -- constraint checks to be performed (may be redundant).
+   for expn = discr_map(d_name) loop 
+      discr_map(d_name) := eval_static(apply_constraint(expn, ST(d_name).type_of));
+   end loop;
+end if;
+
+sem_trace_proc_exit(3, "Constrain_Record");
+
+if #d_seen = #d_list then
+-- All discriminant were ok
+    return  ["subtype", type_mark,  ["discr", discr_map]] ;
+else
+    errmsg("Missing constraints for discriminants","","3.7.2") ;
+    return type_mark ;			
+end if;
+end constrain_record;
+
+--H+ Check_Discriminant
+procedure check_discriminant(expn) ;
+
+-- Verify that when a discriminant appears in an index constraint or a 
+-- discriminant constraint of a record component, it appears by itself 
+-- and not as part of a larger expression. 
+
+sem_trace_proc_entry(5, "Check_Discriminant");
+sem_trace_proc_exit(5, "Check_Discriminant");
+
+if ST(current_scope).nature /= "record" then return false ; 
+
+elseif is_discr_ref(expn) then return true ;
+elseif not is_tuple(expn) then return false ;
+
+elseif exists sub_expn in expn | check_discriminant(sub_expn) then
+    errmsg("a discriminant appearing in a subtype indication must appear by itself","","3.7.1");
+
+-- No need to propagate error
+    return false ;
+else return false ;
+
+end if;
+end check_discriminant;
+
+procedure is_discr_ref(e) ;
+-- A discriminant in an expression carries the tag 'discr_ref' to indicate
+-- its special treatment in subtype indications and constraints.
+
+return is_tuple(e) 
+     and 
+       (e(1) = "discr_ref" or (e(1) = "qual_range" and is_discr_ref(e(3))));
+end is_discr_ref;
+
+--S+ 3.7.3 Variant Parts
+--H+ Variant_Declaration
+procedure variant_declaration(id, variant_list) ;
+sem_trace_proc_entry(3, "Variant_Declaration");
+
+discr_name := find_old(id) ;
+if ST(discr_name).nature /= "discriminant" then
+   errmsg("Invalid discriminant name in variant part", "","3.7.1, 3.7.3") ;
+   return [] ;
+
+elseif (dtyp := ST(discr_name).type_of) = om then
+   return [] ;
+else
+   case_list :=	 [[[adasem(c): c in choices], adasem(comps)] :
+		 [choices, comps] in variant_list] ;
+   [variants, others] := process_case(dtyp, case_list) ;
+end if;
+	 
+if others /= [] then
+    variants with:= [{"others"}, others] ;	    
+end if; 
+
+-- Replace 'null' marker with empty component list.
+
+for v in domain variants | variants(v) = ["null"] loop 
+    variants(v) := [[], []] ;
+end loop;
+sem_trace_proc_exit(3, "Variant_Declaration");
+return [discr_name, variants] ;
+
+end variant_declaration;
+
+--T+ 3.8 Access Types
+procedure new_access_type(type_name, type_def) ;
+subtype_indic := adasem(type_def);
+[id, constraint] := subtype_indic ;
+invisible_designator(original_name(type_name), id);
+if constraint = [] and is_type(type_mark := check_old(id))
+   and ST(type_mark).type_of = "incomplete"
+then
+   -- Permissible context for an incomplete type.
+   desig_type := type_mark ;
+else
+   desig_type := promote_subtype(make_subtype(subtype_indic)) ;
+end if;
+
+ST(type_name) := ["access", type_name, desig_type, {}, current_scope, type_name];
+initialize_representation_info(type_name,"access");
+
+maybe_private_dependent(type_name) ;
+
+end new_access_type;
+--S+ 3.8.1 Incomplete Type Declarations
+--H+ Incomplete_Type_Declaration
+procedure incomplete_type_declaration(id, opt_disc) ;
+sem_trace_proc_entry(3, "Incomplete_Type_Declaration");
+
+-- Process an incomplete declaration. The identifier must not have been 
+-- declared already in the scope. However, an incomplete declaration may
+-- appear in the private part of a package, for a private type that has 
+-- already been declared. 
+-- In this case, the discriminants (if any) must match.
+
+if (name := declared(current_scope)(id)) = om then
+	name := find_new(id) ;
+	ST(name).type_of   := "incomplete" ;
+	ST(name).root_type := name ;
+	process_discriminants(name, opt_disc) ;
+	ST(name).nature := "type" ;
+	ST(name).misc_type_attributes := {} ;
+	popscope() ;
+
+elseif ST(current_scope).nature = "private_part" 
+    and ST(name).type_of in priv_types then
+
+	-- redeclaration of private type. Check conformance.
+	discriminant_redeclaration(name, opt_disc) ;	    
+else
+    errmsg("invalid redeclaration of " ,id, "3.8, 8.2") ;
+    name := "any";			    
+end if;
+sem_trace_proc_exit(3, "Incomplete_Type_Declaration");
+return name ;
+
+end incomplete_type_declaration;
+
+--H+ Check_Incomplete
+procedure check_incomplete(type_mark) ;
+
+-- Called to verify that an incomplete type is not used prematurely.
+
+    if ST(base_type(type_mark)).type_of = "incomplete" then
+	errmsg("Invalid use of type " + original_name(type_mark),
+	     " before its full declaration", "3.8.1") ;
+    end if;
+end check_incomplete;
+--T+ Miscellaneous Procedures and Predicates
+--S+ Promote_Subtype 
+procedure promote_subtype(subtype) ;
+sem_trace_proc_entry(4, "Promote_Subtype");
+
+if is_identifier(subtype) then
+    sem_trace_proc_exit(4, "Promote_Subtype");
+    return subtype ;
+end if;
+
+[type_mark, constraint] := subtype ;
+
+-- Make a subtype indication into an anonymous type. If the bounds of 
+-- the subtype are constant, and another subtype with the same cons-
+-- traint already exists in the scope, return it. 
+ 
+if exists [-, anon] in declared(current_scope)		
+    | ST(anon).nature = "subtype" and ST(anon).type_of = type_mark
+    and ST(anon).signature = constraint and no_side_effects(constraint)
+    then
+    sem_trace_proc_exit(4, "Promote_Subtype");
+    return anon ;
+else
+    new_name := anonymous_type() ;
+    ST(new_name) := subtype ;
+    parent_type := ST(new_name).type_of ;
+    ST(new_name).root_type := ST(parent_type).root_type ;	  
+    ST(new_name).scope_of := current_scope ;
+    ST(new_name).misc_type_attributes := ST(parent_type).misc_type_attributes;
+    parent_base_type := base_type(parent_type);
+    if already_forced(parent_base_type) then
+       choose_representation(new_name);
+    elseif types_not_chosen_yet(parent_base_type) /= om then
+       types_not_chosen_yet(parent_base_type) with:= new_name;
+   end if;
+   sem_trace_proc_exit(4, "Promote_Subtype");
+   return new_name ;
+end if;
+ 
+end promote_subtype;
+
+--S+ No_Side_Effects
+procedure no_side_effects(expn);
+
+-- Verify that an expression is garanteed free of side effects, i.e.
+-- contains no function calls.
+-- (Current version is too conservative).
+
+if not is_tuple(expn) then return false ;
+else case expn(1) 
+    when "range" => 
+    [-, lo, hi] := expn ;
+    return is_value(lo) and is_value(hi) ;
+
+    when "ivalue" =>  return true;
+
+    otherwise =>
+    return false ;
+    end case;
+end if;
+
+end no_side_effects; 
+
+--S+ Subtype_Expression 
+procedure subtype_expression(name) ;
+sem_trace_proc_entry(4, "Subtype_Expression");
+
+-- Called to obtain the subtype expression of a type name. This is done
+-- for allocators and slices when a subtype indication appear in an expr.
+-- introduce an anonymous type for it, to simplify the type resolution of
+-- the complete expression. The code emitted however must include the
+-- subtype expression, to insure that the constraint is evaluated at the
+-- proper place.
+
+if original_name(name) /= "" then
+    -- Not an anonymous name. Return as is.
+    sem_trace_proc_exit(4, "Subtype_Expression");
+    return name ;
+elseif is_scalar_type(name) or is_record(name) then
+    sem_trace_proc_exit(4, "Subtype_Expression");
+    return [ST(name).nature, ST(name).type_of, 
+	    ST(name).signature, ST(name).overloads];
+elseif is_access(name) then
+    return trace_and_return(4, "Subtype_Expression",
+		["access_former", 
+			subtype_expression(ST(name).designated_type)]); 
+elseif is_array(name) then
+    -- Collect subtype expression for each index, and emit constrained 
+    -- subtype.
+    return trace_and_return(4, "Subtype_Expression",
+	["subtype", base_type(name),
+	      ["index", [subtype_expression(indx) : indx in index_types(name)]],
+		       component_type(name)]); 
+else null;
+end if;
+end subtype_expression;
+
+--T+ Miscellanous type predicates.
+--S+ Is_Type
+procedure is_type(name) ;
+
+  const
+     type_natures := {"type", "subtype", "array", "record", 
+		      "enum", "access", "task_type", "task_type_spec"} ;
+
+return (is_identifier(name) and ST(name).nature in type_natures) ;
+
+end is_type;
+--S+ Is_Character_Type
+procedure is_character_type(name) ;
+
+-- An enumeration type is a character type if it contains at least one
+-- character literal.
+
+return (ST(name).root_type = "CHARACTER")
+    or 
+      ((ST(bt := base_type(name)).nature = "enum") and 
+      (exists [c,-] in ST(bt).literal_map | #c = 3 and c(1) = "'" and c(3) = "'"));
+end is_character_type;
+
+--S+ Is_Discrete_Type
+procedure is_discrete_type(name);
+
+const
+   discrete_types := {"INTEGER","SHORT_INTEGER",
+		      "universal_integer","discrete_type","any"}; 
+
+sem_trace_proc_entry(4, "Is_Discrete_Type");
+ 
+btype := (if ST(name).type_of /= om then ST(name).root_type else om end if) ;
+
+sem_trace_proc_exit(4, "Is_Discrete_Type");
+return (btype in discrete_types or 
+    (if btype = om then false else ST(btype).nature = "enum" end if)) ;
+end is_discrete_type;
+
+--S+ Is_Numeric_Type 
+procedure is_numeric_type(name) ;
+
+numeric_types := 
+   {"INTEGER", "SHORT_INTEGER", "FLOAT", "LONG_FLOAT", "$FIXED",
+    "universal_integer", "universal_fixed", "universal_real"} ;
+sem_trace_proc_entry(5, "Is_Numeric_Type");
+sem_trace_proc_exit(5, "Is_Numeric_Type");
+return ST(name).root_type in numeric_types ;
+
+end is_numeric_type;
+--S+ Is_Fixed_Type
+procedure is_fixed_type(name) ;
+return ST(name).root_type = "$FIXED" ;
+end is_fixed_type;
+
+--S+ Is_Scalar_Type 
+procedure is_scalar_type(name) ;
+
+const
+   scalar_types :=
+    {"INTEGER", "SHORT_INTEGER", "FLOAT", "LONG_FLOAT", "$FIXED", 
+     "universal_integer", "universal_real", "universal_fixed", "discrete_type"};
+
+root := ST(name).root_type ;
+return root in scalar_types or ST(root).nature = "enum" ;
+end is_scalar_type;
+
+--S+ Is_Incomplete_Type
+procedure is_incomplete_type(t) ;
+
+-- A type is incomplete if only an incomplete type declaration for it has 
+-- been seen, or if one of its subcomponents is an incomplete private type 
+-- (because of other rules, a subcomponent can never have an incomplete type).
+
+return ST(b := base_type(t)).type_of = "incomplete" 
+	or private_ancestor(b) /= om ;
+
+end is_incomplete_type;
+
+--S+ Is_Unconstrained
+procedure is_unconstrained(typ) ;
+
+return	 (ST(typ).nature = "array" 
+      or
+	 ((ST(typ).nature = "record" or ST(typ).type_of in incp_types) and
+	 -- Some discriminant has no default value.
+	 (exists discr in discriminant_list(typ) | ST(discr).signature = om)));
+
+end is_unconstrained;
+--S+ Can_Constrain
+procedure can_constrain(d_type) ;
+
+-- Determine whether an object, actual parameter, type def, etc. can
+-- receive a constraint.The predicate -Is_Unconstrained- used in decla-
+-- rations is too weak here, because it returns false on discriminated
+-- records with default values.
+
+return (ST(d_type).nature = "array")  or
+       (is_record(d_type) and ST(d_type).nature /= "subtype"
+		    and has_discriminants(d_type)) ;
+
+end can_constrain;
+
+--S+ base type 
+procedure base_type(name);
+
+-- The base-type of a type-mark is itself, unless the type-mark denotes
+-- a subtype. In that case the nature of name is 'subtype', unless it is
+-- an unconstrained subtype, in which case its base type is its TYPE_OF.
+
+return
+    if ST(name).nature = "subtype"	 then 
+	if ST(name).type_of = name then 
+	    name else 
+	    base_type(ST(name).type_of)
+	end if
+    elseif ST(name).nature in ["record", "array"] then ST(name).type_of
+    else name
+    end if;
+end base_type;
+
+--S+ New_Type_List
+procedure new_type_list() ;
+ 
+-- This procedure is invoked at the end of each declarative part,
+-- to format the new type declarations before insertion into the
+-- intermediate code.
+-- The type definitions for new types are in the map TYPE_OF.
+-- In the case of new and derived types, all that matters to the
+-- interpreter is the original type. Therefore, for types whose
+-- structure is ['new', old_type]  we simply emit : old_type together
+-- with any constraint on it.
+--
+-- For arrays, their internal representation is that of a subtype of
+-- some internal 'sequence' object, which lacks index constraints.
+-- This dependence is irrelevant to the interpreter. We emit the
+-- signature of the type, which is the pair [index, component].
+ 
+-- For records, the type field holds the declarations for the comps.
+-- and the signature holds declared map from selector names to their
+-- unique name. This map is only used internally to validate the
+-- names of selectors in qualified names and aggregates. It is not passed
+-- to the interpreter.
+-- This formatting is also done for user-defined types. Routine AIS_Type
+-- performs this function.
+ 
+    t_list frome newtypes ;
+ 
+    return [ais_type(type_name) : type_name in t_list] ;
+
+end new_type_list;
+
+--S+ Named_Type	  
+procedure named_type(name) ;
+sem_trace_proc_entry(5, "Named_Type");
+ 
+-- This procedure is invoked when an anonymous type can be given a name
+-- that relates to its nature (e.g. the base type of a derived type).
+ 
+    type_name :=  name_prefix + name + suffix ;
+    declared(current_scope)(name) := type_name ;
+    -- The symbol table entries are dummy for now. The rest of the 
+    -- symbol table entry will be entered in build_derived_type.
+    ST(type_name)  := ["void", "none", [], "", current_scope, om] ;
+    sem_trace_proc_exit(5, "Named_Type");
+    return type_name ;
+end named_type;
+
+--S+ Anonymous_Type 
+procedure anonymous_type ;
+sem_trace_proc_entry(5, "Anonymous_Type");
+ 
+-- This procedure is called to produce a new identifier for an anonymous
+-- type. The new identifier is inserted into the symbol table, and into
+-- the type stack.
+ 
+    new_name := named_atom("") ;
+     
+    declared(current_scope)(new_name) := new_name ;
+
+    -- Initialize symbol table entry. The nature of the new entity
+    -- is 'void' until it is given its true nature later.
+ 
+    ST(new_name)  := ["void", "none", [], "", current_scope, om] ;
+    newtypes(#newtypes) with:= new_name ;
+    sem_trace_proc_exit(5, "Anonymous_Type");     
+    return new_name ;
+end anonymous_type;
+ 
+--S+ Named_Atom
+procedure named_atom(id);
+-- This procedure uses the unique name generated for a compilation
+-- unit to produce new names that will be unique throughout a library,
+-- especially one containing more than one AIS file.
+ 
+return
+    if unit_name(1) = "body" then "UB:" else "" end if
+    +/[unit_name(i) + "." : i in [#unit_name,#unit_name-1..3]]
+    + unit_name(2)
+    + if unit_name(2) = "" then "" else "." end if
+    + id
+    + newat_str();
+
+end named_atom;
+end adasem3;

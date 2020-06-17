@@ -1,0 +1,4735 @@
+
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem4.stl,v 1.3 91/01/09 17:00:08 banner Exp $
+--
+package body adasem4;
+--T+ 4. Names and Expressions
+--S+ check_type 
+
+use globals;
+use adasem1;
+use adasem2;
+use adasem3;
+use adasem5;
+use adasem6;
+use adasem7;
+use adasem8;
+use adasem9;
+use adasem10;
+use adasem11;
+use adasem12;
+use adasem13;
+use evalstat;
+use adaio;
+use adalib;
+use adaarith;
+
+procedure check_type(context_type, expn) ;
+ 
+-- This procedure performs type checking and operator disambiguation.
+-- -expn- is an expression tree, which must have the type -context_type-.
+-- This procedure is called from all reductions where the type of
+-- an expression is known a priori : assignments, conditionals, etc.
+-- The procedure returns -expn-, suitably modified if disambiguation
+-- had to take place.
+
+-- Some contexts require that a type belong to a class of types instead 
+-- of one specific type. For example, a condition must be of a boolean
+-- type, not just BOOLEAN.
+
+const 
+   type_classes := ["boolean_type", "discrete_type",  "integer_type", 
+                    "real_type",    "universal_type"] ;
+
+sem_trace_proc_entry(3, "Check_Type");
+sem_trace(3, "context_type: "+ str(context_type) );
+sem_trace_pp(3, "expn: ",  expn);
+ 
+noop_error := false ;
+tree1 := resolve1(expn) ;       -- Bottom-up pass.
+
+if noop_error then              -- No valid types
+    noop_error := false ;       -- error emitted already
+    return [] ; 
+end if;
+
+[-,types] := tree1 ;
+old_context := context_type ;           -- save for test below
+if context_type in type_classes then
+    -- Keep only those that belong to this class.
+    types := {t in types | compatible_types(t, context_type)} ; 
+
+    if #types > 1 then
+        -- May be overloaded operator: user-defined one hides predefined.
+        types -:= univ_types ;
+    end if;
+
+    if #types = 1 then
+        context_type := arb types ;
+    else
+        type_error({"any"}, context_type, #types) ;
+    end if;
+end if;
+
+tree2 := resolve2(tree1, context_type) ;
+if tree2 = [] then
+    return [] ; 
+end if;
+
+-- Now emit a constraint qualification if needed, and try to fold it.
+sem_trace(5,"Now emit a constraint qualification if needed and try to fold it.") ;
+if old_context notin type_classes then
+    tree2 := apply_constraint(tree2, context_type) ;
+end if;
+
+if context_type notin univ_types then
+    sem_trace(5," context_type notin univ_types ");
+    tree2 := eval_static(tree2);
+end if;
+
+-- Add type to resulting expression, if not present. (temporary)
+if is_value(tree2) and #tree2 = 2 then
+    tree2 with:= context_type ;
+end if;
+
+sem_trace_proc_exit(3, "Check_Type");
+
+return tree2 ;
+
+end check_type;
+--S+ constraint_kind
+procedure constraint_kind(typ) ;
+
+sem_trace_proc_entry(3, "Constraint_Kind");
+
+-- Determine the kind of constraint that applies to a given type.
+-- For access types, note that there is no constraint on an access to
+-- scalar, because there are no subtypes of such access types. On the
+-- other hand there is a bounds check needed on access to array types,
+-- because allocators for these are always constrained.
+
+-- None of these subprocedures are traced, so just trace exit immediately.
+sem_trace_proc_exit(3, "Constraint_Kind");
+
+if is_unconstrained(typ) or typ in univ_types then 
+    return "" ;
+else  return
+    (if is_scalar_type(typ)  then "qual_range"
+     elseif   is_array(typ)  then 
+        (if full_others or ST(current_scope).nature = "record"
+                       then "qual_index" else "" end if)
+     elseif   is_record(typ) then
+        (if has_discriminants(typ) then "qual_discr" else "" end if)
+     elseif   is_access(typ) then
+       (if is_scalar_type(d := ST(typ).designated_type) then ""
+        elseif is_unconstrained(d) then ""      
+        elseif is_array(d)  then "qual_aindex"
+        elseif is_record(d) then 
+          (if has_discriminants(d) then "qual_adiscr" else "" end if)
+        else "" end if)
+    else "" end if) ;
+end if;
+
+end constraint_kind;
+--S+ apply_constraint
+procedure apply_constraint(expn, typ) ;
+sem_trace_proc_entry(3, "Apply_Constraint");
+sem_trace(3, "type: "+ str(typ) ) ;
+sem_trace_pp(3, "expn: ", expn);
+
+-- Apply a constraint check to an expression, in a context that imposes it.
+
+constraint := constraint_kind(typ) ;        
+sem_trace(5,"constraint=" + str(constraint) ) ;
+if constraint = ""          -- unconstrained context
+  or (is_identifier(expn) and ST(expn).type_of = typ)
+  -- expression has type of context
+  or (is_tuple(expn) and expn(1) in ["subtype", "()"]) then
+      -- constraint has already been applied to the inner expression.
+      return expn ;
+else
+    if is_access(typ) then 
+        typ := ST(typ).designated_type ;
+    end if;
+    expn := [constraint, typ, expn] ;
+
+end if;
+sem_trace_proc_exit(3, "Apply_Constraint");
+return expn ;
+
+end apply_constraint; 
+
+--S+ expression_type
+procedure expression_type(expn) ;
+sem_trace_proc_entry(4, "Expression_Type");
+sem_trace(4,"expn: " + str(expn) ) ;
+
+-- Utility to obtain the type of an expression, after type resolution.
+-- If the expression is not an identifier, the type appears explicitly
+-- within  the expression; otherwise retrieve type from symbol table.
+
+sem_trace_proc_exit(4, "Expression_Type");
+return 
+if is_identifier(expn) then ST(expn).type_of 
+    elseif expn = [] or expn = om then "any"
+    elseif expn(1) in qualifiers then expn(2)
+    else top(expn) end if;
+
+
+end expression_type;
+
+--S+ - RESOLVE1 - 
+procedure resolve1(expn) ;
+
+-- This procedure performs the first, bottom-up pass of the type
+-- checking and overload resolution. It rebuilds the expression tree
+-- for -expn-, and returns a pair : [ new expn, set of types of expn].
+ 
+-- If a type error is encountered, this procedure returns the following
+-- template :
+
+error_expression := [ [], {}] ;
+
+sem_trace_proc_entry(3, "Resolve1");
+sem_trace_pp(3,"expn: ", expn) ;
+ 
+if (noop_error ? false) then 
+   return error_expression ;
+end if; 
+
+expn ?:= "any" ;        -- If undefined, make into error id.
+ 
+--H+ Expression is an identifier
+if is_identifier(expn) then
+
+    id_type := ST(expn).type_of ;
+    sem_trace_proc_exit(3, "Resolve1");
+    return
+    case ST(expn).nature 
+
+    when "constant", "generic_in", "generic_inout", "in", "inout", "loop_var",
+	 "obj", "out", "task_obj", "task_obj_spec", "task_type_spec" => 
+           [expn, {id_type}]
+
+    when "task_type" =>  if expn in open_scopes then
+	    -- a reference to the type in its own body is a reference to
+	    -- the task currently executing.
+	    [declared(expn)("current_task"), {id_type}] 
+            else [expn, {id_type}] end if
+
+    when "type", "subtype", "enum", "record", "array", "access" => 
+            pass1_error("Invalid use of type "+ original_name(expn),
+                    " in expression", "4.4")
+
+    when "discriminant" => 
+            [["discr_ref", expn, id_type], {id_type}]
+
+    when "void" =>  pass1_error("premature use of identifier ",
+            original_name(expn), "8.3")
+    otherwise =>
+        pass1_error("Invalid use of identifier ", original_name(expn), "4.4")
+    end case;
+
+--H+ Expression is overloadable
+elseif is_overloaded(expn) then
+    -- An overloaded name is either an enumeration literal, or a subprogram 
+    -- call without parameters. 
+    -- Rebuild the expression in the format of a nullary operation.
+    return trace_and_return(3, "Resolve1", 
+           resolve1( [expn])) ;
+--H+ Expression with arguments
+else
+    op_name := expn(1) ;        -- Expression with arguments.
+ 
+    if is_overloaded(op_name) then
+        arg_list := [resolve1(expn(i)) : i in [2..#expn]] ;
+
+        exp1 := result_types(op_name, arg_list) ;
+        if noop_error then 
+            sem_trace_proc_exit(3, "Resolve1");
+            return error_expression ;
+        elseif exp1(2) = {} then        -- No valid types.
+            type_error(op_name, om, 0) ;
+            sem_trace_proc_exit(3, "Resolve1");
+            return error_expression ;
+        else 
+            sem_trace_proc_exit(3, "Resolve1");
+            return exp1 ;
+        end if;
+
+    else
+    -- Operator is not overloaded : it is a basic operation
+    -- on arrays, entries, records, aggregates, or attributes.
+ 
+    case op_name 
+
+    -- A name in an expression appears in the format :
+    --  ['name',  name]
+    -- We must first perform name resolution on it, and then
+    -- validate types.
+
+    when "name" => 
+                             return trace_and_return(3, "Resolve1", 
+                                   resolve1(find_old(expn(2))) );
+
+    when "int_literal" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return [expn, {"universal_integer"}] ;
+
+    when "real_literal" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return [expn, {"universal_real"}] ; 
+
+    when "string_literal" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return [expn, {"string_type"}] ;
+
+    when "null" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return [expn, {"null_type"}] ;
+ 
+    when "aggregate" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return resolve1_aggregates(expn) ;
+
+    when "[]" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return resolve1_index(expn) ;
+
+    when "[..]" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return resolve1_slicing(expn) ;
+ 
+    when "." =>
+                            return trace_and_return(3, "Resolve1",
+                                   valid_selected_expression(expn) );
+
+    when "in", "notin" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return resolve1_membership(expn) ;
+
+    when "@" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return resolve1_dereference(expn) ;
+
+    when "new" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return resolve1_new(expn) ;
+  
+    when "new_init" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return resolve1_new_init(expn) ;
+
+    when "'" =>
+                            return trace_and_return(3, "Resolve1",
+                		valid_attribute(expn)) ; 
+ 
+    when "choice_list" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return resolve1_choice_list(expn) ;
+
+    when "qual_range" =>
+    -- When qual_range appears in an expression, the bounds have
+    -- been type-checked. Simply extract the known result type.
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return [expn, {expn(2)}] ;
+
+    when "convert" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+			    return resolve1_conversion(expn);
+
+    when "qualify" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+			    return resolve1_qualify(expn) ;
+
+    when "subtype" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+ 			    return resolve11_range(expn) ;
+
+    when "()" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return resolve1_parenthesised_expression(expn);
+
+    when "call_or_index" =>
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return resolve1_call_or_index(expn) ;
+
+    when "range" =>                   		-- A frequent error.
+                            sem_trace_proc_exit(3, "Resolve1");
+                            return pass1_error(
+                                "Invalid use of discrete range ",
+                                            "in expression", "4.4") ;
+    otherwise => 
+       sem_trace_proc_exit(3, "Resolve1");
+       if op_name = om then
+           -- Usually a previous error; often an invalid selected 
+           -- component name.
+           noop_error := true ;
+           return error_expression ;
+       else
+           return pass1_error("Invalid operator in expression: ", 
+                                      op_name, "4.4, 4.5");
+       end if;
+    end case;
+    end if;
+end if;
+end resolve1;
+
+--T+ -RESOLVE2-
+procedure resolve2(typed_expression, context_type) ; 
+
+sem_trace_proc_entry(3, "Resolve2");
+sem_trace(3,"context_type: " + str(context_type) ) ;
+sem_trace_pp(3,"typed_expression: ", typed_expression);
+
+-- This procedure performs the second, top-down pass of the type validation 
+-- and overloading resolution. The first argument is a pair : 
+-- [expression, possible types for expression]. The second argument is the 
+-- type which the expression must yield. If the expression is overloaded, 
+-- only one of its instances must yield  -context_type-. Once this is 
+-- ascertained, the known types of the formals for the top level operator 
+-- in expression, are propagated downwards to the actuals.
+ 
+if (noop_error ? false) then
+    sem_trace_proc_exit(3, "Resolve2");
+    return [] ; 
+end if;
+ 
+[expn, types] := typed_expression ;
+ 
+if expn = [] then 
+   sem_trace_proc_exit(3, "Resolve2");
+   return [] ;
+end if;
+
+--S+ Expression is identifier
+if is_identifier (expn) then
+    -- If constant, get its value, and if universal constant,
+    -- convert according to context.
+    [type2, expn2] := [ST(expn).type_of , const_val(expn)] ;
+    if is_value(expn2) then
+        expn2 := specialize(expn2, context_type) ;
+    end if;
+    
+    if not compatible_types(context_type, type2) then
+        errmsg(original_name(expn) + " has incorrect type. Expect ",
+            full_type_name(context_type),"none") ;
+        sem_trace_proc_exit(3, "Resolve2");
+        return [] ;
+    elseif ST(expn).nature = "out" and not out_context then
+        errmsg("invalid reading of out parameter ", original_name(expn),
+                                "6.2") ;
+    elseif ST(expn).nature = "constant" and is_empty(ST(expn).signature) and
+        ST(current_scope).nature notin ["void", "record"] then
+        errmsg("premature use of deferred constant ",
+                "before its full declaration","7.4.3") ;
+    end if;
+    sem_trace_proc_exit(3, "Resolve2");
+    return expn2 ;
+    
+--S+ -RESOLVE2- 4.4 Expressions
+else            -- We have an expression
+    op_name := expn(1) ;
+    if is_overloaded(op_name) then
+        arg_list := expn(2..) ;
+        -- Find instance of operator that yields type imposed by context.
+        valid_ops :=  [ name in op_name |
+             compatible_types(context_type, ST(name).type_of)] ; 
+
+        if #valid_ops > 1 then
+          valid_ops := disambiguate(valid_ops,arg_list,context_type);
+        end if;
+ 
+        if #valid_ops > 1 then
+        -- try removing implicit conversions of universal quantities.
+            [expn, types] := remove_conversions1(typed_expression) ;
+            if #expn(1) = 1 then    -- Disambiguation succeeded.
+                valid_ops := [arb expn(1)] ;
+            end if;
+        end if;
+
+    -- Now there should be only one possibility left.
+        if #valid_ops /= 1 then
+ 
+            if cdebug2 > 2 then
+             for nam in valid_ops loop 
+                sem_trace3(3,"OVERLOADS ",nam, ST(nam)) ;
+             end loop;
+            end if;
+            type_error(op_name, context_type, #valid_ops) ;
+            sem_trace_proc_exit(3, "Resolve2");
+            return [] ;
+        else
+            op_name := valid_ops(1) ;
+            type2 := ST(op_name).type_of ;
+        end if;
+        -- Downward propagation to the arguments must be done on a case
+        -- by case basis, depending on the nature of the operator.
+ 
+        case ST(op_name).nature 
+ 
+
+        when "op" =>
+            -- For a predefined operator, the type imposed by context 
+            -- fixes the types of the arguments. The signature of a 
+            -- predefined operator contains only classes of types, and 
+            -- it ignored in this pass.
+            expn2 := complete_operator_expression(op_name, 
+                        base_type(context_type), arg_list) ;
+
+        when "procedure", "procedure_spec", "function", "function_spec" =>
+            expn2 := resolve2_subprograms(op_name, context_type, arg_list) ;
+
+        when "entry", "entry_family" => 
+            expn2 := resolve2_entries (op_name,arg_list) ;
+
+        when "literal" =>  
+            -- Resolved enumeration literals are returned as themselves.
+            expn2 := op_name ; 
+
+        end case;
+
+    else case op_name         -- Basic operation
+
+    when "int_literal" =>  
+        [expn2,type2] := resolve2_int_literal(context_type,expn);
+
+    when "real_literal" => 
+        [expn2,type2] := resolve2_real_literal(context_type,expn);
+
+    when "string_literal" =>              
+
+        [expn2,type2] := resolve2_string_literal(context_type,expn);
+
+    when "null" => 
+        [expn2,type2] := resolve2_null(context_type);
+ 
+    when "aggregate" =>
+        [expn2,type2] := resolve2_aggregates(expn,context_type,types);
+        -- In the absence of more precise checks, 
+        -- the type of the aggregate can only be 
+        -- set to the base type (see end of resolve2).
+        context_type := base_type(context_type) ;
+ 
+    when "[]" =>
+        [expn2,type2] := resolve2_arrays(expn,context_type);
+ 
+    when "[..]" =>
+        [expn2,type2] := resolve2_slices(expn,context_type);
+ 
+    when "." =>
+        [-, obj1, selector ] := expn ;
+        [expn2, type2] := 
+            complete_selected_expression(obj1, selector, context_type) ;
+
+        if expn2 = om then
+            sem_trace_proc_exit(3, "Resolve2");
+            return [] ; 
+        end if;
+
+    when "()" => 
+        [expn2,type2] := resolve2_paren(expn,context_type);
+
+    when "@" =>
+        [expn2,type2] := resolve2_dereference(expn,context_type);
+
+--S+ -RESOLVE2- 4.8 Allocators
+   
+    when "new" => 
+        [expn2, type2 ] := resolve2_allocator(expn,context_type) ;
+
+                          
+
+--S+ -RESOLVE2- 4.1.4 Attributes 
+    when "'" =>
+        [expn2, type2 ] := 
+            resolve2_attributes(expn,context_type,types) ;
+
+--S+ -RESOLVE2- 4.6 Conversions
+    
+    when "convert" => 
+        [expn2, type2 ] := resolve2_conversions(expn,context_type) ;
+    
+    when "qualify" =>  
+        [expn2, type2] := resolve2_qualify(expn, context_type) ;
+
+        
+--S+ -RESOLVE2- 4.9 Subtypes
+    when "subtype" => 
+        [expn2, type2] := resolve2_range(expn,context_type,types) ;
+        context_type := type2 ;
+
+    when "call_or_index" => 
+        expn2 := resolve2_call_or_index(expn,context_type) ;
+
+    otherwise =>            -- Other operators require no propagation
+        [expn2, type2] := [expn, arb types ];
+    end case;
+    end if;
+end if;
+
+--S+ -RESOLVE2- constant fold and note type of expression
+sem_trace(5,"The type of the expression is " + str(type2) ) ;
+
+if compatible_types(context_type, type2) then         
+    e := eval_static(expn2) ;
+    -- Annotate the expression with its known type. In the case of an
+    -- ivalue, keep the type already marked, if present.
+
+    sem_trace_proc_exit(3, "Resolve2");
+    return if is_tuple(e) and (e(1) /= "ivalue" or #e = 2)
+        then (e with context_type) else e end if;
+else
+    errmsg( "Incorrect type for expression. Expect " ,
+                full_type_name(context_type),"none") ;
+    sem_trace_proc_exit(3, "Resolve2");
+    return [] ;
+end if;
+ 
+end resolve2;
+--T+ result_types 
+procedure result_types(op_name, arg_list) ;
+ 
+-- This procedure performs the first pass of type resolution on 
+-- overloadable  constructs :  operators,  subprograms,  aggregates,  and
+-- literals.
+
+error_expression := [[], {}] ;
+
+sem_trace_proc_entry(3, "Result_Types");
+
+-- Check for previous type error.
+
+if (noop_error ? false) then 
+   return error_expression ;
+end if;
+
+ops := types := {} ;
+for opn in op_name  loop 
+
+  if ST(opn) /= om then
+
+    case ST(opn).nature 
+ 
+    when "op" =>  
+
+        [opns, valid] := valid_operator_types(opn, arg_list) ;
+
+        -- A predefined operator is usable if its resulting types appears
+        -- in a lexically open scope, or a used package.
+        usable := {t in valid | (ST(t).scope_of) in open_scopes
+                        or ST(t).scope_of in used_mods} ;
+        if usable = {} and #valid = 1 and #op_name = 1 then
+            return pass1_error("operator " + opn + " on type " +
+                              original_name(arb valid) ,
+            " is not directly visible", "6.6, 8.3, 8.4") ;
+
+        else
+            ops +:= opns ;
+            types +:= usable ;
+        end if;
+        if #op_name > 1 and #opns > 0 then
+            -- User defined functions are also present. Save all of them for
+            -- later use in disambiguation, which cannot be performed without
+            -- the type of the context. If the signatures are compatible with
+            -- the argument list, the user-defined functions and types will be
+            -- be selected. Otherwise the names remain only to check for patho-
+            -- logical cases of hiding (see b34014o).
+            -- Only user-defined functions that have the same number of formals
+            -- as the operator need to be considered.
+            ops +:= {f in  op_name | f /= opn and #ST(f).signature = #arg_list} ;
+        end if;
+
+    when "procedure", "procedure_spec", "function", 
+         "function_spec", "entry", "entry_family"  => 
+
+        typ := valid_argument_list(opn, arg_list) ;
+        if typ /= om then
+            types with:= typ ;
+            ops with:= opn ;
+        end if;
+
+    when "literal" =>
+        -- A literal may overload a function. The literal is valid only
+        -- if the argument list is empty.
+
+        if is_empty(arg_list) then
+            types with:= ST(opn).type_of ;
+            ops with:= opn ; 
+        end if;
+
+    end case;
+
+  else
+    -- If the overloaded object has no given nature, it is an infamous
+    -- use of P.'op' for a predefined operator. Resolve as any operator,
+    -- and verify that the resulting type is indeed defined inside P,
+    -- or is the predefined BOOLEAN.
+
+    desig := srbreak(opn, ".") ;
+    pack := opn(1..#opn-1) ;
+
+    [opns, valid] := valid_operator_types(desig, arg_list) ;
+
+    usable := {} ;
+    for t in valid loop 
+       if t = "BOOLEAN" then
+          -- equality or comparison operators.
+          [[-, t1],-] := arg_list ;
+          if exists t in t1 | 
+             ((ST(base_type(t)).scope_of = pack) or
+              (exists [-,t2] in declared(pack) | 
+	     compatible_types(t, t2)))
+	  then
+              usable with:= "BOOLEAN" ;
+	  end if;
+       elseif t = "universal_real" then
+	  [[-, ts1], [-, ts2]] := arg_list ;
+	  if base_type(arb ts1) /= base_type(arb ts2) then
+	     -- mixed mode operation can only be on a fixed type.
+             usable +:= {base_type(t2): [-, t2] in declared(pack) 
+		        | is_type(t2) and ST(t2).root_type = "$FIXED"} ;
+	  else
+             usable +:= {base_type(t2): [-, t2] in declared(pack) 
+			| is_type(t2) and compatible_types(t, t2) } ;
+	  end if;
+       else
+             -- All other operators are homogeneous (let's not loose sleep 
+	     -- over concatenation!) so the result type must exist in the 
+	     -- package.
+             usable +:= {base_type(t2): [-, t2] in declared(pack) 
+			| is_type(t2) and compatible_types(t, t2) } ;
+       end if;
+    end loop;
+
+    ops +:= opns ;
+    types +:= usable ;
+  end if;
+
+end loop;
+
+if types = {} 
+    and (exists arg in arg_list | "universal_fixed" in arg(2)) then
+    errmsg("Missing explicit conversion ",
+            "from universal fixed value","3.5.9, 4.5.5") ;
+    noop_error := true ;
+    -- other errors are caught at the point of call of this procedure.
+end if;
+
+sem_trace_proc_exit(3, "Result_Types");
+sem_trace(3,"with resulting types: " + str(types) ) ; 
+
+return [ [ops] + arg_list, types] ;
+end result_types;
+
+--S+ disambiguate
+procedure disambiguate(valid_ops, arg_list, context_type) ;
+
+-- Called from resolve2, when  more than one operator or function is
+-- compatible with the context type. Apart from true ambiguity, this
+-- can also happen if both a predefined and a user-defined operator are
+-- visible. This is because all predefined operators in the language have
+-- generic signatures (e.g. universal_integer rather than INTEGER) and
+-- as a result, a user-defined operator does not hide the corresponding
+-- operator (they do not have the same signature). The solution is to
+-- choose in favor of the user-defined op. If it is defined in the same
+-- package as the type, or in an open scope, and in favor of the 
+-- pre-defined one otherwise. For comparison  operators which yields the 
+-- pre-defined type BOOLEAN, the above reasoning applies to the type of its
+-- formals and not to the boolean context.
+--
+-- On the other hand, a predefined operator of (generic) type o_t may be
+-- compatible with arguments of type a_t and with the context c_t, while
+-- a_t is in fact not compatible with c_t. To catch that case, we check
+-- valid_operator_types again to verify that the result is compatible with
+-- the context.
+--
+-- A final wrinkle: if the  context is universal, as in a number declara-
+-- tion, then the predefined operator is used even if a user-defined one
+-- is in scope.
+
+if cdebug2 > 2 then
+    sem_trace_proc_entry(3, "Disambiguate");
+    sem_trace(3, "   (valid_ops, arg_list, context_type)");
+    for nam in valid_ops loop 
+        sem_trace3(3,"OVERLOADS ",nam, ST(nam)) ;
+    end loop;
+end if;
+
+if not (exists o in valid_ops | ST(o).nature = "op") then 
+   -- true ambiguity between user-defined subprograms.
+   return [v_o: v_o in valid_ops] ;
+end if;
+arg_types := [get_arg_types(arg_list(i)): i in [1..#arg_list]] ;
+
+valid_ops := [opn in valid_ops | (ST(opn).nature /= "op")
+            or compatible_operators(opn, arg_types, context_type) ] ;
+
+if context_type in univ_types then
+    valid_ops := [opn in valid_ops | ST(opn).type_of = context_type] ;
+
+elseif #(s := [ f in valid_ops | hides(f, arg_types, context_type)]) /= 0 then
+    -- user-defined operator(s) hide derived operator.
+    return [nam in s | valid_argument_list(nam, arg_list) /= om] ;
+
+elseif #valid_ops = 1 then
+    null ;		-- already unambiguous.
+else
+    -- op will have precedence over imported user-defined functions
+    valid_ops := [ nam in valid_ops | ST(nam).nature = "op"] ;
+   
+    if ST(context_type).root_type = "$FIXED" then
+      -- remove mixed floating operators, that yield universal real, but
+      -- are not compatible with a fixed type context
+      valid_ops := [nam in valid_ops |ST(nam).type_of /= "universal_real"];
+    end if;
+end if;
+
+return valid_ops;
+end disambiguate; 
+--S+ compatible_operators
+procedure compatible_operators(opn, arg_types, context_type) ;
+
+sem_trace_proc_entry(4, "Compatible_Operators");
+
+-- In most cases, binary operators are homogenenous: the type of their
+-- arguments is also the type of the result. We get the types of the
+-- arguments to perform this test:
+[types1, types2] := arg_types;
+
+-- For comparison operators, the types of the operands are known to be
+-- compatible and unrelated to the boolean result. As usual, concatenation
+-- operators receive special treatment.
+return trace_and_return(4, "Compatible_Operators",
+   
+  if opn in comparison_ops then true
+    
+  elseif opn in ["*ifl", "*ifx"] then
+       -- For these ops, the second argument yields the result type.
+       (exists t in types2 | compatible_types(t, context_type))  
+    
+  elseif opn = "&ac" then 
+       ((exists t in types1 | compatible_types(t, context_type))  
+	   and
+       (exists t in types2 | 
+                  compatible_types(t, component_type(context_type))))
+
+  elseif opn = "&ca" then
+       ((exists t in types2 | compatible_types(t, context_type))  
+	    and
+       (exists t in types1 | 
+                  compatible_types(t, component_type(context_type)))) 
+
+  elseif opn = "&cc" then
+       ((exists t in types2 | 
+                  compatible_types(t, component_type(context_type))) 
+	   and
+       (exists t in types1 | 
+                  compatible_types(t, component_type(context_type))))
+
+
+   else (exists t in types1 | compatible_types(t, context_type)) end if); 
+
+end compatible_operators;
+procedure get_arg_types(arg) ;
+if arg(1) = "choice_list" then 
+    -- named parameter association, with format: ['choice_list', name, arg]
+    [-,-, arg] := arg ;
+end if;
+return arg(2) ;
+end get_arg_types;
+procedure hides(f, arg_types, context_type);
+sig := ST(f).signature ;
+ return  ST(f).nature /= "op" and 
+    #sig = #arg_types and
+    (forall formal = sig(i) | 
+	(exists t in arg_types(i) | compatible_types(ST(formal).type_of, t))) and
+    ((ST(f).scope_of) = ST(context_type).scope_of 
+    or ST(f).scope_of in  open_scopes
+  -- maybe a comparison op. Check against scope of type of first formal.
+    or (ST(f).type_of = "BOOLEAN" 
+    and ST(f).scope_of = ST(ST(ST(f).signature(1)).type_of).scope_of));
+end hides;
+--S+ Remove Conversions
+procedure remove_conversions(typed_expression) ;
+
+-- If after the previous procedure an expression is still ambiguous, this
+-- may be due to an implicit conversion of a universal quantity. This can
+-- only  happen in the  presence of user-defined operators.  We therefore
+-- attempt to  resolve the expression  again, after removing user-defined
+-- operators from the  tree, whose  arguments are universal quantities.
+-- A full disambiguation would require that we try to remove these 
+-- selectively. Here we simply remove all of them, and give up if the 
+-- result is still ambiguous.
+
+[expn, types] := typed_expression ;
+sem_trace_proc_entry(3, "Remove_Conversions");
+sem_trace(3, "expn: "+ str(expn) ) ;
+if is_overloaded(expn(1)) then
+   -- most common case.
+   return remove_conversions1(typed_expression);
+
+elseif is_identifier(expn(1)) then    
+    -- predefined operation. Its arguments must be overloaded. 
+    -- Remove conversions from them. 
+    sem_trace(4,"The tag for the expression is " + str(expn(1)) ) ;
+    case  expn(1)  
+     when "@" =>  
+        [a_expn, a_types] := remove_conversions(expn(2)) ;
+        e_types := {ST(t).designated_type : t in a_types
+                                            | is_access(t)} ;
+        return [[ "@", [a_expn, a_types]], e_types]  ;
+
+    when "call?","operator","+", "abs" =>  
+        return remove_conversions(expn(2..)) ;
+    otherwise => 
+        -- To be continued... 
+        return expn ;
+    end case;
+
+elseif is_tuple(expn(1)) and not is_set(expn(2)) then -- Non-typed expression
+    sem_trace(4,"Non-typed expression") ;
+    op_name := expn(1);
+    if is_overloaded(op_name) then      -- it should be, but check anyway
+        valid_ops := [name : name in op_name] ;
+    else
+        valid_ops := op_name ;
+    end if;
+    arg_list := expn(2..) ;
+end if;
+
+sem_trace_proc_exit(3, "Remove_Conversions");
+end remove_conversions;
+
+--H+ Remove Conversions1
+procedure remove_conversions1(typed_expression) ;
+
+
+-- Try to resolve an ambiguous expression by removing implicit conversions
+-- from universal quantities present in the corresponding tree. Input is
+-- the set of possible overloaded entities (operators, subprograms) and the
+-- argument list. We atempt to resolve the ambiguity by removing implicit
+-- conversions from the arguments, and resolving the overloaded entities again.
+
+sem_trace_proc_entry(3, "Remove_Conversions1");
+sem_trace(3, "valid_ops: " + str(valid_ops) );
+sem_trace(3, "arg_list: " + str(arg_list) ) ;
+
+[expn, types] := typed_expression;
+valid_ops := expn(1) ;
+arg_list  := expn(2..) ;
+new_arg_list := [] ;
+for arg in arg_list loop 
+    sem_trace2(3,"arg = ", arg) ;
+    [arg_expression, arg_types] :=  arg;
+    if #arg_types < 2 then null;       -- unambiguous.
+    else
+        [arg_op, -] := arg_expression ;
+        a_list := arg_expression(2..) ;
+
+        if not is_overloaded(arg_op) then null;
+        -- Incomplete: could be an indexing on an overloaded call!
+
+        elseif original_name(arb arg_op) notin op_designators then
+        -- May be overloaded because some of its arguments are.
+            arg := remove_conversions1(arg_expression);
+
+        elseif exists [-, ts] in a_list | ts * univ_types /= {} 
+        then
+        -- Some argument is universal. Resolve as predefined operator
+            arg_op := {n in arg_op | ST(n).nature = "op"} ;
+            arg := result_types(arg_op, a_list) ;       
+        end if;
+
+    end if;
+    new_arg_list with:= arg ;
+end loop;
+
+-- Use the pruned argument list to resolve again the expression.
+if new_arg_list /= arg_list then
+    return  trace_and_return(3, "Remove_Conversions1", 
+            result_types(valid_ops, new_arg_list));
+else 
+    sem_trace_proc_exit(3, "Remove_Conversions1");
+    return typed_expression;
+end if;
+end remove_conversions1;
+
+--S+ valid_operator_types 
+procedure valid_operator_types(opn, arg_list) ;
+
+unary_sig  := ["RIGHT"];
+binary_sig := ["LEFT", "RIGHT"];
+unary_ops  := ["+", "-", "abs", "not"] ;
+
+sem_trace_proc_entry(4, "Valid_Operator_Types");
+sem_trace(4, "opn: "+ str(opn) ); 
+sem_trace(4, "arg_list: " + str(arg_list) ) ;
+
+-- This procedure is invoked during the bottom-up pass of type resolution.
+-- It determines the possible result types of predefined operators, using 
+-- the possible types of their arguments.  All arithmetic operators have 
+-- special rules that apply within literal expressions. They are all treated 
+-- in routine valid_arith_ops. For other operators, the following rule applies:
+-- Binary operators yield the intersection of the types of their two arguments,
+-- provided that they are boolean (For boolean operators), discrete (for 
+-- ordering operators) , etc.
+-- The concatenation operator provides an exception : it will concatenate an
+-- array with an object of the component type, either on the left or right.
+
+arg_list := if #arg_list = 1 then
+            order_argument_list(arg_list, unary_sig) 
+        else
+            order_argument_list(arg_list, binary_sig)
+        end if;
+if arg_list = om then 
+    sem_trace_proc_exit(4, "Valid_Operator_Types");
+    return [{}, {}] ;           -- parameter list mismatch.
+end if;
+
+if ST(opn).type_of = "numeric" then 
+    sem_trace(3,"type of " + str(opn) + " is numeric") ;
+    return  trace_and_return(4, "Valid_Operator_Types", 
+            valid_arithmetic_types(opn, arg_list));
+end if;
+
+if #arg_list = 1 then
+    [-, typ1] := arg_list(1) ;
+    possible_types := {base_type(t): t in typ1} ;
+ 
+else
+    -- Binary operator.
+    [ [-, typ1], [-, typ2]] := arg_list ;
+ 
+    if opn = "&" then 
+        return  trace_and_return(4, "Valid_Operator_Types", 
+                valid_concatenation_types(typ1, typ2)) ;
+    else
+    -- All other binary operators are homogeneous : the arguments
+    -- must have compatible types, 
+        possible_types:= {base_type(t) : t in typ1 |
+              (exists t2 in typ2 | compatible_types(t,t2) 
+                and t /= "universal_fixed")}; 
+    end if;
+end if;
+-- Remove array types with incomplete private components.
+possible_types := {t in possible_types | 
+           not is_array(t) or private_ancestor(t) = om } ;    
+ 
+case ST(opn).type_of 
+  when "BOOLEAN"  =>        -- membership operators.
+ 
+     types := case opn  
+
+         when "=", "/=" =>     -- equality operators
+           (if exists t in possible_types | not is_limited_type(t)
+                then {"BOOLEAN"} else {} end if)
+
+	 when "<", "<=", ">", ">=" =>     -- Comparison operators.
+
+            (if exists t in possible_types | 
+		  (is_scalar_type(t) 
+               or (is_array(t) and 
+		  no_dimensions(t) = 1 and
+                  is_discrete_type(component_type(t))))
+                then {"BOOLEAN"}  else {} end if)
+
+          otherwise =>   
+            (if possible_types /={} then {"BOOLEAN"} else {} end if)
+      end case;
+ 
+  when "boolean_type" =>         -- Boolean and short circuit operators.
+         types := case opn 
+
+         when "andthen", "orelse" =>  
+            { t : t in possible_types | ST(t).root_type = "BOOLEAN"}
+
+         otherwise =>
+               { t : t in possible_types | 
+		    ST(t).root_type = "BOOLEAN" or
+                    (is_array(t) and no_dimensions(t) = 1 
+                     and ST(component_type(t)).root_type = "BOOLEAN")}
+         end case;
+
+ 
+ 
+  otherwise => errmsg("system error: strange op type ", ST(opn).type_of,"none") ;
+ 
+  end case;
+    sem_trace_proc_exit(4, "Valid_Operator_Types");
+    return if types /= {} then [{opn}, types] else [{}, {}] end if;
+end valid_operator_types;
+
+--S+ valid_arithmetic_types
+procedure valid_arithmetic_types(opn, arg_list) ;
+
+-- Bottom-up pass over arithmetic expressions. return the pair:
+-- [possible operators, possible result types] .
+
+const 
+numeric_types := {"INTEGER","SHORT_INTEGER", "FLOAT","LONG_FLOAT",
+		  "$FIXED", "universal_integer","universal_real"} ,
+
+universal_types := {"universal_integer", "universal_real"} ,
+
+adding_types := { ["INTEGER", "INTEGER" ],  
+		  ["FLOAT", "FLOAT"], 
+		  ["$FIXED", "$FIXED"], 
+		  ["universal_integer", "INTEGER"],  
+		  ["SHORT_INTEGER", "SHORT_INTEGER"],
+                  ["universal_integer", "SHORT_INTEGER"],  
+		  ["universal_integer", "universal_integer"], 
+		  ["universal_real", "universal_real"], 
+		  ["universal_real", "$FIXED"], 
+		  ["universal_real", "FLOAT"],
+		  ["universal_real", "LONG_FLOAT"], 
+		  ["LONG_FLOAT", "LONG_FLOAT"]} ,
+
+mult_types   := { ["INTEGER" , "INTEGER" ], 
+		  ["FLOAT", "FLOAT"], 
+		  ["$FIXED", "$FIXED"], 
+		  ["universal_integer", "INTEGER" ], 
+		  ["SHORT_INTEGER", "SHORT_INTEGER"],
+                  ["universal_integer", "SHORT_INTEGER"], 
+		  ["universal_integer", "universal_integer"], 
+		  ["universal_real", "universal_real"], 
+		  ["universal_real", "FLOAT"], 
+		  ["universal_real", "LONG_FLOAT"],
+		  ["LONG_FLOAT", "LONG_FLOAT"] } ,
+
+mixed_mult_types := { ["$FIXED", "INTEGER"], 
+		      ["$FIXED", "universal_integer"], 
+		      ["universal_real", "universal_integer"], 
+		      ["universal_real", "INTEGER"], 
+		      ["$FIXED", "SHORT_INTEGER"],
+		      ["universal_real", "SHORT_INTEGER"]} ,
+
+mod_types :=   {["INTEGER", "INTEGER"], 
+		["universal_integer", "INTEGER"], 
+	        ["INTEGER", "universal_integer"], 
+		["universal_integer", "universal_integer"], 
+		["SHORT_INTEGER", "SHORT_INTEGER"],
+                ["universal_integer", "SHORT_INTEGER"], 
+		["SHORT_INTEGER", "universal_integer"]} ,
+
+expon_types := {["INTEGER" , "INTEGER"], 
+		["FLOAT", "INTEGER"], 
+        	["universal_real", "INTEGER"], 
+        	["universal_integer", "INTEGER"], 
+		["INTEGER" , "universal_integer"],
+        	["FLOAT", "universal_integer"], 
+        	["universal_real", "universal_integer"], 
+        	["universal_integer", "universal_integer"], 
+        	["SHORT_INTEGER", "INTEGER"],  
+        	["SHORT_INTEGER", "universal_integer"],
+        	["LONG_FLOAT", "INTEGER"], 
+        	["LONG_FLOAT", "universal_integer"] },
+
+op_suffix    := { ["INTEGER", "i"],    
+		  ["SHORT_INTEGER", "i"],  
+		  ["universal_integer", "i"],   
+		  ["FLOAT", "fl"],
+		  ["LONG_FLOAT", "fl"], 
+		  ["universal_real", "fl"], 
+		  ["$FIXED", "fx"] , 
+		  ["universal_fixed", "fx"]};
+
+sem_trace_proc_entry(3, "Valid_Arithmetic_Types");
+sem_trace(3, "opn: "+ str(opn) + " arg_list: " + str(arg_list) );
+
+if  #arg_list = 1 then          -- Unary ops return the type
+                                -- of their argument.
+    [-,possible_types] := arg_list(1) ;
+    types := {base_type(t) : t in possible_types | 
+                    ST(t).root_type in numeric_types} ;
+
+    -- Construct the unary version of the operator name.
+    if opn in {"+","-"} then 
+       opn +:= "u" ;
+    end if; 
+
+    ops := { opn + op_suffix(ST(t).root_type): t in types} ;
+    sem_trace3(3,"returning ", ops, types) ;
+    sem_trace_proc_exit(3, "Valid_Arithmetic_Types");
+    return [ ops, types] ;
+else
+    [ [-, typ1], [-, typ2]] := arg_list ;
+    
+    ops := types := {} ;
+  
+    for t1 in typ1, t2 in typ2 loop 
+
+        sfx := "" ;         -- Suffix to designate type of op.
+        r_type := om ;      -- Will indicate type found.
+
+        bt1 := ST(t1).root_type ;
+        bt2 := ST(t2).root_type ;
+        sem_trace(3,"t1=" + str(t1) + " , bt1=" + str(bt1) ) ;
+        sem_trace(3,"t2=" + str(t2) + " , bt2=" + str(bt2) ) ;
+        sem_trace(3,"opn=" + str(opn) ) ;
+
+        case opn 
+
+        when "+", "-" => 
+        
+            if [bt1, bt2] in adding_types or
+               [bt2, bt1] in adding_types then
+                    r_type := intersect_types(t1,t2) ;
+            end if; 
+
+        when "*", "/" => 
+
+            if [bt1, bt2] in mult_types or
+               [bt2, bt1] in mult_types  then
+                if "$FIXED" in {bt1,bt2} then
+                     r_type := "universal_fixed" ;
+            else 
+                    r_type := intersect_types(t1,t2) ;
+            end if;
+    
+        else    -- Mixed mode operation on fixed types, or
+                -- literal expression.
+
+        if [bt1, bt2] in mixed_mult_types then
+
+            if {bt1,bt2} = universal_types then -- Literal expr.
+                r_type := "universal_real" ;
+                sfx := "fli" ;      -- Compile-time op.
+
+            elseif base_type(t2) = "INTEGER" then
+            -- Mixed mode operation with a fixed type. If
+            -- the first argument is universal, the result is
+            -- $FIXED, i.e any fixed type.
+
+                r_type := if t1 = "universal_real" then "$FIXED" else t1 end if;
+                sfx := "fxi" ;      -- Run-time operation.
+
+            elseif bt2 = "universal_integer" then    -- Specific fixed on left
+                r_type := t1 ;
+                sfx    := "fxi" ;
+            end if;
+
+         elseif [bt2, bt1] in mixed_mult_types and opn = "*" 
+         then
+         -- Mixed modes are not commutative for division.
+
+             if {bt1, bt2} = universal_types then
+                r_type := "universal_real" ;
+                sfx := "ifl" ;
+
+             elseif base_type(t1) = "INTEGER" then
+                -- $FIXED, or the specific fixed type t2.
+                r_type := if t2 = "universal_real" then "$FIXED" else t2 end if;
+                sfx := "ifx" ;
+
+            elseif bt1 = "universal_integer" then    -- Specific fixed right
+                r_type := t2 ;
+                sfx    := "ifx" ;
+            end if;
+        end if;
+
+       end if;
+
+    when "mod", "rem" => 
+
+       if [bt1,bt2] in mod_types then
+           r_type := intersect_types(t1,t2) ;
+       end if;
+
+    when "**" => 
+        -- The result of an exponentiation has the type of the first
+        -- argument.
+    
+        if [bt1, bt2] in expon_types then
+            r_type := t1 ;
+        end if;
+
+    end case;
+
+    if r_type /= om then        -- Pair of matching types found.
+
+        -- The result type of an arithmetic operation does not carry
+        -- the constraint (if any) of the arguments. Therefore, drop
+        -- the constraint on the result if it appears as a subtype.
+
+        types with:= base_type(r_type) ;
+    
+        -- Append to the operator name a suffix that specifies the 
+        -- type of its arguments and the type returned.
+        if sfx = "" then 
+             sfx := op_suffix(ST(r_type).root_type) ; 
+        end if;
+        ops with:= opn + sfx ;
+
+        -- As a special case, if the opn is 'universal real' then
+        -- it may be either fixed or float, so we put both in ops
+        -- to be resolved later (except for exponentation which is not
+        -- defined on fixed points).
+        if ST(r_type).root_type = "universal_real" and opn /= "**" then
+                ops with:= opn + "fx" ;
+        end if;
+    end if;
+    end loop;
+
+end if;
+
+sem_trace3(3,"returning ", ops, types) ;
+sem_trace_proc_exit(3, "Valid_Arithmetic_Types");
+return [ops, types] ;
+end valid_arithmetic_types;
+
+--S+ valid_concatenation_types
+procedure valid_concatenation_types(typ1, typ2) ;
+-- Concatenation is performed by 4 distinct operators, corresponding to array-
+-- array, array-component, component-array, and component-component cases. 
+-- If either operand is an aggregate, or if both operands are components, then
+-- the candidate resulting types are a subset of the one-dimensional array types 
+-- that are in scope. 
+
+types := {} ;
+opns  := {} ;
+arrays1 := {base_type(t1): t1 in typ1  | is_array(t1) and no_dimensions(t1)=1} ;
+arrays2 := {base_type(t2): t2 in typ2  | is_array(t2) and no_dimensions(t2)=1} ;
+arrays3 := {t3 in find_aggregate_types()|is_array(t3) and no_dimensions(t3)=1} ;
+
+-- First we look for compatible arrays to concatenate.
+if "composite_type" in typ1 then 
+   types := arrays2;
+else
+   types := { t1 in arrays1 | (exists t2 in typ2 | compatible_types(t1,t2))};
+end if;
+if types /= {} then opns with:= "&";  end if;
+
+-- Next, look for aggregate or array type concatenated with compatible component.
+if "composite_type" in typ1 then
+    types1 := {t in arrays3 |  
+       (exists t2 in typ2 | compatible_types(component_type(t),t2))} ; 
+else
+     types1 := {t1 in arrays1 | 
+           (exists t2 in typ2 | compatible_types(component_type(t1),t2))} ;  
+end if;
+
+if types1 /= {} then
+   types +:= types1 ;
+   opns with:= "&ac" ;
+end if;
+
+-- The component-array case is similar.
+if "composite_type" in typ2 then
+    types2 := {t in arrays3 |  
+       (exists t1 in typ1 | compatible_types(component_type(t),t1))} ; 
+else
+    types2 := {t2 in arrays2 | 
+           (exists t1 in typ1 | compatible_types(component_type(t2),t1))} ;  
+end if;
+
+if types2 /= {} then
+   types +:= types2 ;
+   opns with:= "&ca" ;
+end if;
+
+-- Next, both arguments may be the component type of some one-dimensional 
+-- array type, as in `A` & 'B'. Note that the arguments may still be arrays,and
+-- the result type be a one-dimemnsional array of arrays. The candidate
+-- resulting types are all array types in scope whose component types are
+-- compatible with both operands. 
+
+types3 := {t in arrays3 | (exists t1 in typ1, t2 in typ2 |
+                  		compatible_types(component_type(t),t1)  
+                    		and
+                  		compatible_types(component_type(t),t2))};
+if types3 /= {} then
+   types +:= types3 ;
+   opns with:= "&cc" ;
+end if;
+
+-- Finally, if both arguments are aggregates, the result can be an array type.
+if "composite_type" in typ1  and "composite_type" in typ2 then 
+   types with:= "array_type" ;
+   opns with:= "&";
+end if;
+
+types := {t in types | not is_limited_type(t)} ;       
+return [opns, types] ;
+end valid_concatenation_types;
+--S+ intersect_types
+procedure intersect_types(t1,t2) ;
+
+-- Find the more specific of two numeric types, if they are compatible.
+-- In particular, if only one of them is universal, return the other.
+-- Called to validate arithmetic arguments and bounds of subtypes.
+-- Also used in aggregate resolution, when an aggregate is being
+-- compared with an expression of some composite type, and for the
+-- (pathological) comparison of an allocator with an access value.
+
+const universal_types := 
+   		{"universal_integer", "universal_real", "$FIXED", 
+    		 "composite_type",    "null_type"} ;
+
+sem_trace_proc_entry(4, "Intersect_Types");
+
+ret_val := 
+    if compatible_types(t1,t2) then             
+    (if    t1 in universal_types then t2
+    elseif t2 in universal_types then t1
+    elseif is_allocator_type(t1) then t2
+    else t1 end if)
+    else om
+    end if;
+
+sem_trace_proc_exit(4, "Intersect_Types");
+return ret_val;
+end intersect_types;
+--S+ valid_argument_list 
+procedure valid_argument_list(proc_name, arg_list) ;
+
+-- First pass resolution over subprogram calls. If the argument list is
+-- compatible with the parameter profile, return the type of the sub-
+-- program. Otherwise return om.
+
+sem_trace_proc_entry(4, "Valid_Argument_List");
+
+formals := ST(proc_name).signature ;
+
+arg_list := order_argument_list(arg_list, formals) ; -- Normalize arguments
+
+if arg_list = om then             -- wrong number of actuals, or error.
+    sem_trace_proc_exit(4, "Valid_Argument_List");
+    return om ; 
+else null;
+end if;
+
+-- Traverse signature and actuals, and verify that types match.
+
+for f = formals(i) loop  
+    actual := arg_list(i) ;
+    if actual = [] then continue;   -- Default value exists.
+    else [-, a_types] := actual ;
+    end if;
+    if exists t in a_types | compatible_types(t, ST(f).type_of) then 
+        continue;              -- argument is valid
+    else
+        sem_trace_proc_exit(4, "Valid_Argument_List");
+        return om ;             -- type mismatch.
+    end if;
+end loop;
+-- On exit from the loop, all arguments have a match.
+ sem_trace_proc_exit(4, "Valid_Argument_List");
+return ST(proc_name).type_of ;
+
+end valid_argument_list;
+
+--S+ complete_argument_list
+procedure complete_argument_list(formals, arg_list) ;
+
+-- Second pass over argument list. Complete resolution of each argument,
+-- and apply required constraints on actuals.
+
+sem_trace_proc_entry(3, "Complete_Argument_List");
+
+arg_list := order_argument_list(arg_list, formals) ;   -- Normalize arguments.
+complete_args := [] ;
+
+-- Complete type resolution of each actual, and insert default expression
+-- for those that are missing; default expressions are known to exist.
+
+for f = formals(i) loop 
+    [f_mode, f_type, default, -, -] := ST(f) ;
+    actual := arg_list(i) ;
+
+    if actual = [] then              
+	-- Use default expression which has already been resolved.
+        arg := default ;
+        a_type := expression_type(default) ;
+    else
+        [arg, a_type] := bind_arguments(actual, f_type, f_mode, i);
+    end if;
+    -- The actual is labelled with its actual type and the formal, in
+    -- order to indicate the constraint checks that must be applied to it.
+    -- If the actual is a conversion, no additional labelling is needed.
+
+    if f_mode = "in" then
+        arg := eval_static(arg) ;
+	if is_scalar_type(f_type) then
+    	   -- Convert from universal value if need be.
+    	   arg := specialize(arg, f_type) ;
+        end if;
+        arg := ["bind", a_type, f_type, arg] ;
+
+    elseif not is_tuple(arg) or arg(1) /= "convert" then
+	arg := ["bind", a_type, f_type, arg] ;
+    end if;
+    complete_args with:= arg ;
+end loop;
+sem_trace_proc_exit(3, "Complete_Argument_List");
+return complete_args ;
+end complete_argument_list;
+ 
+--S+ order_argument_list
+procedure order_argument_list(arg_list, sig) ;
+
+-- Normalize an argument list (possibly containing named associations)
+-- according to the signature -sig-. Called for subprogram and operators.
+
+sem_trace_proc_entry(3, "Order_Argument_List");
+sem_trace2(4, "arg_list=", arg_list);
+sem_trace2(4, "sig=", sig);
+
+if exists actual = arg_list(i) | actual(1) = "choice_list" then
+    first_named := i ;
+    if exists actual in arg_list(i+1..) | actual(1) /= "choice_list"
+    then
+        errmsg("No positional arguments can appear after named ones",   
+                    "","6.4") ;
+        return om ;
+    end if;
+else
+    first_named := #arg_list + 1 ;      -- i.e. all positional
+end if;
+
+new_list := arg_list(1..first_named-1) ;    -- In their proper place.
+named_args := arg_list(first_named..) ;
+actuals_seen := first_named-1;          -- Seen so far.
+
+for [-,choice_list,-] in named_args loop 
+    if #choice_list > 1 or choice_list(1)(1) /= "simple_choice" then
+        errmsg("Invalid format for argument association","","6.4") ;
+        return om  ;
+    end if;
+end loop;
+
+for i in [first_named..#sig] loop 
+    f_name := sig(i) ;
+    if exists
+    [-, [[choice_kind, [a_name,-]]], a_expr] in named_args 
+                | original_name(f_name) = a_name
+    then
+        new_list with:= a_expr ;
+        actuals_seen +:= 1;
+        check_void(a_name) ;                
+
+    elseif ST(f_name).default_expr /= [] then
+        new_list with:= [] ;        -- marker to indicate default
+    else                -- Name is not present
+        return om ;
+    end if;
+end loop;
+
+sem_trace_proc_exit(3, "Order_Argument_List");
+if actuals_seen = #arg_list         -- all actuals processed.
+  and #new_list = #sig then     -- all formals matched.
+    return new_list;
+else return om;
+end if;
+
+end order_argument_list;
+ 
+--S+ complete_operator_expression 
+procedure complete_operator_expression(op_name, ctx_type, arg_list) ;
+
+-- Complete the top-down pass of an expression with a predefined 
+-- operator. 
+-- For predefined operators, the signature of the operator does not
+-- fix the type of the arguments, because it only specifies a class
+-- of types. The precise type to be used is either imposed by context
+-- (this is the argument ctx_type) or is found by requiring consistency
+-- between the possible types of the arguments themselves.
+
+sem_trace_proc_entry(4, "Complete_Operator_Expression");
+sem_trace2(4,  op_name, ST(op_name).type_of);
+sem_trace2(4,  ctx_type, arg_list) ;
+
+unary_sig  := ["RIGHT"] ;
+binary_sig := ["LEFT", "RIGHT"] ;
+
+if #arg_list = 3 then       -- This is a special case for the fixed-
+                -- point multiplication or division. Here
+                -- we need the result type. The types of the
+                -- operands are added later is this procedure.
+    result_type frome arg_list ;
+end if;
+
+if #arg_list = 2 then       -- Binary operators.
+
+   arg_list := order_argument_list(arg_list, binary_sig) ;
+
+   [arg1, arg2] := arg_list ;
+   t_left := arg1(2) ;          -- possible types of arg1.
+   t_right:= arg2(2) ;
+
+   case ST(op_name).type_of 
+
+    when "universal_integer", "universal_real", "universal_fixed", "$FIXED" =>
+
+        ctx_root := ST(ctx_type).root_type ;
+
+        case op_name 
+
+        when "*fxi", "*ifx", "/fxi","**i", "**fl" => 
+            -- For mixed mode fixed operations and  exponentiation,
+            -- the  type  from  context  is imposed  on  the  first
+            -- argument. The second one must be INTEGER.
+
+        if op_name = "*ifx" then            -- permute arguments.
+            [arg1, arg2] := [arg2, arg1] ;
+            t_right := t_left ;
+            op_name := "*fxi" ;
+        end if;
+
+        if op_name = "**fl" and ctx_root = "$FIXED" then
+             -- universal expression in fixed context: no ** .
+             type_error({"**"}, om, 0) ;
+             sem_trace_proc_exit(4, "Complete_Operator_Expression");
+             return [] ;
+        end if;
+
+        e1 := resolve2(arg1, ctx_type);
+        e2 := resolve2(arg2, "INTEGER") ;       
+
+        when "*fli", "*ifl", "/fli" => 
+
+        -- These mixed mode operations appear in number declara-
+        -- tions, in which case they are universal, or in a fixed
+        -- type context.
+
+        if op_name = "*ifl" then      -- permute arguments.
+            [arg1, arg2] := [arg2, arg1] ;
+            t_right := t_left ;
+            op_name := "*fli" ;
+        end if;
+
+        if ctx_root = "universal_real" then
+            t2 := "universal_integer" ;
+
+        elseif ctx_root = "$FIXED" then
+            -- universal expression in fixed context.
+            t2 := "INTEGER" ;
+            -- In this case change the float operations to fixed
+            if op_name = "*ifl" then 
+               op_name := "*ifx" ;
+            elseif op_name = "*fli" then 
+               op_name := "*fxi" ;
+            elseif op_name = "/fli" then 
+               op_name := "/fxi" ;
+            end if;
+
+        else
+            errmsg("Invalid context ",
+                "for mixed mode operation","4.5.5, 4.10") ;
+            sem_trace_proc_exit(4, "Complete_Operator_Expression");
+            return [] ;
+        end if;
+            
+        e1 := resolve2(arg1, ctx_type);
+        e2 := resolve2(arg2, t2) ;
+        when "*fl", "/fl" => 
+
+        -- These floating point operation may appear in some
+        -- fixed type context if their constituents are
+        -- literals. This is an error because the operation
+        -- yields in fact a universal_fixed quantity that
+        -- should be converted.
+    sem_trace(5,"resolve2 the first argument") ;
+        e1 := resolve2(arg1, ctx_type) ;
+    sem_trace(5,"resolve2 the second argument") ;
+        e2 := resolve2(arg2, ctx_type) ;
+
+        if ctx_root = "$FIXED" then
+            e := universal_expression([op_name, e1, e2]) ;
+            if ctx_type /= "universal_fixed" and
+           result_type = om then
+            -- Some specific fixed type: the conversion
+            -- from universal fixed was missing.
+                errmsg("Missing explicit conversion from",
+                " universal_fixed value ","4.5.5") ;
+            sem_trace_proc_exit(4, "Complete_Operator_Expression");
+            return [] ;
+            else
+            -- The presence of the generic type $FIXED
+            -- indicates that a conversion was present.
+            return e;
+            end if;
+        end if;
+	when "*fx", "/fx" => 
+	  -- These fixed point operations can only appear in the
+          -- context of an explicit conversion. Resolve each argument
+          -- according to its own fixed type.
+          assert exists t_l in t_left  | ST(t_l).root_type = "$FIXED" ;
+          assert exists t_r in t_right | ST(t_r).root_type = "$FIXED" ;
+          e1 := resolve2(arg1, t_l);
+          e2 := resolve2(arg2, t_r);
+          -- we should check that t_l and t_r are unique.
+          sem_trace_proc_exit(4, "Complete_Operator_Expression");
+          return [op_name, e1, e2, t_l, t_r, result_type] ;
+
+        otherwise =>        
+          -- For other  arithmetic  operators, propagate  context
+          -- type to arguments. 
+ 
+          e1 := resolve2(arg1, ctx_type) ;
+          e2 := resolve2(arg2, ctx_type) ;
+        end case;
+
+        -- If the context is universal, evaluate the corresponding
+        -- literal expression.
+   
+        if ctx_type in univ_types or 
+          (ctx_root = "$FIXED" and is_value(e1) and is_value(e2))   
+            then
+            return trace_and_return(4, "Complete_Operator_Expression", 
+                   universal_expression([op_name, e1,e2])) ;
+        else      
+            sem_trace_proc_exit(4, "Complete_Operator_Expression");
+            return [op_name, e1, e2] ;
+        end if;
+
+    when "discrete_type", "BOOLEAN" =>
+
+        -- Equality, set or comparison  operators. Verify that  there  is
+        -- only one possible type choice for both arguments. If both arg.
+        -- are universal, we must choose a universal interpretation for
+        -- each. Otherwise, the non-universal type is applied to both.
+        ok_types := {base_type(i) : t1 in t_left, t2 in t_right |
+                      (i := intersect_types(t1,t2)) /= om} ;
+        if # ok_types =  1 then
+            t1 := t2 := arb ok_types ;
+        elseif #(univ := ok_types * univ_types) = 1 then
+            t1 := t2 := arb univ ;
+        else
+            type_error({op_name}, tf, #ok_types) ;
+            sem_trace_proc_exit(4, "Complete_Operator_Expression");
+            return [] ;
+        end if;
+
+        if op_name notin ["in", "notin"] then
+            if is_limited_type(t1) then
+                errmsg(op_name,"  not available on a limited type",
+                        "7.4.2");
+                sem_trace_proc_exit(4, "Complete_Operator_Expression");
+                return [] ;
+            end if;
+
+            -- Now resolve each operand independently.
+  
+            e1 := resolve2(arg1, t1) ;
+            e2 := resolve2(arg2, t2) ;
+        else
+        -- For memberships, the second argument  may be a type mark
+        -- for which an anonymous type was created. The test itself
+        -- carries the subtype expression of this type.
+
+            e1 := resolve2(arg1, t1) ;
+            if not is_identifier(name2 := arg2(1))
+            then 
+                e2 := resolve2(arg2, t2) ;
+            else
+                e2 := subtype_expression(name2) ;
+            end if;
+
+        -- The membership tests are not static, but their arguments 
+        -- may be universal. Convert them to non-universal form for
+        -- run-time evaluation.
+        if t2 = "universal_integer" then
+            e1 := specialize(e1, "INTEGER") ;
+        elseif t2 = "universal_real" then
+            e1 := specialize(e1, "LONG_FLOAT") ;
+        end if;
+            
+        end if;
+
+    -- Comparison operators on  literal expressions are evaluated
+    -- separately,  because both their arguments are universal.
+
+        if op_name in comparison_ops and t1 = t2
+             and t1 in  univ_types then
+            return  trace_and_return(4, "Complete_Operator_Expression", 
+                    universal_expression([op_name, e1, e2])) ;
+        end if;
+
+    when "array_type" =>          -- Concatenation operators.
+        case op_name 
+           when "&" => 
+               e1 := resolve2(arg1, ctx_type) ;
+               e2 := resolve2(arg2, ctx_type) ;
+            
+           when "&ac" => 
+               e1 := resolve2(arg1, ctx_type) ;
+               e2 := eval_static(resolve2(arg2, component_type(ctx_type))) ;
+
+	   when "&ca" => 
+               e1 := eval_static(resolve2(arg1, component_type(ctx_type))) ;
+               e2 := resolve2(arg2, ctx_type) ;
+
+	   when "&cc" => 
+               e1 := eval_static(resolve2(arg1, component_type(ctx_type))) ;
+               e2 := eval_static(resolve2(arg2, component_type(ctx_type))) ;
+        end case;
+
+        e := [op_name, e1, e2] ;
+        -- CONSTRAINT_ERROR must be raised if the upper bound of the
+        -- result exceeds the range of the index subtype. This can
+        -- happen if the index subtype has a constraint. 
+            if ST(index_type(ctx_type)).nature = "subtype" then
+                e := ["qual_sub", index_types(ctx_type), e] ;
+            end if;
+        sem_trace_proc_exit(4, "Complete_Operator_Expression");
+        return e ;
+    otherwise =>
+    -- Other binary operators.
+        e1 := resolve2(arg1, ctx_type) ;
+        e2 := resolve2(arg2, ctx_type) ;
+ 
+    end case;
+
+    sem_trace_proc_exit(4, "Complete_Operator_Expression");
+    return [op_name, e1, e2] ;
+else
+
+    arg_list := order_argument_list(arg_list, unary_sig) ;
+
+    -- Unary operator. Type is always imposed by context.
+    arg1 := arg_list(1) ;
+    e1 := [op_name, resolve2(arg1, ctx_type)] ; 
+    if ctx_type in univ_types then
+        ret_val := universal_expression(e1) ;
+        sem_trace_proc_exit(4, "Complete_Operator_Expression");
+        return ret_val;
+    else
+        sem_trace_proc_exit(4, "Complete_Operator_Expression");
+        return e1 ;
+    end if;
+
+end if;
+end complete_operator_expression;
+
+--S+ specialize
+procedure specialize(u_expr, context_type) ;
+
+sem_trace_proc_entry(4, "Specialize");
+sem_trace(4,"u_expr :"+ str(u_expr) );
+sem_trace(4,"context_type :"+ str(context_type) );
+
+-- Convert a universal numeric into a specific one, if the context 
+-- imposes a non-universal numeric type.
+
+if not is_numeric_type(context_type)  or not is_value(u_expr) then
+    sem_trace_proc_exit(4, "Specialize");
+    return u_expr; 
+end if;
+
+if is_generic_type(context_type) 
+  and ST(context_type).root_type in ["FLOAT", "LONG_FLOAT","$FIXED"] then 
+    -- The expression will be evaluated with the most accurate floating type
+    -- and will have to be converted explicitly to the instance type.
+    [-, v] := u_expr ;
+    v:= check_overflow(float_fra(v, long_float_digits ));
+    sem_trace_proc_exit(4, "Specialize");
+    return ["convert", "LONG_FLOAT", context_type, v, context_type]; 
+end if;
+
+[-,v, t] := u_expr ;
+if context_type notin univ_types then
+    if is_universal_integer(v) then
+        v := stl_int_toi(v) ;       
+    elseif is_universal_real(v) 
+    then 
+        if ST(context_type).root_type in ["FLOAT","LONG_FLOAT"]  
+        then
+            v := float_fra(v, type_precision(context_type)) ;
+        elseif ST(context_type).root_type = "$FIXED"  
+        then 
+            v := fix_fra(v, type_precision(context_type)) ;
+        end if;
+    end if;
+end if;
+
+sem_trace_proc_exit(4, "Specialize");
+return 
+if v = "OVERFLOW" then constraint_error()
+    else ["ivalue", v, base_type(context_type)] 
+end if;
+
+end specialize;
+--S+ universal_expression
+procedure universal_expression(expn) ;
+
+-- Use the arbitrary precision arithmetic package to evaluate an arith-
+-- metic expression whose arguments are universal. This routine is called
+-- in contexts that require a universal value, i.e. constant definitions.
+-- If the constituents are not universal, the expression is returned as
+-- is.
+-- Several attributes deliver a universal value, but are nevertheless
+-- non-static. If these attributes are companion operands of a static
+-- expression, then the later must be converted to non-universal form.
+
+sem_trace_proc_entry(3, "Universal_Expression");
+sem_trace(4, "expn: "+ str(expn) );
+
+if #expn = 3 then       -- binary operation.
+    [op_name, e1, e2 ] := expn ;
+    if is_value(e1) then
+        op1 := e1(2) ;
+    if is_value(e2) then            
+        op2 := e2(2) ;
+
+sem_trace(3,"unpacked expression gives: op_name " + str(op_name) );
+sem_trace(3, " e1=" + str(e1) );
+sem_trace(3, " e2=" + str(e2) );
+
+        -- In the case of mixed mode operations on fixed types, the
+        -- second argument is already folded to INTEGER. If a static
+        -- evaluation is possible, make it into a universal object
+        -- again.
+        --$ if is_integer(op2) and 
+        --$ (is_universal_real(op1) or op_name = '**i') 
+        --$ then
+        --$  op2 := int_fri(op2) ;
+        --$ else null;
+        --$ end if ;
+    else                    
+        -- a non-static universal expression can only be an attribute.
+	-- The other operand must be converted to some run-time type. If
+        -- the operands are real, they are converted to the most precise
+        -- floating type available; otherwise they are integers.
+	
+        to_type := if is_integer(e1) then "INTEGER" 
+				     else "LONG_FLOAT" end if;
+        e1 := specialize(e1, to_type) ;
+        return [op_name, e1, e2] ;
+    end if;
+
+    else                    -- op1 is attribute expr.
+        if is_value(e2) then
+            to_type := if is_integer(e2) then "INTEGER" 
+					 else "LONG_FLOAT" end if;
+            e2 := specialize(e2, to_type) ;
+            return [op_name, e1, e2] ;
+        else                    -- They both are.
+            return expn ;
+        end if;
+    end if;
+
+else
+    [op_name, e1 ] := expn ;
+    if not is_value(e1) then 
+        return expn ; 
+    else
+        op1 := e1(2) ;
+    end if;
+end if;
+ 
+is_int := is_universal_integer(op1) ;
+if     ((not is_int) and (not is_universal_real(op1)))
+     or 
+       (#expn = 3 and 
+       (not is_universal_integer(op2)) and 
+       (not is_universal_real(op2)))
+then
+    return expn ;
+end if;
+
+case op_name 
+
+    when "+i" =>           ivalue := (op1 + op2);
+
+    when "+fl", "+fx" =>   ivalue := rat_add(op1, op2);
+
+    when "-i" =>     	   ivalue := (op1 - op2);
+
+    when "-fl", "-fx" =>   ivalue := rat_sub(op1, op2);
+
+    when "*i" =>     	   ivalue := (op1 * op2);
+
+    when "*fl", "*fx" =>   ivalue := rat_mul(op1, op2);
+
+    when "*fli", "*fxi" => ivalue := rat_red((op1(1) * op2), op1(2));
+
+    when "/fxi", "/fli" => if op2 = 0 then 
+        		      return constraint_error(); 
+			   else
+              		      ivalue := rat_red(op1(1), (op1(2) * op2));
+			   end if;
+
+    when "/i" =>           if op2 = 0 then   
+			     return constraint_error();
+           		   else 
+			     ivalue := (op1 / op2);
+       			   end if;
+
+    when "/fl", "/fx" =>   if (ivalue := rat_div(op1, op2)) = om then
+            		       return constraint_error(); 
+			   end if;
+
+    when "remi" =>         if op2 = 0 then 
+			      return constraint_error();
+           		   else
+              	  	      ivalue := (op1 - (op1 / op2) * op2);
+           		   end if;
+    
+    when "modi" =>       if op2 = 0 then
+			    return constraint_error();
+           		  else
+			     m := op1 - ((op1 / op2) * op2);
+            		     if (sign(m) * sign(op2)) = -1 then 
+				m +:= op2;
+                	     end if;
+			     ivalue := m;
+			 end if;
+
+    when "**i" =>        if (op2 < 0) then
+            		    return constraint_error(); 
+           		 else
+                	    ivalue := (op1 ** op2);
+           		 end if;
+
+    when "**fl" =>       ivalue := rat_exp(op1, op2);
+
+    when "="    =>       ivalue := ada_bool(if is_int then (op1 = op2) 
+                                            else rat_eql(op1, op2) end if);
+
+    when "/="   =>       ivalue := ada_bool(if is_int then (op1 /= op2) 
+                                            else rat_neq(op1, op2) end if);
+
+    when ">"	=>       ivalue := ada_bool(if is_int then (op1 > op2) 
+                      			    else rat_gtr(op1, op2) end if);
+
+    when "<"	=>       ivalue := ada_bool(if is_int then (op1 < op2)
+					    else rat_lss(op1, op2) end if);
+
+    when ">="    =>      ivalue := ada_bool(if is_int then (op1 >= op2)
+                      			    else rat_geq(op1, op2) end if);
+
+    when "<="	 =>      ivalue := ada_bool(if is_int then (op1 <= op2)
+					    else rat_leq(op1, op2) end if);
+    
+    when "+ui","+ufl", "+ufx" =>   ivalue := op1;
+
+    when "-ui" =>                  ivalue := -(op1);
+
+    when "-ufl", "-ufx" =>  	   ivalue := rat_umin(op1);
+
+    when "absi" =>                 ivalue := abs(op1);
+
+    when "absfl", "absfx" =>  	   ivalue := rat_abs(op1);
+
+    otherwise =>
+        		return eval_static(expn);
+    end  case;
+
+sem_trace_proc_exit(3, "Universal_Expression");
+return ["ivalue", ivalue] ;
+
+   procedure ada_bool(x) ;
+      if x then 
+         return 1;
+      else 
+         return 0;
+      end if;
+   end ada_bool;
+
+end universal_expression;
+
+--S+ bind_arguments 
+procedure bind_arguments(actual, f_type, f_mode, i) ;
+
+sem_trace_proc_entry(3, "Bind_Arguments");
+
+[-, a_types] := actual ;        -- Get possible types of actual.
+
+-- One of its possible types must be compatible with the formal.
+assert exists a_type in a_types 
+                | compatible_types(f_type,a_type) ; 
+
+-- An out parameter may appear as the actual for another out parameter.
+out_c := out_context ;
+out_context := (f_mode = "out") ;
+
+-- If the actual is an aggregate, there is no sliding for it, and named
+-- associations can appear with "others" (cf. 4.3.2(6))
+
+may_others := full_others ;
+full_others := true ;
+
+arg := resolve2(actual, f_type)  ;
+
+out_context := out_c ;              
+full_others := may_others ; 
+
+-- Remove constraint checks  on  in out or out actuals. We use the operator
+-- 'bind' to indicate that checks will have to be performed on return from
+-- the subprogram. 
+
+if f_mode /= "in" and is_tuple(arg) and arg(1) in qualifiers then 
+    arg := arg(3); 
+end if;
+
+if f_mode /= "in" and not is_variable(arg) then
+    errmsg(f_mode + " actual parameter no." + str(i) , 
+            " in call is not a variable", "6.4.1") ;
+end if;
+
+if is_tuple(arg) and arg(1) = "convert" then 
+   [-, -, to_type, -] := arg ;
+   if to_type /= f_type  and f_mode /= "in" then
+	errmsg("type mark in actual that is a conversion ", 
+	    "must conform to type of formal parameter", "6.4.1(3)" ) ;
+   end if;
+end if;
+sem_trace_proc_exit(3, "Bind_Arguments");
+return [arg, a_type] ;
+end bind_arguments;
+
+--S+ valid_array_expression 
+procedure valid_array_expression(a_expression, i_list) ;
+sem_trace_proc_entry(3, "Valid_Array_Expression");
+sem_trace(4,"a_expression: "+ str(a_expression) ); 
+sem_trace(4,"i_list: " + str(i_list) );
+
+-- Called to validate indexing and slicing operations. The array name may
+-- be overloaded, and may be an access to an array type. 
+ 
+[arrays, array_types] := resolve1(a_expression) ;
+-- In the case of a slice, the index list may contain a type name.
+index_list := [ (if is_identifier(i) then [i, {ST(i).type_of}] 
+                                     else resolve1(i) end if)
+                                                : i in i_list] ;
+
+-- Now select those array types that are compatible with the given indices.
+comp_types := {} ;          -- For component types of array.
+for a_t in array_types loop 
+    t := a_t ;
+    if is_access(t) then 
+        if is_fully_private(t) then             
+    -- Cannot dereference an access to fully private type.
+            if #array_types = 1 then 
+               sem_trace(3,"Premature access 5");
+               sem_trace(3, str(ST(o_t).overloads) );
+               sem_trace_proc_exit(3, "Valid_Array_Expression"); 
+               return premature_access(t);
+            else continue;
+            end if;
+        else
+            t := ST(t).designated_type ; 
+        end if;
+    end if;
+    if not is_array(t) or no_dimensions(t) /= #index_list then
+        array_types less:= a_t ;
+        continue;
+    end if;
+    
+    -- Now verify all indices in turn.
+    continue_outer_loop := false;
+    for  [-, i_types] = index_list(i) loop 
+        if not (exists i_t in i_types | 
+              compatible_types(i_t, index_types(t)(i))) then   
+           array_types less:= a_t ;        -- Not a candidate.
+           -- Examine remaining candidates.
+	   continue_outer_loop := true;
+	   exit;
+        end if;
+    end loop;
+    if continue_outer_loop then
+       continue;
+    end if;
+
+    -- Indices match, so the resulting type is the component type.
+    comp_types with:= component_type(t) ;
+end loop;
+sem_trace_proc_exit(3, "Valid_Array_Expression");
+return if comp_types = {} then [[],{}] 
+else
+    [ ["[]", [arrays, array_types], index_list], comp_types] 
+end if;
+end valid_array_expression;
+
+--S+ complete_array_expression 
+procedure complete_array_expression(a_expression, i_num, c_type) ;
+sem_trace_proc_entry(3, "Complete_Array_Expression");
+sem_trace(3,"a_expression: "+ str(a_expression) );
+sem_trace(3,"i_num:"+ str(i_num) );
+sem_trace(3,"c_type: "+ str(c_type) );
+
+-- Called to complete the validation of an index or slice expression.
+-- i_num is the number of indices in the expression.
+-- For a slice, the i_num is zero, and the context type is the
+-- required type of the array. For an indexing expression, the context
+-- type is the component type of the array.
+-- The array expression may yield an access type, in which case a derefe-
+-- rence operation is emitted now. 
+
+[arrays, array_types] := a_expression ;
+array_type := om ;
+
+-- Iterate over array types to find unique one satisfying context.
+
+for a_t in array_types loop 
+    t := if is_access(a_t) then ST(a_t).designated_type else a_t end if;    
+    c := if i_num = 0 then t else component_type(t) end if;
+
+    if compatible_types(c_type, c) then             
+        if array_type = om then     -- One match found.
+            array_type := t ;
+            access_type := a_t ;    -- Maybe an access.
+        else
+            -- If it is ambiguous, then it must an overloaded function
+            -- that return (an access to) an array.
+            array_type := "any" ;
+        end if;
+    end if;
+
+end loop;
+if array_type = "any" then
+    -- Since a conversion can only occur in the presence of a
+    -- user-defined operator, and all arrays are user defined, 
+    -- the best that we can do is to remove the conversions from 
+    -- the indices of the array.
+    a_expression := remove_conversions(a_expression) ;  -- last chance.
+    [-,array_types] := a_expression ;
+    if #array_types = 1 then
+        access_type := array_type := arb array_types;
+        if is_access(array_type) then
+            array_type := ST(access_type).designated_type ;
+        end if;
+    else -- still ambiguous
+            type_error({"indexing"}, c_type, 0) ;
+            return [] ;
+    end if;
+elseif array_type = om then
+     type_error({"indexing"}, c_type, 0) ;
+     return [] ;
+end if;
+
+if array_type /= access_type then              -- Insert dereference.
+    out_c := out_context ;                      
+    out_context := false ;             -- cannot be out parameter
+    array := ["@", resolve2(a_expression, access_type), array_type] ;
+    out_context := out_c ;
+else 
+    array := resolve2(a_expression, array_type) ;
+end if;
+
+sem_trace_proc_exit(3, "Complete_Array_Expression");
+return [array, array_type] ;
+end complete_array_expression;
+
+--S+ valid_selected_expression
+procedure valid_selected_expression(expn) ;
+sem_trace_proc_entry(3, "Valid_Selected_Expression");
+sem_trace(3, "expn: "+ str(expn) );
+-- Use the name of the selector to determine the possible types of prefix,
+-- which may be a function returning (an access to) a record or task type
+-- The possible types of the expression are those of the selected comps.
+[-, pref, selector] := expn ;
+
+prefix1 := resolve1(pref) ;
+types1 := prefix1(2) ;
+component_types := {} ;
+prefix_types := {} ;
+
+for o_t in types1 loop 
+    t := o_t ;
+    if is_access(o_t) then 
+       t := ST(o_t).designated_type ; 
+    end if;
+    if is_record(t) then  
+       -- The possible types of the prefix must include a declaration for
+       -- the selector. 
+       decls := ST(base_type(t)).signature.declared_components ;
+
+    elseif is_task_type(t) then  decls := declared(t) ;
+
+    else  continue;
+    end if;
+
+    if (comp := decls(selector)) /= om then
+        if is_access(o_t) and is_fully_private(o_t) 
+        and ST(comp).nature /= "discriminant" then  -- Can't dereference.
+            if #types1 = 1 then
+               sem_trace2(3,"Premature access 1",ST(o_t).overloads);
+               return premature_access(o_t) ;
+            else continue;
+            end if;
+         else
+               component_types with:= ST(comp).type_of ;
+               prefix_types with:= o_t ;
+         end if;
+
+    end if;
+end loop;
+
+sem_trace_proc_exit(3, "Valid_Selected_Expression");
+
+if component_types = {} then
+    return pass1_error("invalid selector name: ", selector, "4.1.3") ;
+else
+    prefix1(2) := prefix_types ;
+    return [ [".", prefix1, selector], component_types] ;
+end if;
+
+end valid_selected_expression;
+--S+ complete_selected_expression
+procedure complete_selected_expression(prefix1, selector, c_type) ;
+sem_trace_proc_entry(3, "Complete_Selected_Expression");
+sem_trace(3, "prefix1: " + str(prefix1) );
+sem_trace(3, "selector: " + str(selector) );
+sem_trace(3, "c_type: " + str(c_type) ) ;
+
+-- Complete the resolution of a selected component expression, by 
+-- choosing the one that yields the context_type. If the type of the
+-- object selected from is an access type, emit a dereference.  
+
+[expn, types1] := prefix1 ;
+comp_t := om ;
+
+for o_t in types1 loop 
+
+    t := if is_access(o_t) then ST(o_t).designated_type else o_t end if;
+
+    if is_record(t) then 
+        decls := ST(base_type(t)).signature.declared_components ;
+    elseif is_task_type(t) then
+        decls := declared(t) ;
+    end if;
+
+    c := decls(selector);
+    if  compatible_types(ST(c).type_of, c_type) then        
+        comp := c ;
+        if comp_t = om then
+            comp_t   := ST(comp).type_of ;     -- Found a match
+            prefix_t := o_t ;
+        else                                -- Ambiguous call to some 
+            prefix_t := "any" ;             -- overloaded function.
+        end if;                            
+    end if;
+
+end loop;
+
+if prefix_t = "any" then           
+    -- This may be a genuine ambiguity, or it may be due to the presence
+    -- of implicit conversions from universal types.
+    sem_trace(3,"At this point we should remove the conversions from" 
+                     + str(expn) );
+    [expn, types1] := remove_conversions1(prefix1); -- last hope.
+    sem_trace(4,"conversions removed") ;
+    sem_trace(4,"expn is"+ str(expn) );
+    sem_trace(4,"types "+ str(types) ) ;
+    if #types1 /= 1 then
+        type_error({"selection"}, om, 0) ;
+        return [] ;
+    else
+            prefix_t := arb types1;
+            -- The selector name must have been overloaded. Retrieve the
+            -- right one now.
+            decls := ST(base_type(prefix_t)).signature.declared_components ;
+            comp := decls(selector) ;	
+    end if;
+end if;
+if comp_t = om then
+    type_error({"selection"}, om, 0 ) ;
+    return [] ;
+else
+    out_c := out_context ;
+    -- This is a valid context for the use of an out parameter, if 
+    -- it is an assigment to a component of it, or if it is a reading
+    -- of a discriminant, and in any case if the type is not an access.
+    
+    out_context := (out_c or ST(comp).nature = "discriminant" ) 
+                        and not is_access(prefix_t) ;
+
+    pref := resolve2(prefix1, prefix_t) ;
+    out_context := out_c ;
+
+    if is_access(prefix_t) then 
+        pref := ["@", pref, ST(prefix_t).designated_type] ; 
+    end if;
+    sem_trace_proc_exit(3, "Complete_Selected_Expression");
+    return [[".", pref, comp], comp_t] ;
+end if;
+
+end complete_selected_expression;
+--S+ is_component
+procedure is_component(expn) ;
+
+-- Used to validate uses of the attributes FIRST_BIT, LAST_BIT and POSITION.
+-- A prefix denotes a component if it is has the syntax of  a selected component,
+-- or it is a name that renames such a component. However, the syntax
+-- given in  13.7.2. indicates that the prefix of these attributes cannot be
+-- a simple name. B85007c checks that a renamed component is not a valid prefix 
+-- for these attributes.
+return 
+    is_tuple(expn) and expn(1) = "." and is_record(ST(expn(3)).scope_of) ;
+--$  or  is_identifier(expn) and is_component(signature(expn)) ;
+end is_component;
+--S+ complete_aggregate 
+procedure complete_aggregate(agg_type, arg_list) ; 
+
+-- Given the context type, resolve the aggregate components. For an array
+-- type we pass index and component types separately to the recursive
+-- routine complete_a_aggregate. For record types only the base type is
+-- needed here. Any required constraints are imposed in resolve2.
+ 
+sem_trace_proc_entry(4, "Complete_Aggregate");
+
+if is_limited_type(agg_type) then
+    errmsg("aggregates not available for limited type",
+                original_name(agg_type), "7.4.4") ;
+    sem_trace_proc_exit(4, "Complete_A_Aggregate");
+    return [] ;
+end if;
+if is_array(agg_type) then
+    indices := index_types(agg_type) ;
+    -- If the context is sliding and named associations are present, the
+    -- indices must still be in range of the index type.
+    if not full_others and not can_constrain(agg_type) 
+    and (exists arg in arg_list | 
+            (is_tuple(arg) and arg(1) = "choice_list"))
+    and (exists [choice_type,-] in arg(2) | 
+                        choice_type /= "others_choice")
+    then 
+        indices := index_types(ST(agg_type).type_of) ;
+    end if;
+
+    return  trace_and_return(4, "Complete_A_Aggregate", 
+          complete_a_aggregate(indices,
+             component_type(agg_type), can_constrain(agg_type), arg_list));
+
+elseif is_record(agg_type) then
+    return  trace_and_return(4, "Complete_A_Aggregate", 
+            complete_r_aggregate(base_type(agg_type), arg_list)) ;
+
+else
+    errmsg("Invalid context for aggregate","","none") ;
+    sem_trace_proc_exit(4, "Complete_A_Aggregate");
+    return [] ;
+end if;
+
+end complete_aggregate;
+
+--S+ complete_a_aggregate
+procedure complete_a_aggregate(indices, comp_type, is_unc, arg_list) ;
+
+sem_trace_proc_entry(3, "Complete_a_Aggregate");
+
+-- Complete processing of an array aggregate.
+
+[indxt,-] := indices ;
+other_choice := false ;
+pos_list := [] ;
+nam_list := [] ;
+
+for arg in arg_list loop 
+    --
+    -- STEP 1 : If OTHERS choice exists then it must be last (or only)
+    -- ======
+    if other_choice then
+        errmsg("OTHERS must be the last aggregate component","","4.3");
+        return [] ;
+    end if;
+    --
+    -- STEP 2 : After any OTHERS clause has been processed, process the
+    -- ======   named and positional associations
+    --
+    if is_tuple(arg) and arg(1) = "choice_list" then
+        --
+        -- STEP 2a : Process named association choice list
+        -- -------   
+        --
+        [-, choice_list, c_expr] := arg ;
+        choices := [] ;
+        c_expr2 := complete_component(indices(2..), 
+                            comp_type, is_unc, c_expr) ;
+
+        --
+        -- STEP 2b : Process each choice in the choice list
+        -- -------   
+        --
+        for [choice_type, i_expr] in choice_list loop 
+
+        --
+        -- Case : unresolved choice
+        --
+        -- If the index expression is an identifier, it has not
+        -- been resolved yet, in order to avoid problems with
+        -- hidden record selector names. For an array, this id.
+        -- must be a visible object name. Resolve it now.
+
+            [ix, i_types] := i_expr ;
+            if is_identifier(ix) and choice_type = "simple_choice" 
+            then
+                mark := find_old(ix) ;
+                if is_type(mark) then 
+                -- subtype name, indicating a range choice.
+                    choice_type := "range_choice" ;
+                    i_expr := [mark, {mark}] ;
+                else
+                    i_expr := resolve1(mark) ;
+                end if;
+            end if;
+            case choice_type 
+      
+            when "simple_choice" => 
+                ix := resolve2(i_expr, indxt) ;
+                if is_value(ix) then 
+                   choices with:= ix ;
+	 	else
+                   choices with:= ["range", ix, ix] ;
+                   -- This assumes that elaboration of ix has no side-effects.
+                   -- Otherwise a temporary must be created to hold its value.
+		end if;
+
+            when "range_choice" => 
+		[ix, i_types] := i_expr ;
+		if is_tuple(ix) and ix(1) = "subtype" and ix(2) = []
+		then		
+		-- replace discrete range by subtype of known index type.
+		    ix(2) := indxt ;
+  		    i_expr := [ix, i_types] ;
+		end if;
+                r_c := resolve2(i_expr, indxt) ;
+                if is_identifier(r_c) then   -- range is subtype name
+                    choices with:= ["tname", r_c] ;
+                elseif r_c = [] then         -- type error in bounds.
+                    return [] ;
+                elseif r_c(1) = "'" then    -- range attribute
+                    [-,-, i] := r_c ;
+                    if is_type(i) then
+                        choices with:= ["tname", i] ;
+                    else
+                        choices with:= ["tname", r_c] ;
+                    end if;
+                else                         -- discrete range with type mark. 
+                    [-, type_mark, constraint] := r_c ;
+		    if type_mark = indxt then
+			choices with:= constraint ;
+		    else
+			-- Choice given by discrete range on a type mark
+			-- distinct from index type. Must be checked separately.
+                        choices with:= r_c ;
+                    end if;
+                end if;
+ 
+            when "others_choice" =>
+                if is_unc then
+                    errmsg("OTHERS choice not allowed in this context", 
+                                "","4.3, 4.3.2");
+                    return [] ;
+                else
+                    choices := "others" ;
+                    other_choice := true ;
+                end if;
+        
+            end case;
+        end loop; -- End of step 2b
+        --
+        -- STEP 2c : After processing the choice, if it is static then
+        -- -------   to the choice list to be tested with
+        --           is_partition.
+        --
+
+
+        nam_list with:= [choices, c_expr2] ;
+    else                -- Positional component.
+    --
+    -- STEP 3 : Process positional components
+    -- ====== 
+    --
+        pos_list with:= complete_component(indices(2..),
+                                    comp_type, is_unc, arg) ;
+    end if;
+end loop;    -- End of processing the choice lists
+
+    --
+    -- STEP 4 :  Perform the final checks.
+    -- ======    A. Check that either the name list or the position list 
+    --              is null
+    --           B. Check for valid context for OTHERS choice
+    --
+if other_choice and #nam_list > 1 and not full_others then
+    errmsg("Invalid context for \"others\" and named associations",
+                              "", "4.3.2(6)") ;
+    return [] ;
+elseif pos_list /= [] and nam_list /= [] 
+  and (not other_choice or #nam_list > 1) then
+    errmsg("apart from \"others\", associations must be ",
+                   "all positional or all named", "4.3.2(3)") ;
+    return [] ;
+end if;
+    --
+    -- STEP 5 :  Perform check is it is static and named
+    --           If it is a partition then check:
+    --           A.  If the range is out of bounds (base index) 
+    --               considering sliding,
+    --           B.  if the size of the choice range is less 
+    --               than the index range,
+    --           C.  if the size of the choice range is greater 
+    --               that the index range,
+    --           D.  if the choice range is null and the index 
+    --               range is not.
+    --
+
+    --
+    -- STEP 6.   Perform check is it is position, not others 
+    -- ======    and unconstrained
+    --
+
+    --
+    -- STEP 7.   Proccess an others choice by itself by converted 
+    -- ======    into a named association.
+    --
+
+sem_trace_proc_exit(3, "Complete_a_Aggregate");
+
+return ["array_aggregate", indices, pos_list, nam_list] ;   
+
+end complete_a_aggregate;
+--S+ complete_component
+procedure complete_component(indices, comp_type, is_unc, expn) ;
+
+sem_trace_proc_entry(3, "Complete_Component");
+
+-- Complete the resolution of a component of an array aggregate. If it
+-- is a multidimensional aggregate, the component itself is an array and
+-- a recursive call is made with the remaining indices. The aggregate
+-- types attached to it can be discarded, because the type of the comp-
+-- onent is anonymous. String literals are handled in their own routine.
+-- There is no sliding for sub-aggregates: their bounds must belong to
+-- the corresponding subtypes.
+
+if indices = [] then 
+    sem_trace_proc_exit(3, "Complete_Component");
+    return res2_check(expn, comp_type) ;
+else
+    [e, types] := expn ;
+
+    if not is_tuple(e) or (kind := e(1)) 
+        notin ["aggregate", "string_literal", "()"] then
+        errmsg("Invalid expression for",
+        "  component of multidimensional aggregate", "4.3.2") ;
+        c := [] ;
+
+    elseif kind = "aggregate" then 
+        -- There is no sliding on constructing sub-aggregates.
+        c := eval_static(complete_a_aggregate(indices, comp_type, 
+                            is_unc, e(2)));
+
+    elseif kind = "()" then 
+        -- Context is unconstrained: no others choice is allowed.
+        c := complete_component(indices, comp_type, true, e(2)) ;
+
+    else
+       if #indices /= 1 then
+           errmsg("Invalid use of literal in aggregate","","4.3.2") ;
+       end if;
+       c := complete_string_literal(e(2), indices, comp_type) ;
+    end if;
+    sem_trace_proc_exit(3, "Complete_Component");
+    return c ;
+end if;
+
+end complete_component;
+--S+ complete_string_literal
+procedure complete_string_literal(strg, indices, comp) ;
+
+-- String literals are transformed into array aggregates.
+-- This simplifies the application of sliding semantics. The context may
+-- be an array of some enumeration type, in which case we have to verify
+-- that each character in the string is an  enumeration literal for that
+-- type. For now we assume no representation specification was given for
+-- characters, and the ascii values are used.
+
+sc := ST(comp).scope_of ;
+if sc notin open_scopes and sc notin used_mods then
+    errmsg("characters in a string literal must be directly visible",
+                        "","4.2(3)") ;
+end if;
+
+if comp  in {"CHARACTER","any"}  then
+   e := ["array_aggregate", indices, [ ["ivalue", abs(c) ] : c in strg],[]] ;
+
+else           -- Some enumeration type. Use its literal map.
+    
+    if ST(base_type(comp)).nature /= "enum" then
+        errmsg("component type of context is not a character type ", 
+                               "","4.2") ;
+        return [] ;
+    end if;
+    lit_map := ST(base_type(comp)).literal_map ? {} ;
+    arr := [lit_map("'" + c + "'") : c in strg] ;
+
+    if exists c = strg(i) | arr(i) = om then
+       -- Some characters are not in the component type.
+       e := constraint_error() ;               
+    else
+       e := ["array_aggregate",indices, [["ivalue", v ]: v in arr],[]];
+
+       -- The individual characters must be bounds-checked as any other
+       -- array component.
+       if ST(comp).nature = "subtype" then
+          [-,lo, hi] := ST(comp).signature ;
+          if is_value(lo) and 
+	     is_value(hi) and
+             (exists v in arr | v < lo(2) or v > hi(2)) then
+             e := constraint_error() ;
+          end if;
+       end if;
+   end if;
+end if;
+
+return e ;
+
+end complete_string_literal;
+--S+ complete_r_aggregate
+procedure complete_r_aggregate(aggregate_type, arg_list) ;
+
+sem_trace_proc_entry(4, "Complete_r_aggregate");
+
+-- Complete resolution of components in a record aggregate. If the
+-- record type has discriminants, we must first complete resolution
+-- of the discriminant components, in order to determine the variant
+-- parts to which the rest of the aggregate must conform.
+
+    discr_list := discriminant_list(aggregate_type) ;
+
+    -- Components can be given by named choices. Divide  argument list
+    -- into positional and named components .
+
+    if exists arg=arg_list(i) | is_tuple(arg) and arg(1)="choice_list"
+    then
+        first_named := i ;
+    else
+        first_named := #arg_list + 1 ;
+    end if;
+
+    positional_args := arg_list(1..first_named-1) ;
+    named_args := arg_list(first_named..) ;
+    maybe := exists [-,choice_list,c_expr] in named_args |
+      #choice_list = 1 and choice_list(1)(1) = "others_choice" ; 
+
+    others_expr := if maybe then c_expr else om end if;
+
+    discr_map := {} ;
+
+    -- Map the discriminants into the (hopefully) static expressions
+    -- given for them.
+
+    i1 := #discr_list min #positional_args ;
+
+    for i in [1..i1] loop 
+         discr_map(discr_list(i)) := positional_args(i) ;
+    end loop;
+
+    -- Now look for named discriminants among named components.
+
+    for discr in discr_list(i1+1..) loop 
+
+        if exists [-, choice_list, c_expr] in named_args |
+            exists [-,[id,-]] in choice_list | 
+                                    id = original_name(discr)
+        then
+            discr_map(discr) := c_expr ;
+        elseif others_expr /= om then
+            discr_map(discr) := others_expr ;
+        else
+            errmsg("No value supplied for discriminant ",
+                original_name(discr),"4.3.1") ;
+            sem_trace_proc_exit(4, "Complete_r_Aggregate");
+            return [] ;
+        end if;
+    end loop;
+
+    -- Now complete type resolution of the discriminant values, and
+    -- verify that they are static.
+
+    for expn = discr_map(discr) loop 
+        expn2 := resolve2(expn, ST(discr).type_of) ;
+        discr_map(discr) := const_val(expn2) ;
+    end loop;
+
+    components := ST(aggregate_type).signature.invariant_part; -- To start with
+    variant := ST(aggregate_type).signature.variant_part ;
+    sel_names := ST(aggregate_type).signature.declared_components ;
+
+    -- Now scan the variant part of the record declaration, and collect
+    -- the types corresponding to the given discriminants.
+
+    while variant /= [] loop 
+
+        [discr, variants ] := variant ;
+        v := discr_map(discr) ;
+        if not is_value(v) then
+            errmsg("Value for discriminant " + original_name(discr),
+                "must be static","4.3.1") ;
+            sem_trace_proc_exit(4, "Complete_r_Aggregate");
+            return [] ;
+        else
+            discr_value := v(2) ;
+        end if;
+        if (exists [alt_list, decls] in variants, alt in alt_list |
+            ((is_tuple(alt) and
+              alt(2) <= discr_value and discr_value <= alt(3))
+              or alt = discr_value)) 
+              or (exists [alt_list, decls] in variants |
+                    alt_list = {"others"} )             
+        then
+            if decls /= ["null"] then
+                components +:= decls(1) ;
+            end if; 
+        else
+            errmsg("Discriminant value for " + original_name(discr),
+            " is out of range","3.7.2") ;
+            sem_trace_proc_exit(4, "Complete_r_Aggregate");
+            return [] ;
+        end if;
+        variant := decls(2) ;       -- Variants may be nested.
+
+    end loop;
+
+    -- Now the list of components is assembled. 
+    -- Complete the resolution of all components.
+
+    comp_list := [] ;       -- To gather list of selector assignments.
+    comp_pos  :=  1 ;       -- Index into component list.
+
+    -- Collect names of all components, in order.
+    all_component_names := [obj(2) : obj in components] ;    
+    components_seen := {} ;
+
+    sem_trace(3,"record fields are: ");
+    sem_trace(3, str(all_component_names) ) ;
+ 
+    for arg in arg_list loop 
+        if is_tuple(arg) and arg(1) = "choice_list" then
+            [-, choice_list, c_expr] := arg ;
+            choices := [] ;
+            for [choice_type, [sele,-]] in choice_list loop 
+
+        case choice_type 
+        
+        when "simple_choice" => 
+
+            selector := sel_names(sele) ;
+            check_void(sele) ;               
+            if selector = om then
+                errmsg("undefined component name ", sele,"4.3.1") ;
+                sem_trace_proc_exit(4, "Complete_r_Aggregate");
+                return [] ;
+            end if; 
+            choices with:= selector ;
+            if selector in components_seen then
+                errmsg("Duplicate value for component " + sele,
+                    " in aggregate","4.3.1") ;
+            else
+                components_seen with:= selector ;
+                comp_list with:= [selector,         
+                        res2_check(c_expr, ST(selector).type_of)];
+                comp_pos +:= 1 ;
+            end if;
+ 
+    
+        when "range_choice" => 
+            errmsg("Range choice not allowed in record aggregate",
+                                                           "","4.3.1");
+            sem_trace_proc_exit(4, "Complete_r_Aggregate");
+            return [] ;
+
+        when "others_choice" => 
+
+            if #components_seen = #all_component_names then
+                errmsg("OTHERS choice must represent at least ",
+                        "one component","4.3.1");
+            else
+                for selector in all_component_names |
+                   selector notin components_seen loop 
+
+                    comp_list with:= [selector,         
+                        res2_check(c_expr, ST(selector).type_of)];
+                    choices with:= selector ;
+                end loop;
+            end if;
+
+            components_seen := all_component_names ;
+ 
+        otherwise => null;
+
+        end case;
+    end loop;
+
+    if #{base_type(ST(selector).type_of) : selector in choices} /= 1 
+    then
+        errmsg("components on a choice list must have same type",
+                        "","4.3.1") ;
+    end if;
+else                -- Positional record aggregate.
+    if comp_pos > #all_component_names then 
+        errmsg("Too many components ", " for record aggregate",
+                                              "none") ;
+        sem_trace_proc_exit(4, "Complete_r_Aggregate");
+        return [] ;
+    end if;
+    selector := all_component_names(comp_pos) ;
+    comp_list with:= [selector,             
+             res2_check(arg, ST(selector).type_of)] ;
+    comp_pos +:= 1 ;
+    components_seen with:= selector;
+end if;
+end loop;
+ 
+
+if exists selector in all_component_names | 
+        selector notin components_seen then
+            errmsg("No value supplied for component ", 
+                   original_name(selector),"4.3.1");
+    sem_trace_proc_exit(4, "Complete_r_Aggregate");
+    return [] ;
+end if;
+
+sem_trace_proc_exit(4, "Complete_r_Aggregate");
+return ["record_aggregate", aggregate_type,  comp_list] ;
+
+end complete_r_aggregate;
+--S+ valid_task_name
+procedure valid_task_name(task_name) ;
+
+-- First pass over an expression that must yield a task type: called to
+-- resolve entry names.
+
+sem_trace_proc_entry(4, "Valid_Task_Name");
+
+[t1, types] := resolve1(task_name) ;
+
+task_types := {t in types | 
+	         is_task_type(t) or
+                 (is_access(t) and is_task_type(ST(t).designated_type))} ;
+
+if task_types = {} then
+    errmsg("expect task name ", "", "9.5") ;
+end if;
+sem_trace_proc_exit(4, "Valid_Task_Name");
+return [t1, task_types] ;
+
+end valid_task_name;
+--S+ complete_task_name
+procedure complete_task_name(task1, context_type) ;
+
+-- Complete resolution of task name used in an entry name.The context_type
+-- is obtained from the  scope of  the resolved  entry name. Derived task
+-- types have the same entries as their root type, and the unique type of
+-- the task name is thus the one whose root type is the context type.
+
+sem_trace_proc_entry(4, "Complete_Task_Name");
+
+types := task1(2) ;
+if exists t in types | (ST(t).root_type = context_type) then
+    task_name := resolve2(task1, t) ;
+elseif exists t in types | (is_access(t) and
+            ST(ST(t).designated_type).root_type = context_type) then
+    task_name := ["@", resolve2(task1, t)] ;
+else                            -- previous error.
+    sem_trace_proc_exit(4, "Complete_Task_Name");
+    return [] ;
+end if;
+
+-- Within the task body a task type designates the object currently exe-
+-- cuting that task. We replace the task type with  what will be  its
+-- run-time identity.
+
+if is_identifier(task_name) and is_task_type(task_name) then
+    if task_name in open_scopes then
+       task_name := declared(task_name)("current_task") ;
+    else
+       -- Use of the task type otherwise is invalid.
+       errmsg("invalid use of task type outside of its own body", "",
+                            "9.1") ;
+    end if;
+end if;
+
+sem_trace_proc_exit(4, "Complete_Task_Name");
+return task_name ;
+end complete_task_name;
+--S+ is_task_type
+procedure is_task_type(task) ;
+
+return ST(base_type(task)).nature in ["task_type", "task_type_spec"] ;
+
+end is_task_type;
+--S+ valid_attribute
+procedure valid_attribute(expn) ;
+
+sem_trace_proc_entry(3, "Valid_Attribute");
+sem_trace(4,"expn: "+ str(expn) ) ;
+
+-- The prefix of an attribute may be a type, in which case type reso-
+-- lution is not applied to it. The prefix of ADDRESS can also be an
+-- entity that is not type-resolved, such as  a package. Finally the
+-- prefix of COUNT must be an entry name, on which additional checks
+-- apply.
+
+[-, attribute, arg1, arg2] := expn ;
+    
+if attribute = "ADDRESS" then
+    if is_identifier(arg1) then         -- simple entity
+        if (is_type(arg1) and not is_task_type(arg1)) or is_literal(arg1) then
+            return pass1_error("invalid argument for ADDRESS","",
+                            "Annex A") ;
+        elseif ST(arg1).nature = "out" and is_access(ST(arg1).type_of) then
+            return pass1_error("invalid reading of out parameter","",
+                                "4.1(4)") ;
+        else
+            arg11 := [arg1, {ST(arg1).type_of ? "any"}] ;
+        end if;
+    elseif is_overloaded(arg1) then     -- subprogram or entry
+        arg11 := [arg1, {ST(a).type_of: a in arg1}] ;
+    else
+        if arg1(1) notin [".", "[]", "[..]", "@"] then return
+            pass1_error("invalid argument for ADDRESS","","Annex A");
+        else
+            arg11 := resolve1(arg1) ;     -- name of entity
+        end if;
+    end if;
+
+elseif attribute = "COUNT" then
+    [task1, entry_names, indx] := find_entry_name(arg1) ;
+
+    if task1 = om then      -- previous error. 
+        noop_error := true ; 
+        return [[], {}] ;
+
+    elseif # entry_names > 1 then
+        errmsg("ambiguous entry name", "", "9.5") ;
+        return [[], {}] ;
+    else
+        entry_name := arb entry_names ;
+        task := complete_task_name(task1,ST(ST(entry_name).scope_of).type_of);
+    end if;
+
+     if not is_identifier(task) 
+        -- The COUNT attribute can only be used immediately within
+        -- the object executing the task body.
+        or (not (exists s = open_scopes(i) | task = s
+              or (original_name(task) = "current_task" and ST(task).scope_of = s)))
+        or (exists s1 in open_scopes(1..i-1) |
+              ST(s1).nature notin {"block","entry", "entry_family"})
+     then 
+        return pass1_error("E'COUNT can only be used within ",
+                " the body of the task containing E", "9.9") ;
+
+     elseif indx /= om then
+        -- entry is member of entry family.
+        range_typ := index_type(ST(entry_name).type_of) ;
+        entry_name:=[ "[]", entry_name, [check_type(range_typ, indx)]] ;
+
+     end if;
+
+     arg11 := [entry_name, {"none"}] ;
+
+elseif is_type(arg1) then
+
+    type1 := arg1;
+    if is_task_type(arg1)                   
+      and attribute notin ["BASE", "SIZE", "STORAGE_SIZE"]  then    
+        -- may refer to current task
+        if arg1 in open_scopes then
+            arg1 := declared(arg1)("current_task") ;
+        else
+            -- Use of the task type otherwise is invalid.
+            errmsg("invalid use of task type outside of its own body", 
+                            "", "9.1") ;
+        end if;
+    end if;
+    arg11 := [arg1, {type1}] ;
+
+    if attribute = "BASE" and not is_attribute_prefix then
+        errmsg("'BASE can only be used in the prefix of ",
+				"another attribute", "3.3.3");
+    end if;
+
+else                    -- prefix of any other attribute
+    is_attribute_prefix := true ;
+    arg11 := resolve1(arg1) ;
+    is_attribute_prefix := false ;
+end if;
+[-, types] := arg11 ;       
+if #types /= 1 then
+   return pass1_error("Invalid argument for attribute ", 
+                  attribute, "Annex A, 4.1.4") ;
+else
+    type1 := arb types ;
+end if;
+
+-- Verify that the type has received a full declaration.
+if is_incomplete_type(type1) then
+    -- 'SIZE and 'ADDRESS can be applied to a deferred constant, in the
+    -- default expression for record  components and non-generic formal
+    -- parameters. The nature of  the current scope  is either 'record' 
+    -- or 'void' (indicating a formal part or discriminant part).
+    -- SImilarly, CONSTRAINED can be applied to an object of private type with
+    -- discriminants, before the full declaration (C74208B).
+
+    if not is_type(arg1) 
+      and attribute in ["SIZE", "ADDRESS", "CONSTRAINED"]
+      and ST(current_scope).nature in ["void", "record"]
+    then   null ;
+    else   
+        sem_trace2(3,"Premature access 2",ST(o_t).overloads);
+        return premature_access(type1) ;
+    end if;
+
+end if;
+
+if is_identifier(arg2) then     -- May also be a type name
+    arg21 := [arg2, {ST(arg2).type_of}] ;
+else
+    arg21 := resolve1(arg2) ;       -- Begin resolution of second arg
+end if;
+
+[-, types2] := arg21 ;
+if types2 = {} then             -- Some type error .
+    return arg21 ;
+end if;
+
+-- Verify that attributes have the proper number of arguments. If the
+-- second argument is absent, the internal constant I:1 is present.
+
+if is_scalar_type(type1) and attribute in {"FIRST","LAST"}
+then
+    if arg2 /= "I:1" then
+        pass1_error("Invalid second argument for attribute ",
+                     attribute, "Annex A, 4.1.4") ;
+    elseif (is_identifier(arg1) and not is_type(arg1) ) 
+       or (is_tuple(arg1) and arg1(1..2) /= ["'", "BASE"]) then  
+        pass1_error(attribute,
+         " cannot be applied to a scalar object","Annex A") ;
+    end if;
+
+elseif attribute in
+    ["POS", "VAL", "PRED", "SUCC", "VALUE", "IMAGE"]
+then
+    if arg2 = "I:1" then
+        pass1_error("Missing second argument for attribute ",
+                        attribute, "Annex A") ;
+    elseif not (is_type(arg1) 
+      or (is_tuple(arg1) and arg1(1..2) = ["'", "BASE"]) )
+    then
+        pass1_error("First argument of attribute " + attribute,
+            " must denote a type", "Annex A") ;
+    end if;
+        
+end if;
+    
+if attribute in ["FIRST", "LAST", "RANGE", "LENGTH"] and 
+  (is_array(type1) or
+   (is_access(type1) and is_array(ST(type1).designated_type)))
+then
+    if is_access(type1) then
+    -- If the argument is an access object, dereference now.
+        if is_fully_private(type1) then         
+            sem_trace2(3,"Premature access 3",ST(o_t).overloads);
+            return premature_access(type1) ;
+        end if;
+
+        type1 := ST(type1).designated_type ;
+        if is_type(arg1) then
+        	pass1_error("Prefix of attribute " + attribute,
+            	   " cannot be an access type mark", "3.8.2, Annex A") ;
+                arg11 := [type1, {type1}] ;
+        else                    -- Dereference object
+                arg11 := [ ["@", arg11], {type1}] ;
+        end if;
+    end if;
+
+    if is_type(arg1) and can_constrain(arg1) then
+        return  pass1_error("Unconstrained array type for attribute ",
+                    attribute, "3.6.2") ;
+    end if;
+    -- The second argument must be a universal integer, and
+    -- and must be static. Complete its resolution now.
+
+    if "universal_integer" in types2 then
+        arg2 := resolve2(arg21, "universal_integer");
+        arg2 := specialize(arg2, "INTEGER") ;
+    else pass1_error("index number of attribute "+attribute,
+            " must be universal", "Appendix A") ;
+    end if;
+
+    if arg2 = [] then               -- type error.
+        arg2 := ["ivalue", 1];          -- assume 1
+    end if;
+
+    -- arg21 is returned in the attribute expression. In the case of
+    -- array attributes, no further resolution is needed:
+    arg21 := arg2 ; 
+
+    if arg2 = "I:1" then dim := 1;
+    elseif not is_value(arg2) or 
+      not is_integer(dim := arg2(2)) then
+        pass1_error("Second argument of "+ attribute, 
+                " must be static integer", "3.6.2") ;
+        dim := 1;              -- assume 1
+    else 
+        dim := arg2(2) ;
+    end if;
+
+    a_type := type1;
+    if dim > no_dimensions(type1) or dim < 1 then
+        return  pass1_error("Invalid dimension number for array type",
+                    " in attribute", "3.6.2") ;
+    end if;
+
+    if attribute = "LENGTH" then
+        a_type := "universal_integer" ;     
+    else            -- Get type of index for specified dimension.
+        a_type := index_types(a_type)(dim) ;
+    end if;
+
+elseif attribute = "ADDRESS" then
+    if "SYSTEM" notin vis_mods then
+        -- The use of ADDRESS is incorrect if its type cannot be named
+        errmsg("use of SYSTEM.ADDRESS requires presence of package",
+                " SYSTEM", "13.7.2, Annex A") ;
+        a_type := "INTEGER" ;         -- Closest thing we've got.
+    else
+        a_type := visible("SYSTEM")("ADDRESS") ;
+    end if;
+
+elseif ST(attribute).type_of /= "overloaded" then
+    a_type := ST(attribute).type_of ;
+ 
+elseif attribute in base_attributes then
+        a_type := base_type(type1) ;
+else 
+    a_type := type1 ;
+end if;
+ 
+root := ST(type1).root_type ;
+
+if is_identifier(arg1) and (arg1 in open_scopes) 
+  and ST(arg1).nature = "record" then              
+    return pass1_error("Invalid self-reference in definition of ",
+                    original_name(arg1), "3.1");
+end if;
+
+sem_trace(3,"Root_type(" + str(type1) + ") = " + str(root) ) ;
+sem_trace(3,"Base type is " + str(base_type(type1)?"???") ) ;
+sem_trace(3,"attribute="+ str(attribute) ) ;
+-- Final type verification for all attributes.
+case attribute 
+
+    when "ADDRESS" =>  
+    type_ok := true;            -- checked above.
+
+    when "BASE" =>     
+    type_ok := is_type(root) ;
+
+    when "FIRST", "LAST" =>  
+    type_ok := is_scalar_type(root) or is_array(root) ;
+
+    when "VALUE" =>    
+    type_ok := is_discrete_type(root) 
+       and (exists t2 in types2 |compatible_types("STRING",t2));
+
+    when "IMAGE", "POS", "PRED", "SUCC" =>  
+    type_ok := is_discrete_type(root) 
+        and (exists t2 in types2 | compatible_types(type1,t2));
+
+    when "VAL" =>  
+    type_ok := is_discrete_type(root)
+         and (exists t2 in types2 | is_integer_type(ST(t2).root_type));
+
+    when "AFT", "BITS", "DELTA", "FORE" =>   
+    type_ok := root = "$FIXED";
+
+    when  "DIGITS",        "EMAX",             "EPSILON",
+          "MACHINE_RADIX", "MACHINE_MANTISSA", "MACHINE_EMAX", 
+           "MACHINE_EMIN",  "SAFE_EMAX" =>  
+    type_ok := (root = "FLOAT" or root = "LONG_FLOAT");
+
+    when  "LARGE",  "MACHINE_ROUNDS", "MACHINE_OVERFLOWS", "MANTISSA",
+          "SMALL",  "SAFE_LARGE",     "SAFE_SMALL" =>
+    type_ok := root in {"$FIXED", "FLOAT","LONG_FLOAT"} ;
+
+     when "LENGTH", "RANGE" =>  
+    type_ok := is_array(root) ;
+
+    when "CONSTRAINED" =>  
+    type_ok := if is_type(arg1) then ST(ST(type1).root_type).type_of in priv_types
+           else is_record(root) and has_discriminants(root) end if;
+
+    when "PRIORITY","TERMINATED","CALLABLE" =>  
+    type_ok := if is_access(root) 
+  	       then 
+            	  is_task_type(ST(root).designated_type) and not is_type(arg1)
+               else is_task_type(root)  end if;
+
+    when "STORAGE_SIZE" =>  
+    type_ok := is_task_type(root) or (is_access(root) and is_type(arg1));
+
+    when "WIDTH" =>    
+    type_ok := is_discrete_type(root) ;
+
+    when "FIRST_BIT", "LAST_BIT", "SIZE", "POSITION" =>  
+    type_ok := true ;
+    
+    when "COUNT" => 
+    type_ok := true ;
+otherwise => 
+    return pass1_error("Undefined attribute: ", attribute, "Annex A") ;
+end case;
+
+sem_trace_proc_exit(3, "Valid_Attribute");
+return if type_ok then 
+   [["'", attribute, arg11, arg21], {a_type}]
+else 
+    pass1_error("Invalid argument type for attribute ", 
+                    attribute, "Annex A") 
+end if; 
+ 
+end valid_attribute;
+
+--S+ res2_check
+procedure res2_check(expn2, context_type) ;
+
+sem_trace_proc_entry(4, "Res2_Check");
+
+-- Called to impose constraints when needed, on aggregate components and
+-- allocated objects. These are non-sliding contexts for aggregates.
+
+may_others := full_others ;
+full_others := true ;
+e := resolve2(expn2, context_type) ;
+if not is_tuple(e) or e(1) notin qualifiers then        
+    -- Apply a qualification only if the expression did not already
+    -- receive one (from an explicit conversion, qualification, concat.).
+    e := eval_static(apply_constraint(e,context_type)) ;
+end if;
+full_others := may_others ;
+sem_trace_proc_exit(4, "Res2_Check");
+return if is_value(e) and #e = 2 then (e with context_type) else e end if;
+end res2_check;
+
+--S+ compatible_types        
+procedure compatible_types(t_out, t_in) ;
+
+-- This procedure verifies that an expression of type -t_in- can appear
+-- in a context requiring type -t_out-. 
+
+const gen_types := 
+   {"array_type",    "boolean_type", "character_type", "composite_type",
+    "discrete_type", "$FIXED", "integer_type",   "null_type",
+    "real_type", "string_type","universal_integer", "universal_real",
+    "universal_fixed", "universal_type"};
+
+sem_trace_proc_entry(4, "Compatible_Types"); 
+sem_trace(4,"check compatible types: "+str(t_out) +" "+str(t_in) ) ;
+
+if t_in = om or t_out = om                -- syntax error
+ or (t_in = t_out )                       -- compatible types
+ or t_in = "any" or t_out = "any" then    -- previous error 
+    sem_trace_proc_exit(4, "Compatible_Types"); 
+    return true ; 
+end if;
+ 
+-- The generic types 'universal_integer', 'universal_real' , etc., are
+-- used to indicate the type of the corresponding literals. These types
+-- are compatible with specific types of the same family. On the other
+-- hand, the generic 'universal_fixed' is incompatible with all types,
+-- and its presence in any type checking will trigger an error message
+-- somewhere (but not in this routine).
+-- To avoid checking for their presence on both sides, we perform the
+-- following normalization :
+ 
+if t_in notin gen_types and t_out in gen_types  then 
+    [t_in, t_out] := [t_out, t_in] ;
+end if;
+return trace_and_return(4, "Compatible_Types",
+
+case t_in 
+ 
+when "array_type" =>         is_array(t_out)
+
+when "boolean_type" =>       ST(t_out).root_type = "BOOLEAN"
+			  or (is_array(t_out) and 
+			        ST(component_type(t_out)).root_type = "BOOLEAN")
+
+when "character_type" =>     is_character_type(t_out)
+
+when "composite_type" =>     ST(ST(t_out).root_type).nature in ["array", "record"]
+			and not is_limited_type(t_out) 
+
+when "discrete_type" =>      is_discrete_type(t_out)
+
+when "$FIXED" =>             t_out = "universal_real" 
+                	or ST(t_out).root_type="$FIXED"
+
+when "integer_type" =>       ST(t_out).root_type = "INTEGER" 
+                	or t_out = "universal_integer"
+
+when "null_type" => 	       is_access(t_out) or is_allocator_type(t_out)
+
+when "real_type" =>          ST(t_out).root_type in 
+                       {"FLOAT","LONG_FLOAT","$FIXED","universal_real"}
+
+when "string_type" =>        is_array(t_out) and no_dimensions(t_out) =  1    
+                   	and is_character_type(component_type(t_out))
+
+when "universal_integer" =>  ST(t_out).root_type in {"INTEGER","SHORT_INTEGER"}
+ 
+when "universal_real" =>     ST(t_out).root_type in
+				 {"FLOAT","LONG_FLOAT","$FIXED"}
+
+when "universal_type" =>     t_out in univ_types
+
+when "universal_fixed" =>    false
+
+otherwise =>                    
+   -- name equivalence of base types holds for everything else.
+   base_type(t_in) = base_type(t_out) 
+
+   -- but for allocators, which are compatible with an access type that
+   -- has the same designated type.
+   or
+   (is_allocator_type(t_in) and is_access(t_out) and 
+    compatible_types(ST(t_in).designated_type, ST(t_out).designated_type))
+   or
+   (is_allocator_type(t_out) and is_access(t_in) and 
+    compatible_types(ST(t_in).designated_type, ST(t_out).designated_type))
+     
+end case);
+ 
+end compatible_types;
+--S+ type_error
+procedure type_error(op_names,typ,num_types) ;
+
+sem_trace_proc_entry(4, "Type_Error");
+sem_trace(4, "op_names: " + str(op_names) );
+sem_trace(4, "type: " + str(typ) );
+sem_trace(4, "num_types: " + str(num_types) );
+
+-- Emit error message after a type error was detected during type resolution.
+-- if num_types > 1, the expression is ambiguous : the operator of op_names 
+-- is overloaded, and the argument list is not sufficient to disambiguate.
+-- If num_types = 0, the argument list is incompatible with the op.
+ 
+op_name := if is_set(op_names) then arb op_names else op_names end if;
+op_n := original_name(op_name) ;
+if num_types > 1 then
+    case ST(op_name).nature 
+
+    when "procedure","function","procedure_spec","function_spec" =>  
+        names := +/[original_name(ST(x).scope_of) + "." + 
+            original_name(x) + " " : x in  op_names] ;
+        errmsg("Ambiguous call to one of ", names,"6.6, 8.3") ;
+
+    when "op" => 
+        errmsg("Ambiguous operands for ", op_n,"6.7, 8.3") ;
+
+    when "literal" => 
+        errmsg("Ambiguous literal: ", op_n,"3.5.1, 4.7, 8.3") ;
+    otherwise => errmsg("Ambiguous expression","","8.2, 8.3") ;
+    end case;
+
+    -- If the type is ambiguous the expression is of couse invalid.
+
+    noop_error := true ;
+
+else        -- Num_types is zero.
+    if noop_error then
+       -- Current expression contained previous error. Do not emit
+       -- an aditional one.
+       sem_trace_proc_exit(4, "Type_Name");
+       return ;
+    end if;
+
+    noop_error := true ;    -- For sure.
+    
+    if typ = om then    -- Operator or subprogram .
+
+        if op_n in {"GET", "PUT"} then
+             errmsg("Text_io not instantiated nor defined for type",
+                                   "","8.4, 14.4") ;
+        else
+           if ST(op_name).nature in {"entry", "entry_family"} then 
+                op_n := "entry call" ; 
+           end if;
+           msg1 := if ST(op_name).nature = "op" then
+                "invalid types for " 
+               else     "invalid argument list for "   end if;
+           errmsg(msg1, op_n,"none") ;
+        end if;
+
+    elseif ST(op_name).nature = "literal" then
+        errmsg("no instance of " + op_n,
+            " has type " + full_type_name(typ),"3.5.1") ;
+    else
+       errmsg("Expect expression to yield type ", 
+            full_type_name(typ),"none") ;
+    end if;
+end if;
+
+sem_trace_proc_exit(4, "Type_Error"); 
+end type_error;
+
+--+S premature_access
+procedure premature_access(type_mark) ;
+
+-- Called when trying to use (an access to) a fully private type.
+return 
+pass1_error("Premature usage of access, private or incomplete type ",
+                original_name(type_mark), "7.4.2") ;
+end premature_access;
+--S+ pass1_error 
+procedure pass1_error(msg1, msg2, lrm_sec) ;
+
+-- This procedure is invoked when a type error which requires a special
+-- message is encountered in resolve1. 
+
+if not noop_error then
+       errmsg(msg1, msg2, lrm_sec) ;
+end if;
+noop_error := true ;        -- To avoid cascaded errors.
+return [ [], {} ] ;     -- Error template for resolve1.
+
+end pass1_error;
+--S+ full_type_name 
+procedure full_type_name(typ) ;
+
+sem_trace_proc_entry(4, "Full_Type_Name");
+
+-- Error message procedure. Restore source name of type, or if anonymous
+-- build some approximate description of its ancestry.
+
+
+type_name := original_name(typ) ;
+if type_name = "" then          -- Anonymous type.
+    type_name :=
+      case ST(typ).nature 
+
+       when "subtype" =>   full_type_name(ST(typ).type_of)
+ 
+       when "array" =>     "array(" + full_type_name(index_type(typ))+ "..." 
+
+       when "type" =>       -- derived type
+         		   "new " + full_type_name(ST(typ).type_of) 
+
+       otherwise =>        "--anonymous--" 
+   end case;
+end if;
+sem_trace_proc_exit(4, "Full_Type_Name");
+return type_name ;
+end full_type_name;
+
+--T+ Resolve1 Procedures
+
+--S+ resolve1_aggregates
+procedure resolve1_aggregates(expn) ;
+
+-- Verify that the list of choices is properly formatted. The
+-- types of the individual choices are not used to resolve the 
+-- aggregate type. The possible types of the aggregate are all
+-- composite types in scope.
+
+    arg_list := [resolve1(expn(i)): i in [2..#expn]] ;
+
+    if (exists arg = arg_list(i) | arg(1) = "choice_list" )
+        and (exists arg2 in arg_list(i+1..) |
+            arg2(1) /= "choice_list")
+    then
+        return pass1_error("positional associations must appear",
+            " first in aggregate", "4.3") ;
+    else
+	return [["aggregate", arg_list], {"composite_type"}] ; 
+    end if; 
+end resolve1_aggregates;
+
+--S+ resolve1_index
+procedure resolve1_index(expn);
+
+    error_expression := [ [], {}] ;
+    [-, a_expression, i_expression] := expn ;
+
+    expn1 := valid_array_expression(a_expression, i_expression) ; 
+    if expn1 = error_expression then 
+        return pass1_error("type mismatch in indexing", "","4.1.1");
+    end if;
+    return expn1 ;
+end resolve1_index;
+
+--S+ resolve1_slicing
+procedure resolve1_slicing(expn) ;
+
+-- Slicing operations are equivalent to indexing operations,
+-- for type checking purposes. We simply reformat the result
+-- of type checking, so that the result type of the slice is
+-- the base type of the array expression. If this type is an
+-- access type, we must of course dereference it.
+
+error_expression := [ [], {}] ;
+[-, a_expression, discr] := expn ;
+expn1 := valid_array_expression(a_expression, [discr]) ;
+if expn1 = error_expression then 
+    return pass1_error("type mismatch in slice","", "4.1.2") ;
+else
+    [ [-, [arrays, array_types], indx], -] := expn1 ;
+    return [["[..]", [arrays, array_types], indx(1)],
+        {base_type(if is_access(t) then ST(t).designated_type 
+                   else t end if)  : t in array_types}] ;
+end if; 
+ 
+end resolve1_slicing;
+
+--S+ resolve1_membership
+procedure resolve1_membership(expn) ;
+
+error_expression := [ [], {}] ;
+-- The second argument of membership operators can be a type_mark
+[op_name, arg1, arg2] := expn ;
+arg11 := resolve1(arg1) ;
+if arg2(1) = "name" then
+    nam := find_old(arg2) ;
+    if is_identifier(nam) then   -- type mark.
+        if not is_type(nam) then return
+           pass1_error("argument of membership must be type_mark", "", "4.3");
+        else 
+	    -- This is a forcing occurence of a type mark.
+	    force_representation(base_type(nam));
+        end if;
+
+        arg21 := [ nam, {base_type(nam)}] ;
+
+    else     -- if not a type mark, it can be an attribute.
+       arg21 := resolve1(nam) ;
+    end if;
+else				-- a discrete range.
+    arg21 := resolve1(arg2) ;
+end if;
+
+[nam, ts] := arg21 ;
+
+if is_tuple(nam) and nam(1) = "subtype" then
+   ts := {t in ts | is_scalar_type(t)} ;
+   if ts = {} then return
+       pass1_error("bounds of range for membership op ",
+                "must be scalar", "4.4") ;
+   else 
+       arg21(2) := ts ;
+   end if;
+end if;
+
+-- Now resolve the expression as for any other operator.
+exp1 := result_types({op_name}, [arg11,arg21]) ;
+if noop_error then 
+    return error_expression ;
+elseif exp1(2) = {} then 
+    type_error({op_name}, om, 0) ;
+    return error_expression;                  
+else 
+    return exp1 ;
+end if;
+end resolve1_membership;
+
+--S+ resolve1_dereference
+procedure resolve1_dereference(expn) ;
+
+-- A dereference operation must apply to objects of access type.
+[-, ac_expression] := expn ;
+expn1 := resolve1(ac_expression) ;
+desig_types := {ST(t).designated_type: t in expn1(2) 
+                                | is_access(t)} ;
+
+if desig_types = {} then
+    return pass1_error("prefix of ALL must belong ",
+                "to an access type", "4.1.3") ;
+else
+    return [ ["@", expn1], desig_types ] ;
+end if;
+
+end resolve1_dereference;
+--S+ resolve1_new
+procedure resolve1_new(expn) ;
+
+-- 'new' labels an allocator given with a type mark and an optional constraint. 
+
+[-, type_id, constraint] := expn ;
+         
+type_mark := find_old(type_id) ;
+
+if constraint = [] and is_unconstrained(type_mark)   
+then 
+    return pass1_error("Constraint required in allocator ",
+                      "when initialization is absent", "4.8") ;
+else
+    desig_type :=
+        promote_subtype(make_subtype([type_id, constraint])) ;
+        -- Check that the promote subtype is not needed BS
+end if;
+
+-- If a constraint is present, an anonymous type has been created
+-- The subtype expression is nevertheless emitted within the 
+-- allocator itself, and the anonymous type does not appear in the
+-- AIS.
+
+if is_anonymous(desig_type) then
+    useless frome newtypes(#newtypes) ;
+end if;
+
+check_fully_declared(desig_type) ;
+return [["new", [], desig_type], {some_access_type(desig_type)}] ;
+
+end resolve1_new;
+--S+ resolve1_new_init
+procedure resolve1_new_init(expn);
+
+-- Allocator given by a type mark and an explicit aggregate.
+    
+[-, type_id, aggregate] := expn ;
+desig_type := find_old(type_id) ;
+
+if not is_type(desig_type) then 
+    return pass1_error("invalid type mark in allocator","","4.8") ; 
+elseif is_limited_type(desig_type) then
+    return pass1_error("initial value not allowed ",
+        "on an allocator for a limited type", "7.4.4") ;
+end if;
+return [["new", resolve1(aggregate), desig_type], 
+		{some_access_type(desig_type)}] ;
+
+end resolve1_new_init;
+procedure some_access_type(desig_t) ;
+
+-- Before completing the determination of the context type, the type
+-- of an allocator is an access type whose designated  type is the one
+-- given in the subtype indication or qualified expression for the allocator.
+-- This internal type is given the nature 'some_access_type'.
+
+acc_t := "allocator:" + newat_str();
+ST(acc_t) := ["some_access_type", acc_t, desig_t, "", current_scope, acc_t];
+return acc_t ;
+end some_access_type;
+procedure is_allocator_type(t) ;
+ return ST(t).nature = "some_access_type" ;
+end is_allocator_type;
+--S+ resolve1_choice_list
+procedure resolve1_choice_list(expn) ;
+
+-- If the choice is a simple choice of an identifier, this may
+-- denote a formal name or a component name. Do not resolve 
+-- them until the second pass.
+
+[-, choices, value] := expn ;
+
+choice_list := [] ;
+
+for [choice_type, indx] in choices loop 
+
+    case choice_type 
+--H+ Simple choice
+
+    when "simple_choice" =>
+        if is_tuple(indx) and indx(1) = "name" then
+            if (is_identifier(choice := indx(2))) then
+                indx1 := [choice, {"any"} ] ;      -- Type found later
+
+            elseif is_range_attribute(choice) then
+                choice_list with:= ["range_choice", 
+                resolve1(find_old(choice))] ;
+                continue;
+            else            -- not a simple name: can resolve
+                indx1 := resolve1(indx) ;
+            end if;
+        else            -- expression: can resolve.
+            indx1 := resolve1(indx) ;
+        end if;
+
+        if is_tuple(indx) and indx(1) = "subtype" 
+        then
+            choice_list with:= ["range_choice", indx1] ;
+        else
+            choice_list with:= [choice_type, indx1] ;
+        end if;
+
+-- For a slice choice, the index is a subtype. If this subtype 
+-- is an explicit range construct, its bounds have to be checked.  
+-- Otherwise, the name of the subtype  yields  the type.
+--H+ Range choice
+ 
+    when "range_choice" =>  
+ 
+        indx1 := resolve1(indx) ;
+        choice_list with:= [choice_type, indx1] ;
+
+--H+ Others choice
+    when "others_choice" =>  
+    -- Verify that this appears by itself in the choice list.
+
+        if #choice_list > 1 then
+            pass1_error("OTHERS choice must appear by itself",
+                                            "", "3.7.3, 4.3, 5.4") ;
+        else
+        -- Others is an index type that matches everything.
+            choice_list with:= [choice_type,[ [], {"any"}]] ;
+        end if;
+ 
+    end case;
+end loop;
+return [ "choice_list", choice_list, resolve1(value)] ;
+ 
+end resolve1_choice_list;
+--S+ resolve1_conversion
+procedure resolve1_conversion(expn) ;
+
+error_expression := [ [], {}] ;
+-- the result type is the type mark of the conversion.
+[-, target_type, arg] := expn ;
+original_arg := arg;
+
+-- Remove any levels of parentheses so that an inner use of an invalid argument
+-- will be able to be caught.
+ while is_tuple(arg) and arg(1) = "()" loop
+   arg := arg(2);
+end loop;
+
+if is_tuple(arg) and arg(1) in 
+    ["null", "new", "new_init", "aggregate", "string_literal"]
+then 
+    return pass1_error("invalid expression for conversion", "","4.6(3)");
+elseif is_incomplete_type(target_type) then 
+    return pass1_error("premature use of private type in expression",
+                     "", "7.4.1(4)") ;
+else
+    force_representation(base_type(target_type)) ;
+    expn1 := resolve1(original_arg) ;
+end if;
+
+return  if expn1 = error_expression then 
+            error_expression 
+        else 
+            [["convert", target_type, expn1], {target_type}] 
+        end if;
+
+end resolve1_conversion;
+--S+ resolve1_qualify
+procedure resolve1_qualify(expn);
+
+[- , to_type, arg] := expn ;
+ 
+if not is_type(to_type) then 
+    return pass1_error("Expect type mark in qualified expression",
+                        "","4.7");
+elseif to_type in open_scopes and is_task_type(to_type) then
+    return pass1_error("invalid use of type " 
+                        + original_name(to_type),
+                        " within its own body", "9.1") ;
+elseif is_incomplete_type(to_type) then 
+    return
+        pass1_error("premature use of private type in expression",
+                     "", "7.4.1(4)") ;
+else
+    force_representation(base_type(to_type));
+    expn1 := resolve1(arg) ;
+end if;
+        
+[-, types] := expn1 ;
+        
+return if exists t in types | compatible_types(to_type,t)
+        then  
+            [ ["qualify", to_type, expn1], {to_type}] 
+        else  
+            pass1_error("Expression has wrong type ",
+                "for qualification", "4.7") 
+        end if;
+ 
+end resolve1_qualify;
+--S+ resolve11_range
+procedure resolve11_range(expn) ;
+
+-- For a subtype expression, the bounds expressions must be
+-- checked against the specified type, if any, or against the
+-- type required by context.
+-- In the case of floating point types, the specified precision
+-- is a static expression which has been checked already.
+ 
+[-, typ, [kind, low, high, precision1, precision2]] := expn ;
+
+[l1, ltypes] := low1 := resolve1(low) ;
+[h1, htypes] := high1:= resolve1(high) ;
+
+if typ = [] then
+    -- Case of a range expression with no named type. Validate
+    -- the bounds against each other, and return the possible types.
+    possible_types := {it : t1 in ltypes, t2 in htypes |
+                    (it := intersect_types(t1,t2)) /= om};
+
+    if #possible_types = 0 
+    then return pass1_error("Incompatible expressions in range",
+                                        "", "3.5") ;
+    else return [ ["subtype",[],
+          [kind, low1, high1, precision1, precision2]],
+                possible_types] ;
+    end if;
+else
+    -- Subtype of a specified type. Validate the bounds against
+    -- it, and return the named type.
+
+    if    (exists t1 in low1(2) | compatible_types(typ, t1))
+      and (exists t2 in high1(2)| compatible_types(typ, t2))
+    then return
+        [["subtype",typ,
+        [kind,low1,high1,precision1, precision2]],{typ} ] ;
+    else return
+        pass1_error("Invalid types in bounds for range",
+                "", "3.5, 4.1.2") ;
+    end if;
+end if;
+end resolve11_range;
+--S+ resolve1_parenthesised_expression
+procedure resolve1_parenthesised_expression(expn);
+
+-- A parenthesised  expression retains its parentheses during type checking,
+-- in order to distinguish it from a variable. (Thus (X) is not a valid OUT
+-- parameter for a procedure, and (D) is not a valid use of a discriminant name).
+
+[-, e] := expn ;
+expn1 := resolve1(e) ;
+return [["()", expn1], expn1(2)] ;
+
+end resolve1_parenthesised_expression;
+--S+ resolve1_call_or_index
+procedure resolve1_call_or_index(expn) ;
+
+-- In the presence of calls to parameterless functions, the
+-- parse tree itself must be considered overloaded, and each
+-- of its interpretations resolved separately. 
+
+[-, obj_name, arg_list] := expn ;
+-- resolve as function call.
+call1 := result_types(obj_name,[resolve1(arg):arg in arg_list]);
+-- And try for indexing on parameterless call.
+array1 := valid_array_expression([obj_name], arg_list) ;
+trees1 := [call1, array1] ; -- This is a tuple so that it can be
+                            -- unpacked easily.
+types1 := call1(2) + array1(2) ;
+
+return [["call_or_index", trees1], types1] ;
+
+end resolve1_call_or_index;
+--T+ Resolve2 Procedures
+
+--S+ proc resolve2_subprograms
+procedure resolve2_subprograms(op_name, context_type, arg_list) ;
+
+-- For a procedure or function, the signature imposes a type on 
+-- each actual parameter present, and specifies a default value 
+-- for the ones that are absent. If the function is aliased (i.e.
+-- a renaming or derivation) the parent subprogram is called.
+-- The context type is used only when an operator renames another operator. In
+-- that case the context imposes the type of the operands.
+
+    
+    subp_name := ST(op_name).alias ? op_name ;
+    if ST(subp_name).nature = "op" then 
+       -- subprogram renames a predefined operator.
+       if original_name(op_name) in op_designators then
+	   -- operator renames predefined operator. Thus user_defined_operator
+	   -- denotes a predefined operator (3.9) and the expression may be
+	   -- static if the arguments are. (C85017A).  Format as expression.
+            return complete_operator_expression(subp_name, 
+                        base_type(context_type), arg_list) ;
+       else
+	   -- Leave as function call. Renaming is handled dynamically.
+	   subp_name := op_name ;
+       end if;
+    end if; 
+    if ST(subp_name).nature = "literal" then
+       -- function renames literal. Emit literal itself, but in the form of
+       -- a null conversion, to indicate that it is not static.
+       return ["convert", ST(subp_name).type_of, ST(subp_name).type_of,
+			const_val(subp_name)] ;
+    else
+       formals := ST(op_name).signature ;
+       arg_list := complete_argument_list(formals, arg_list) ;
+
+       return ["call", subp_name, arg_list] ;
+    end if;
+
+end resolve2_subprograms;
+--S+ resolve2_entries 
+procedure resolve2_entries (op_name,arg_list) ;
+
+    formals := ST(op_name).signature ;
+    arg_list := complete_argument_list(formals, arg_list) ;
+    return ["ecall", ST(op_name).scope_of, op_name, arg_list] ;
+end resolve2_entries;
+
+--S+ resolve2_int_literal
+procedure resolve2_int_literal(context_type,expn);
+--SEM_TRACE_PROC_ENTRY(3, 'Resolve2_int_literal');
+--SEM_TRACE2(3, context_type, expn);
+-- If the context type is not universal, the literal must be 
+-- transformed to its short SETL form.
+
+target_type := if context_type = "universal_integer" 
+                then "universal_integer"
+                else "integer" 
+              end if;
+
+lv := sem_adaval(target_type, expn(2));
+return  if lv = "OVERFLOW" then
+            [constraint_error(), "universal_integer" ]
+        else
+            [["ivalue", lv], "universal_integer" ] 
+        end if;
+
+end resolve2_int_literal;
+--S+ resolve2_real_literal
+procedure resolve2_real_literal(context_type,expn);
+--SEM_TRACE_PROC_ENTRY(3, 'Resolve2_real_literal');
+--SEM_TRACE2(3, str context_type,expn);
+-- If the context is not universal, convert the literal to a real type.
+-- If the context is generic, the conversion will have to be done at run-time.
+-- (This is the case on a bound of a generic subtype for example).
+
+if ST(base_type(context_type)).root_type notin
+   ["FLOAT", "LONG_FLOAT", "$FIXED", "universal_real"] then
+     errmsg("Invalid context for real literal","","4.6(15)");
+     return [["ivalue",  0.0], "universal_real"] ;
+end if;
+
+is_generic_subtype := is_generic_type(context_type) 
+   		      or not is_value(ST(context_type).signature.precision_of) ;
+
+target_type := 
+  if context_type = "universal_real"     then "universal_real"
+    elseif is_generic_subtype then "FLOAT" 
+    else context_type
+end if;
+
+--SEM_TRACE(4,'target type set to '+ str target_type) ;
+
+lv := sem_adaval(target_type, expn(2));
+--SEM_TRACE(3,'lv='+ str lv) ;
+real_ivalue := if lv = "OVERFLOW" then  constraint_error()
+        			  else  ["ivalue", lv] 
+end if;
+  
+return if is_generic_subtype then 
+	[["convert", "FLOAT", context_type, real_ivalue], context_type]
+	else [real_ivalue, base_type(context_type)]
+end if; 
+
+end resolve2_real_literal;
+--S+ resolve2_string_literal
+procedure resolve2_string_literal(context_type,expn);
+
+if is_array(context_type) then
+    if context_type = "string_type" then
+        -- verify that only one string type is visible.
+        context_type := "STRING" ;
+    elseif is_fully_private(context_type) then
+--    SEM_TRACE2(3,'Premature access 4',overloads(o_t));
+        premature_access(context_type) ;
+    end if;
+
+    return [complete_string_literal(expn(2), 
+        index_types(context_type), component_type(context_type))
+                                            ,"string_type"] ;
+
+else    -- Some type error. Will be caught at end
+    return [ [] ,"string_type"] ;
+end if;
+
+end resolve2_string_literal;
+--S+ resolve2_null
+procedure resolve2_null(context_type);
+
+-- Like any allocator,  NULL takes the type of the context. In the
+-- pathological case   (NULL = NULL) each NULL can be resolved if there 
+-- is a single access type in scope.
+
+if is_access(context_type) 
+  or (is_allocator_type(context_type) and context_type /= "null_type")
+  or (context_type = "null_type" and  single_access_type("null_type") /= "any")
+then
+    return ["NULL", context_type] ;
+else
+    errmsg("invalid context for NULL","","3.8") ;
+    return [[],"any"] ;
+end if;
+end resolve2_null;
+
+--S+ single_access_type
+procedure single_access_type(desig_type) ;
+
+-- In the pathological case where NULL, or an allocator, appear in a
+-- comparison, the context does not impose a type. Such a usage is only
+-- valid if there is a single access type in scope that has the given designated
+-- type. For NULL this usage is legal only if there is a signle access type
+-- in scope..
+
+all_access :=
+      [t: s in open_scopes(1..#open_scopes-2), [-, t] in declared(s) 
+						  | is_access(t)]
+    + [t: p in vis_mods,    [-, t] in visible (p) | is_access(t)] ;
+
+if desig_type /= "null_type" then
+    --find types that have the given designated type.
+    all_access := [t in all_access |
+			base_type(ST(t).designated_type) = base_type(desig_type)] ;
+end if;
+if #all_access /= 1  then
+    noop_error := true ;
+    errmsg("invalid or ambiguous context for allocator", "", "3.8,4.8") ;
+    return "any" ;
+else
+    return all_access(1) ;
+end if;
+
+end single_access_type;
+--S+ resolve2_aggregates;
+procedure resolve2_aggregates(expn,context_type,types);
+
+--SEM_TRACE_PROC_ENTRY(3, 'Resolve2_aggregates');
+--SEM_TRACE3(3, expn,context_type,types);
+
+-- Resolve it using the context type, and apply constraint if any.
+-- The possible types include all visible composite types, and there
+-- should be one of them compatible with the context.
+
+[-,arg_list] := expn ;
+if not compatible_types(context_type, "composite_type") then
+    errmsg("context of aggregate: " + original_name(context_type),
+			" is not a composite type", "4.2") ;
+    return [[],"any"] ;
+elseif context_type = "composite_type" then
+   -- pathological case of comparison between two aggregates. The
+   -- context does not impose a specific type. In this case, the
+   -- expression is unambiguous only if only one composite type is
+   -- in scope (this can only be the predefined STRING type).
+   if # (a_types := find_aggregate_types()) = 1 then
+       context_type := "STRING" ;
+   else
+       errmsg("ambiguous aggregate in this context", "", "4.2") ;
+       return [[], "any"] ;
+   end if;
+end if;
+-- Resolve aggregate in unique context.
+return [complete_aggregate(context_type,arg_list),context_type] ;
+
+end resolve2_aggregates;
+
+--S+ Find_Aggregate_Types
+procedure find_aggregate_types ;
+-- The possible types of an aggregate  are all the composite types  that
+-- are  in scope. In the pathological case were two aggregates appear in
+-- a comparison, there must be only one such, namely the predefined string..
+
+return  
+
+   [t: s in open_scopes(1 .. #open_scopes -2), [-, t] in declared(s) 
+			 | ST(t) /= om and ST(t).nature in ["array", "record"]]
+   + [t: p in vis_mods,    [-, t] in visible (p)  
+			 | ST(t) /= om and ST(t).nature in ["array", "record"]] 
+     with "STRING" ;
+end find_aggregate_types;
+
+--S+ resolve2_arrays
+procedure resolve2_arrays(expn,context_type);
+
+-- For arrays, obtain required index type from type of array
+-- expression, and complete the determination of both.
+[-, array1, index_list] := expn ;
+[expn2, array_type] := 
+    complete_array_expression(array1, #index_list, context_type) ; 
+if expn2 = om or array_type = om then 
+    return [[], "any"] ;
+else
+    -- Complete resolution of each index.
+    -- The index expression is a context in which out parameters 
+    -- cannot be read. This has to be special-cased because an
+    -- indexed expression on the lhs of an assignment is a valid
+    -- context for an out parameter, and the global flag out_context
+    -- is set accordingly in processing assignments.
+
+    saved_out_c := out_context ;
+    out_context := false ;
+
+    index2 := [resolve2(indx, index_types(array_type)(i)) :
+                            indx = index_list(i)] ; 
+    out_context := saved_out_c ;
+    return [ ["[]", expn2, index2], 
+            component_type(array_type)] ;
+end if;   
+   
+end resolve2_arrays;
+--S+ resolve2_slices
+procedure resolve2_slices(expn,context_type);
+
+-- For slices, obtain array type, and apply its index type to the
+-- subtype expression for the discrete range.
+[-, array1, discr1] := expn ;
+ 
+[expn2, array_type] := 
+        complete_array_expression(array1, 0, context_type);
+if expn2 = om then
+    return [[] , "any"] ;
+else
+    return 
+        [["[..]", expn2, resolve2(discr1, index_type(array_type))] ,
+            base_type(array_type) ];
+end if;
+ 
+end resolve2_slices;
+--S+ resolve2_paren(expn,context_type);
+procedure resolve2_paren(expn,context_type);
+
+-- For a parenthesised expression, resolve the expression, and keep 
+-- the parenthesis, to distinguish them from variables. The possible
+-- constraint of the context is not propagated to the expression, but
+-- a constraint check may have to be performed on the whole.
+e := resolve2(expn(2),base_type(context_type));
+return [ ["()",eval_static(apply_constraint(e, context_type))], 
+						     context_type] ;   
+
+end resolve2_paren;
+--S+ resolve2_dereference
+procedure resolve2_dereference(expn,context_type);
+
+-- For a dereference operation, find the access type whose designated
+-- type fits the context.
+[-, ac_expression] := expn ;
+    
+a_types := {t in ac_expression(2) | is_access(t) and
+                compatible_types(context_type, ST(t).designated_type)} ; 
+if #a_types /= 1 then
+    ac_expression   := remove_conversions1(ac_expression) ;    
+    ac_expression(2):= {ST(t).designated_type: t in ac_expression(2)
+                            | is_access(t) } ;
+    if #(a_types := ac_expression(2) * a_types) /= 1 then
+        type_error({"@"}, t, #a_types) ;
+        return [[],"any"] ;
+    end if;
+else
+        access_type := arb a_types ;
+end if;
+-- It is always illegal to dereference an out parameter.
+saved_out_context := out_context ;
+out_context := false ;
+expn2 := [ "@", resolve2(ac_expression, access_type) ] ;
+out_context := saved_out_context ;
+return [expn2,ST(access_type).designated_type ];
+
+end resolve2_dereference;
+
+--S+ Resolve2 Allocator
+procedure resolve2_allocator(expn,context_type) ;
+--SEM_TRACE_PROC_ENTRY(3, 'Resolve2_allocator');
+--SEM_TRACE(3,'expn: '+ str expn +' context_type: '+ str context_type);
+
+-- For an allocator, we obtain the type of the access object
+-- by dereferencing the access type. The final expression however
+-- gives the access type, together with the validated access object.
+
+[-, expn1, alloc_type] := expn ;
+
+if is_allocator_type(context_type) then
+   -- pathological case: the context of an allocator is not sufficient
+   -- to determine its type. This is valid only if a single access type
+   -- is in scope.
+   context_type := single_access_type(alloc_type); 
+end if;
+if not is_access(context_type) then
+    errmsg("Context of allocator ", " must be an access type",
+                               "4.8, 3.8") ;
+    return [[], "any"] ;
+end if;
+
+desig_type := ST(context_type).designated_type ;
+
+if not compatible_types(desig_type, alloc_type) then 
+    errmsg("Invalid type for allocator. Expect ", 
+            full_type_name(desig_type),"3.8, 4.8") ;
+    return [[], "any"] ;
+end if;
+
+-- If the designated type is itself an access type, it may carry
+-- a constraint that must be propagated to the created object, which
+-- may itself be an allocator (see C48009i.ada).
+-- Constraints in simpler cases are applied below.
+
+if is_access(desig_type) 
+     and not can_constrain(ST(desig_type).designated_type) then
+    obj_type := desig_type ;
+else
+    obj_type := alloc_type ;
+end if; 
+
+
+if expn1 /= [] then 
+    created_object := res2_check(expn1, obj_type) ;
+
+   -- The context may be an unconstrained array type, whose
+   -- index type is nevertheless bounded. When the allocator is
+   -- initialized with an aggregate, the bounds of the aggregate 
+   -- must be compatible with that index type. 
+
+    if is_array(desig_type) and can_constrain(desig_type)
+    then
+        created_object := 
+             ["qual_sub",index_types(desig_type),created_object] ;
+
+    else
+        -- if the designated type is constrained, apply its
+        -- constraint to the created object.
+        if (not can_constrain(desig_type) 
+             and desig_type /= alloc_type) then  
+            may_others := full_others ;
+            full_others := true ;
+            created_object := 
+                    apply_constraint(created_object,desig_type) ;
+            full_others := may_others ;
+        end if;
+    end if;
+else
+        created_object := [] ;
+end if;
+
+-- The subtype indication for the type of the created object appears
+-- directly in the allocator, and not as an anoymous subtype, as it
+-- must be elaborated with the allocator.
+
+type_expr := subtype_expression(alloc_type) ;
+
+-- If the designated type is an unconstrained record type, the allocator is
+-- constrained wih the default values for the discriminants. (4.8(5).
+-- We indicate this by constructing an explicit discriminant constraint for the
+-- designated type, using those default values.
+
+if created_object = [] and is_record(alloc_type) and can_constrain(alloc_type)
+then
+   type_expr := ["subtype", alloc_type, 
+     ["discr", {[d, ST(d).default_expr] : d in discriminant_list(alloc_type)}]] ;
+end if; 
+return [["new", context_type, type_expr, created_object] ,
+                context_type ];            -- No further constraints 
+                
+end resolve2_allocator;
+--S+ resolve2_attributes 
+procedure resolve2_attributes(expn,context_type,types) ;
+--SEM_TRACE_PROC_ENTRY(3, 'Resolve2_attributes');
+--SEM_TRACE3(3, expn,context_type,types) ;
+-- For an attribute, we complete the type checking of the right
+-- argument, and if it must be a static expression, we perform
+-- the appropriate check and extract the attribute.
+
+[-, attribute, arg11, arg21] := expn ;
+
+-- The type of the right argument is determined by the attribute,
+-- and has already been evaluated in the case of array attributes.
+
+[arg1, types1] := arg11 ;
+[arg2, types2] := arg21 ;  
+type1 := arb types1 ;
+
+case attribute 
+    
+    when "PRED", "SUCC", "POS", "IMAGE" =>    
+        t2 := base_type(type1) ;
+
+    when "VALUE" =>   
+        t2 := "STRING" ;
+
+    when "VAL" => 
+        types2 := {t in types2 | compatible_types(t, "integer_type")} ;
+        if types2 = {} then
+            errmsg("Second argument of VAL must be ",
+                    "of some integer type", "Annex A") ;
+            return [[], "any"] ;
+        elseif # types2 = 1 then 
+            t2 := arb types2 ;
+        elseif "universal_integer" in types2 then
+            t2 := "universal_integer" ;
+        else
+            errmsg("ambiguous argument for attribute VAL","","Annex A");
+            return [[], "any"] ;
+        end if;
+
+    otherwise =>
+        t2 := "INTEGER" ;
+
+end case;
+    
+arg2 := if is_value(arg21)  then arg21 
+                            else resolve2(arg21, t2) 
+        end if;
+if t2 = "universal_integer" then            -- possible for VAL
+        arg2 := specialize(arg2, "INTEGER") ;
+end if;
+
+-- All attributes, except those that are functions, can be applied
+-- to an out parameter, because they do not require reading of the
+-- object, or read  only its bounds. On the other hand, if the pre-
+-- fix is an access type, it cannot be an an out parameter (4.1(4)).
+
+saved_out_c := out_context ;           -- Save current setting
+out_context := attribute notin base_attributes 
+                             and not is_access(type1) ;
+
+if (is_identifier(arg1) and is_type(arg1)) or
+   attribute = "COUNT" then
+   -- entry name is fully resolved in first pass.
+    expn2 := ["'", attribute, arg1, arg2] ;
+
+elseif attribute = "ADDRESS" then
+    if is_overloaded(arg1) then         -- subprogram or entry
+        arg1 := arb arg1;
+    elseif not is_identifier(arg1) then -- subcomponent of entity
+        arg1 := resolve2(arg11, type1) ;    
+    end if;                -- else declared entity
+    expn2 := ["'", attribute, arg1, arg2] ;
+else 
+    -- Complete resolution of the prefix.
+    expn2 := ["'", attribute, resolve2(arg11, type1), arg2] ;
+end if;
+    out_context := saved_out_c ;      -- restore       
+
+if ST(attribute).type_of in univ_types then
+     if is_static_subtype(type1) then
+     expn2 := eval_static(expn2) ;
+     end if;
+    -- Specialize  evaluation of attribute if context is not universal.
+    if is_value(expn2) then
+        expn2 := specialize(expn2, context_type) ;
+    elseif ST(attribute).type_of = "universal_real" 
+            and context_type /= "universal_real" then 
+        expn2 := ["convert", "LONG_FLOAT", context_type, eval_static(expn2)] ;
+    -- Integers have the same representation as compile-time and run-time:
+    -- no conversion is needed for Ada/Ed. Other implementations may need
+    -- to indicate explicit conversions to integer types as well.
+    end if;
+end if;
+
+[-,-,arg1] := expn2 ;
+if attribute in ["FIRST_BIT", "LAST_BIT", "POSITION"] 
+   and not is_component(arg1)
+then 
+    errmsg("argument of " + attribute, " must be record component",
+                            "Annex A");
+elseif attribute = "CONSTRAINED" and arg1(1) = "call"
+then
+    errmsg("argument of " + attribute, " must be an object", "Annex A");
+end if;
+
+if is_access(type1) and attribute in ["CALLABLE", "TERMINATED"] then
+	expn2 := ["'", attribute, ["@", arg1], arg2 ] ;
+end if;
+
+return [expn2,arb types] ;
+end resolve2_attributes;
+--S+ resolve2_conversions(expn,context_type) ;
+procedure resolve2_conversions(expn,context_type) ;
+--SEM_TRACE_PROC_ENTRY(3, 'Resolve2_Conversions');
+--SEM_TRACE(4, 'expn '+ str expn);
+--SEM_TRACE(4, 'context_type '+ str context_type);
+
+    
+[-, target_type, expn1] := expn ;
+types := expn1(2) ;
+
+-- Apply the preference rule to choose a universal meaning for
+-- the expression in case of overloading of operators.
+    
+if #types > 1 and #(tu := types * univ_types) = 1 
+then
+    types := tu ;
+end if;
+-- Verify that original expression is unambiguous.
+if #types /= 1 then
+    errmsg("ambiguous expression for conversion","","4.6") ;
+    return [[],"any"];
+else
+    t := arb types ;
+
+    if t = "universal_fixed" then   
+	-- fixed point multiplication or division. Mark the expression
+	-- with the target type, for use when expression is evaluated, and
+	-- remove the conversion. 
+    	expn1(1)(4) := target_type ;
+        expn2 := resolve2(expn1, t) ;
+    
+    elseif is_numeric_type(t) and is_numeric_type(target_type) 
+            -- conversions between any two numeric types are allowed.
+    then expn2 := 
+            eval_static(["convert", t, target_type, resolve2(expn1,t)]);
+
+    elseif ST(target_type).root_type = ST(t).root_type 
+        -- conversions among types derived from a common ancestor. 
+    then
+        expn2 := ["convert", t, target_type, resolve2(expn1, t)] ;
+       
+    elseif is_array(target_type) 
+        -- Conversions between array types  are allowed, if types of
+        -- indices are convertible and component types are the same.
+    then
+        if is_array(t) and
+            no_dimensions(t) = no_dimensions(target_type) and
+            (forall i in [1..no_dimensions(t)] |
+               ST(index_types(target_type)(i)).root_type = 
+                     ST(index_types(t)(i)).root_type) and
+            base_type(component_type(target_type)) =
+                     base_type(component_type(t)) 
+        then
+            if is_access(component_type(t)) then
+               c1 := ST(component_type(t)).designated_type ;
+               c2 := ST(component_type(target_type)).designated_type ;
+            else
+               c1 := component_type(t) ;
+               c2 := component_type(target_type) ;
+            end if;
+            if can_constrain(c1) /= can_constrain(c2) then
+            errmsg("component types in array conversion must be both ",
+		"constrained or unconstrained", "4.6(11)");
+            end if;
+            expn2 := ["convert", t, target_type, resolve2(expn1,t)];
+        else
+            errmsg("Invalid array conversion","","4.6") ;
+            return [[], "any"] ;
+        end if;
+
+    else
+        errmsg("conversion not possible to type ",
+                original_name(target_type), "4.6") ;
+    end if;
+    type2 := target_type ;
+end if;
+
+return [apply_constraint(expn2, target_type), type2] ;         
+end resolve2_conversions;
+
+--S+ resolve2_qualify    
+procedure resolve2_qualify(expn, context_type) ;
+--SEM_TRACE_PROC_ENTRY3, 'Resolve2_Qualify');
+--SEM_TRACE(4, 'expn '+ str expn);
+--SEM_TRACE(4, 'context_type '+ str context_type);
+
+[-, to_type, expn1] := expn ;
+-- No sliding for aggregates here.
+may_others := full_others ;
+full_others := true ;
+expn2 := eval_static(apply_constraint(resolve2(expn1, to_type), to_type));
+full_others := may_others ;                 
+
+return [["qualify", expn2],to_type] ;
+    
+end resolve2_qualify;
+--S+ resolve2_range
+procedure resolve2_range(expn,context_type,types) ;
+--SEM_TRACE_PROC_ENTRY(3, 'Resolve2_Range');
+--SEM_TRACE(3, 'expn '+ str expn);
+--SEM_TRACE(3, 'context_type '+ str context_type);
+--SEM_TRACE(3, 'types '+ str types);
+-- For a subtype, complete the evaluation of the bounds.
+-- If the bounds are literal, the type may be a universal one.
+-- Replace it now by the corresponding non-literal type.
+ 
+[-,type_mark, [kind, low1, high1, precision1, precision2]] := expn ;
+
+-- If the bounds are overloaded, the subtype itself may be an
+-- overloaded expression. Extract the type(s) that are compatible
+-- with context .
+
+types := {t:t in types | compatible_types(context_type, t)} ;
+
+-- Make sure that only one type is possible. 
+if #types > 1 then 
+   types -:= univ_types ; 
+end if;      
+
+if #types /= 1 then
+    type_error({"subtype"}, context_type, #types) ;
+    return [[], "any"] ;
+else 
+    b_type := base_type(arb types) ;        
+end if;
+-- In the case of a range in a membership op, the type may be a real
+-- one, in which case the precision is inherited from the context .
+
+if kind = "range" then
+    case ST(context_type).root_type 
+
+        when "FLOAT", "LONG_FLOAT", "universal_real" => 
+            kind := "digits" ;
+            precision1 := ST(context_type).signature(4) ;
+            precision2 := ST(context_type).signature(5) ;
+
+
+        when "$FIXED" =>  
+            kind := "delta" ;
+            precision1 := ST(context_type).signature(4) ;
+            precision2 := ST(context_type).signature(5) ;
+        otherwise =>
+            null ;              -- Discrete type.
+    end case;
+end if;
+
+if type_mark /= [] then
+    b_type := type_mark;
+else case(kind) 
+
+    when "range" =>  
+        if b_type = "universal_integer" then
+            b_type := "INTEGER";
+            [l1, -] := low1 ;
+            [h1, -] := high1 ;
+            if context_type = "universal_integer" and
+                -- I.e. index constraint or iteration.
+                ((is_tuple(l1) and is_overloaded(l1(1))) or
+                 (is_tuple(h1) and is_overloaded(h1(1)))) then
+                -- Not a literal, named number or attribute.
+                errmsg("Invalid universal expression ",
+                     "in discrete range", "3.6.1") ;
+            end if;
+        end if;
+
+    when "delta" =>   b_type := context_type ;
+
+    when "digits" =>  if b_type = "universal_real" then
+                    if context_type = b_type then
+ 			-- pathological case: 1.0 in 0.0 .. 10.0 (ACV follies)
+ 		  	-- resolve to the largest available precision.
+	                b_type := "LONG_FLOAT" ;
+  		   else
+ 			b_type := context_type; 
+ 		   end if;
+                else  null ;
+		end if;
+
+    end case;
+end if;
+-- Finally, for a range the type of the construct is the type of the bounds.
+    
+if type_mark = [] then 
+   type_mark := b_type ; 
+end if;
+        
+low := eval_static(resolve2(low1, b_type)) ;
+high:= eval_static(resolve2(high1,b_type)) ;
+
+if is_discrete_type(b_type) and b_type /= "any" then
+        low := check_bounds_in_range(low,high,b_type);
+end if;
+     
+    -- For a subtype, the check for an empty range preceeds the
+    -- check for the bounds being individually in range. Therefore
+    -- we suppress range check on the upper bound expression.
+     
+    --$ if low(1) = 'qual_range' then low := low(3) ; end if ;
+
+    if high(1) = "qual_range" then 
+       high := high(3); 
+    end if;
+     
+    -- An index constraint may involve a discriminant name.
+    -- Verify that if a discriminant appears, it is by itself, and not as
+    -- part of a larger expression. (RM3.7.1(6)). 
+    check_discriminant(low) ;
+    check_discriminant(high);
+    
+    return [ ["subtype", type_mark, 
+        [kind, low, high, precision1, precision2]],b_type] ;
+end resolve2_range;
+--S+ proc resolve2_call_or_index
+procedure resolve2_call_or_index(expn,context_type) ;
+--SEM_TRACE_PROC_ENTRY(3, 'Resolve2_call_or_index');
+--SEM_TRACE(3, 'expn: '+ str expn + 'context_type: '+ str context_type);
+
+-- Find the tree which has a type compatible with the context, and
+-- resolve it. 
+[-, trees1] := expn ;
+[call_node, index_node] := trees1 ;             
+--SEM_TRACE(3,'call node: '+ str call_node) ;
+--SEM_TRACE(3,'index node: '+ str index_node) ;
+
+    if exists t in call_node(2) | compatible_types(context_type, t)
+    then
+        valid_tree := call_node ;
+
+        if exists t2 in index_node(2) | 
+                compatible_types(context_type,t2)
+        then
+            call_node := remove_conversions(call_node) ;
+            -- Remove the conversions on the index list and try again
+            --[expn1,type1] := index_node ;
+            --index_list := expn1(3)(1) ;
+            --expn1(3)(1) := remove_conversions(index_list) ;
+            --index_node := [expn1,type1] ;
+            if exists t in call_node(2) |
+                    compatible_types(context_type, t) 
+            then 
+                valid_tree := call_node ;
+                if exists t2 in index_node(2) | 
+                        compatible_types(context_type,t2)
+                then 
+                    errmsg("Invalid or ambiguous call","","") ;
+                    return [];
+                else null;
+                end if;
+            else
+                valid_tree := index_node ;
+            end if;
+        else null;
+        end if;
+    else
+        valid_tree := index_node ;
+    end if;
+--   SEM_TRACE(3,'valid tree: ' + str valid_tree) ;
+    return resolve2(valid_tree, context_type) ;
+end resolve2_call_or_index;
+
+--S+ check_bounds_in_range
+procedure check_bounds_in_range(low,high,b_type);
+
+-- Check that the bounds are in range
+--if b_type = 'any' then  return low ;   $ Error already
+[-,lbd_range,ubd_range] := ST(b_type).signature ;
+if lbd_range(1) = "qual_range" then 
+    lbd_range := lbd_range(3); 
+end if;
+if ubd_range(1) = "qual_range" then 
+   ubd_range := ubd_range(3); 
+end if;
+
+if (is_value(low) and is_value(high) and 
+    is_value(lbd_range) and is_value(ubd_range)) then
+    low_val := low(2);
+    high_val := high(2);
+    lbd_val := lbd_range(2);
+    ubd_val := ubd_range(2);
+    if ((lbd_val>ubd_val and low_val<=high_val)
+           or ((low_val<=high_val) and
+                (low_val <lbd_val or low_val >ubd_val
+              or high_val>ubd_val or high_val<lbd_val))) then
+            return constraint_error();
+    else
+        return low ;
+    end if;
+else  return low ;
+end if;
+end check_bounds_in_range;
+procedure sign(x);
+case
+  when is_integer(x) =>
+     case
+        when (x<0) => return -1;
+        when (x=0) => return 0;
+        when (x>0) => return 1;
+     end case;
+  when is_real(x) =>
+     case of
+        when (x<0.0) => return -1;
+        when (x=0.0) => return 0;
+        when (x>0.0) => return 1;
+     end case;
+  otherwise =>
+     print("error in sign");
+     return 0;
+end case;
+end sign;
+end adasem4;

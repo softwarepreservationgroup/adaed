@@ -1,0 +1,26 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem5_.stl,v 1.1 90/12/05 16:16:46 ada Exp $
+--
+package adasem5;
+   procedure assign_statement(name, expn) ;
+   procedure has_dynamic_constraint(subtype) ;
+   procedure replace_others(e2, e1, t1, n) ;
+   procedure treematch(tree, pat) ;
+   procedure case_statement(expn, case_nodes) ;
+   procedure process_case(exptype, case_list);
+   procedure is_static_case_expr(cexp) ;
+   procedure loop_statement(iterat, stmts) ;
+   procedure iter_var(id, disc_range) ;
+   procedure block(decls,stats, handler) ;
+   procedure new_block(id) ;
+   procedure end_function(decls, stats, handler) ;
+   procedure has_return(stats) ;
+   procedure exit_statement(id,cond);
+   procedure return_statement(exp1);
+   procedure label_decl(id_list) ;
+   procedure lab_init ;
+   procedure lab_end ;
+   procedure goto_statement(id) ;
+   procedure is_variable(xpr) ;
+   procedure is_static_subtype(subtype) ;
+end adasem5;

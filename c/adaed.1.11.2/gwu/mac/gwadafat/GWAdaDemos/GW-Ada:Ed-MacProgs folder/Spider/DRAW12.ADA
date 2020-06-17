@@ -1,0 +1,1 @@
+WITH Spider; USE Spider;PROCEDURE Drawing12 ISPROCEDURE Walk ISBEGINWHILE NOT AtWall LOOP     Step;END LOOP;END Walk;BEGINStart;Red;Walk;Turn;Walk;Turn;Walk;Turn;Walk;Turn;Quit;END Drawing12;

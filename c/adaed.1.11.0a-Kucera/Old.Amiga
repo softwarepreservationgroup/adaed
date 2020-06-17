@@ -1,0 +1,40 @@
+8 Mar 92
+
+INSTALLATION
+------------
+
+1.  You can copy the "Ada" script file to C: or wherever you wish.  It
+simply makes the ADA: assignment which is referenced by the compiler
+to find Ada:lib.  You should modify the script to point to wherever
+you install the binaries.
+
+2. After executing "Ada" you should be able to "cd ada:examples" and
+type "hello.script" which should compile and execute.  Several examples
+are included, all having ".script" files to compile and execute them.
+
+
+MISCELLANEOUS NOTES
+-------------------
+
+1.  Only NUMERIC constants supported appear to be FLOAT and INTEGER.
+    This shows up as "unsupported kind n" where n=
+CONST_OM     0
+CONST_INT    1
+CONST_REAL   2
+CONST_STR    3
+CONST_RAT    4
+CONST_CONSTRAINT_ERRO 5
+CONST_UINT   6
+CONST_FIXED  7
+
+2.  PRAGMA INTERFACE does not work yet.
+
+3.  A fairly consistent error shows up as "root arg of null".  Don't
+know what it means, but it's consistent across different platforms.
+There's a file "test2.ada" in the Examples which demonstrates it.
+
+4.  You can probably slide by with 1.5Meg of memory.  Some of the
+examples may require 2Meg.
+
+5.  Ada:lib/predef.ada was modified slightly to include "AMIGA"
+system name.

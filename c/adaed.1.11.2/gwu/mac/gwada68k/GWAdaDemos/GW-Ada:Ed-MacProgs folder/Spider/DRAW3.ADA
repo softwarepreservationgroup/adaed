@@ -1,0 +1,1 @@
+WITH Spider; Use Spider;PROCEDURE Drawing3 IS BEGIN Reset; Step;Step;Step;Step;Step;Step;Step;Step;Step;Step;Step;Step;Step;Quit;END Drawing3;

@@ -1,0 +1,931 @@
+--Header: /cs.a/ada/ada/src/hll/adasem6.stl,v 1.38 90/06/18 13:48:09 banner Exp $
+package body adasem6;
+
+use globals;
+use adasem1;
+use adasem2;
+use adasem3;
+use adasem4;
+use adasem5;
+use adasem7;
+use adasem8;
+use adasem9;
+use adasem10;
+use adasem11;
+use adasem12;
+use adasem13;
+use evalstat;
+use adalib;
+use adaio;
+use adaarith;
+
+--T+ 6. Subprograms 
+--S+ 6.1 Subprogram_Declaration
+procedure subprogram_declaration(node) ;
+sem_trace_proc_entry(3, "Subprogram_Declaration");
+
+[-, specs_node] := ast(node);
+[-, id_node, -] := ast(specs_node);
+new_compunit("subprog spec", adasem(id_node)) ;
+
+-- It is necessary to call new_compunit before processing the subprogram 
+-- specification since new_compunit will cause the context_clause to be 
+-- processed making the appropriate units visible in case they are used 
+-- within an expanded name appearing in the formals.
+--
+
+[nat, id, formals, ret] := adasem(specs_node);
+-- Process formals and check for overloading.
+
+name := new_subprogram([nat + "_spec", id, formals, ret]) ;	
+
+save_subprog_info(name) ;
+
+if id = "=" and #ST(name).signature = 2 then
+    -- For an explicitly declared equality (i.e. not a renaming and
+    -- not a derivation) the argument type must be limited. Other tests
+    -- on '=' are performed below for all subprogram specifications.
+
+    arg_typ := ST(ST(name).signature(1)).type_of ;
+    if not is_limited_type(arg_typ) then
+        errmsg("= can only be defined for limited types","","6.7");
+    end if;
+end if;
+
+sem_trace_proc_exit(3, "Subprogram_Declaration");
+return [[nat, name, build_signature(name)]] ;
+end subprogram_declaration;
+
+--S+Subprogram_specification
+procedure subprogram_specification(node) ;
+sem_trace_proc_entry(3, "Subprogram_Specification");
+
+[kind, id_node, formal_part, type_mark] := ast(node);
+id := adasem(id_node);
+formals := get_formals(formal_part, id) ;			
+
+if kind = "procedure" then 
+    return_type := "none" ;
+else 
+    return_type :=  find_old(adasem(type_mark)) ;
+    if not is_type(return_type) then 
+	errmsg("result subtype of function must be a type","","6.1");
+    end if;
+end if;
+sem_trace_proc_exit(3, "Subprogram_Specification");
+return [kind, id, formals, return_type] ;
+end subprogram_specification;
+--S+ Check Spec
+procedure new_subprogram(specs);
+
+sem_trace_proc_entry(3, "New_Subprogram");
+sem_trace(4, "specs: "+ str(specs) ) ;
+
+-- If the subprogram name is an operator designator, 
+-- verify that it has the proper type and number of arguments. 
+
+[kind, proc_id, formals, ret] := specs ;		-- Unpack specs.
+
+check_out_parameters(formals) ;
+check_new_op(proc_id,formals,ret);
+if proc_id = "=" then
+   -- Introduce implicitly defined equality.
+   chain_overloads("/=", [kind, ret, formals]) ;
+end if;
+sem_trace_proc_exit(3, "New_Subprogram");
+return chain_overloads(proc_id, [kind, ret, formals]) ;
+
+end new_subprogram;
+
+--H+ Check New Op
+procedure check_new_op(proc_id,formals,ret);
+-- Verify that operators are defined with the correct number of formals.
+sem_trace_proc_entry(4, "Check_New_Op");
+
+        if proc_id notin op_designators then 
+               sem_trace_proc_exit(4, "Check_New_Op");
+               return;
+        end if;
+
+        if proc_id in {"+", "-"} and #formals = 1 then    
+	   null ;				-- Unary operators.
+        elseif 
+	   (if proc_id in {"not", "abs"} then #formals = 1
+					 else #formals = 2 end if) 
+	then 
+	   null ;
+        else
+           errmsg("Incorrect no. of arguments for operator ", proc_id, "6.7") ;
+        end if;
+
+        if exists [-,-,-,initv] in formals | initv /= [] then
+	   errmsg("Initializations not allowed ", " for operators", "6.7") ;
+	elseif proc_id = "/=" then
+	   errmsg(" \"/=\"  cannot be given an explicit definition", "", "6.7");
+	end if;
+
+        -- Apply the special checks on redefinitions of equality.
+        if proc_id = "=" then
+            [-,-,typ1] := formals(1) ;		-- type of first formal
+            if # formals /= 2 
+            or typ1 /= formals(2)(3) 
+            or ret /= "BOOLEAN" then
+	        errmsg("Invalid argument profile for \"=\" ","","6.7") ;
+            end if;
+        end if;
+sem_trace_proc_exit(4, "Check_New_Op");
+end check_new_op;
+
+--S+ Subprogram_Body
+procedure subprogram_body(node) ;
+sem_trace_proc_entry(3, "Subprogram_Body");
+
+[-, specs_node, decl_node, stats_node, except_node] := ast(node) ;
+
+    [-, id_node, -, -] := ast(specs_node) ;
+    id := adasem(id_node) ;
+
+    if is_comp_unit() then
+
+        new_compunit("subprog", id) ;
+
+    -- If the specification of the unit was itself a compilation unit, we
+    -- will verify  that the  two specs  are  conforming.  If this is the
+    -- body  to a generic comp. unit,  will have to access and update the
+    -- spec. In both cases see if the spec. is available.
+
+	spec_name := ["subprog spec", id];	-- Already retrieved
+	if unit_decl(spec_name) /= om then	
+
+	    -- Unpack declarations and install symbol table of unit.
+	    [unname, s_info, decmap] := unit_decl(spec_name);
+	    declared("STANDARD#0")(id) := unname;   -- Install unit name
+	    declared(unname) := decmap ;	    
+
+	    for [unam, entry] in s_info loop 
+		ST(unam) := entry;
+	    end loop;
+	end if;
+    end if;
+   lab_init() ;
+    prog_name := declared(current_scope)(id);
+    if prog_name /= om 
+    and ST(prog_name).nature in 
+	["generic_procedure_spec","generic_function_spec"]
+    then
+	return trace_and_return(3, "Subprogram_Body", 
+                  generic_subprogram_body(prog_name, node));
+
+    elseif prog_name /= om and ST(prog_name).nature in
+        ["generic_procedure", "generic_function"] 
+    then
+        -- Redefinition of body of generic unit.
+        ST(prog_name).nature +:= "_spec" ;
+        return  trace_and_return(3, "Subprogram_Body", 
+                generic_subprogram_body(prog_name, node));
+    else
+	-- (Re)process subprogram specification.
+	prog_name := new_subprogram(adasem(specs_node)) ;
+
+        -- Check for illegal subprogram name or redeclaration  and if so
+        -- return dummy aixcode for subprogram.
+ 
+        if (ST(prog_name).nature /= "procedure" and
+            ST(prog_name).nature /= "function") 
+           then 
+              sem_trace_proc_exit(3, "Subprogram_Body");
+              return  [["procedure", prog_name, [], []]];
+        end if;
+	if  is_comp_unit()
+	 and 
+	   (exists other in ST(declared(current_scope)(id)).overloads 
+            | other /= prog_name and ST(other).nature /= "literal")
+	    -- because TRUE and FALSE can be overloaded...
+	then
+	    errmsg("library units cannot be overloaded","","10.1(10)") ;
+	end if;
+    end if;
+
+    previous_repr_info := [];
+    if original_name(prog_name) /= unit_name(2) then
+       -- All types in the current declarative part must be forced before
+       -- entering a nested scope.
+       force_all_types() ;
+       previous_repr_info := collect_reprs() ;
+    end if;
+    newscope(prog_name) ;
+    name_prefix +:= id + "." ;	       -- For names of local objects.
+    decl_info := adasem(decl_node);
+    force_all_types() ;
+    decl_info +:= collect_reprs() ;
+
+    sub_body := block(decl_info, adasem(stats_node), adasem(except_node));
+
+    lab_end() ;			-- Validate goto statements in subprogam.
+    popscope() ;		-- And exit.
+    save_subprog_info(prog_name) ;
+
+    aix := previous_repr_info + [[ST(prog_name).nature, prog_name, 
+				  build_signature(prog_name), sub_body]];
+    -- If the subprogram is named '=', we emit as well the body for the
+    -- corresponding  definition of /= . The  specification  for it has
+    -- been introduced in the same scope.
+
+    if original_name(prog_name) = "=" then
+        aix with:= new_not_equals(prog_name) ;
+    end if;
+    sem_trace_proc_exit(3, "Subprogram_Body");
+    return  aix;
+end subprogram_body;
+
+--S+ new_not_equals
+procedure new_not_equals(prog_name) ;
+
+-- Build  the  body of an  inequality  operator corresponding to a new 
+-- definition of the equality operator.
+
+sem_trace_proc_entry(3, "New_Not_Equals");
+if #ST(prog_name).signature /= 2 then 
+   return [] ; 
+end if; 
+
+maybe := 
+  (exists nam in ST(declared(ST(prog_name).scope_of)("/=")).overloads ? {} |
+         same_signature(nam, prog_name));
+
+if not maybe then 
+   return [] ;		-- error in declaration of '='
+end if;     
+
+[x1,x2] := ST(nam).signature ;
+t := ST(x1).type_of ;
+arg_list := [["bind", t, t, x1], ["bind", t, t, x2]] ;
+ST(nam).nature := "function" ;
+sem_trace_proc_exit(3, "New_Not_Equals");
+return ["function", nam, build_signature(nam),
+	 [ [], 
+           [["return", nam, 0, ["not",
+		["call",ST(prog_name).alias ? prog_name, arg_list]]]],
+           [] ]] ;
+end new_not_equals;
+
+--S+ build_signature
+procedure build_signature(prog_name) ;
+
+-- The default values for in parameters are not needed in the interpreter
+-- because they are inserted where needed in calls. We only keep names,
+-- modes and types in the signature.
+
+if not is_tuple(ST(prog_name).signature) then 
+   return []; 		-- error in previous declaration
+else
+   return [[f, ST(f).nature, ST(f).type_of] : f in ST(prog_name).signature 
+					      | is_identifier(f)];
+end if;
+
+end build_signature;
+--S+ get_formals
+procedure get_formals(formal_part, proc_id) ;
+
+sem_trace_proc_entry(3, "Get_Formals");
+formals := [] ;
+decl_tree := [] ;
+-- In order to prevent the usage of a formal parameter in the same formal
+-- part, a new scope is introduced, in which the formals are defined. They
+-- hide corresponding identifiers, and cannot be used in expressions.
+scope := proc_id + "-formals" + newat_str();
+ST(scope) := [];
+ST(scope).nature := "void";
+ST(scope).scope_of := current_scope ;
+newscope(scope) ;
+save_node := current_node ;
+for f_node in formal_part loop 
+    current_node := f_node ;			-- for error reporting.
+    [id_list, tree_fmode, type_id, opt_init] := adasem(f_node) ;
+    invisible_designator(proc_id, opt_init);
+    invisible_designator(proc_id, type_id);
+    for id in id_list loop  
+        -- introduce formal parameter to prevent premature usage. 
+        f_name := named_atom(id) ;
+        declared(scope)(id) := f_name ;
+        ST(f_name) := ["void", "none", [], "", current_scope, om] ;
+    end loop;
+    -- A missing mode indication corresponding to an 'in' parameter.
+    -- but save the original mode before transformation in formal_decl_tree
+    -- for conformance checks (Note that a default 'in' and explicit 'in'
+    -- do not conform.
+
+    if tree_fmode = "" then 
+	fmode := "in" ; 
+    else 
+	fmode := tree_fmode;
+    end if;
+
+    type_mark := find_old(type_id) ;
+    if not is_type(type_mark) then
+	errmsg("expect type mark for formal parameter","","6.1") ;
+        type_mark := "any" ;
+    elseif ST(type_mark).type_of = "incomplete" then
+        -- Formal parameters cannot have a incomplete type. 
+        errmsg("invalid use of incomplete_type ", type_id, "3.8.1") ;
+    end if;
+
+    if opt_init /= [] and fmode /= "in" then
+       errmsg("default initialization only allowed for IN parameters","","6.1");
+       opt_init := [] ;
+    end if;
+    init_val  := if opt_init = [] then [] 
+		 else check_type(type_mark, opt_init) end if;
+
+
+    formals +:= [[id, fmode, type_mark, init_val]: id in id_list] ;
+
+    init_norm := normalize(type_mark, opt_init) ;	-- sans folding
+    decl_tree with:= 
+       [id_list, tree_fmode, type_id, opt_init, type_mark, init_norm] ;
+end loop;
+popscope();
+declared(scope) := om ;
+current_node := save_node ;
+-- Save original tree to verify conformance with specs of  eventual body.
+if #formals > 0 then 
+   formals.formal_decl_tree(5) := decl_tree; 
+end if;
+sem_trace_proc_exit(3, "Get_Formals");
+return formals ;
+end get_formals;
+
+--S+ invisible_designator
+procedure invisible_designator(id, expn) ;
+-- The designator of a subprogram is not visible within its specification.
+if id = expn then 
+   errmsg("designator not visible in its specification:", id, "8.3(16)") ;
+elseif  (is_tuple(expn) and expn(1) /= "string_literal")
+     or 
+	is_set(expn) 
+     then
+        for e in expn loop  invisible_designator(id, e) ; end loop;
+end if;
+
+end invisible_designator;
+--S+ process_formals 
+procedure process_formals(scope, form_list) ;
+sem_trace_proc_entry(3, "Process_Formals");
+ 
+-- Complete processing of formal parameters in subprogram or entry declaration. 
+ 
+new_form_list := [] ;
+-- Initialize -declared- map for new scope.
+newscope(scope) ;
+ 
+for [form_id, in_out, type_mark, opt_init] in form_list loop 
+    
+    if declared(scope)(form_id) = om then
+	form_name := find_new(form_id);
+        ST(form_name).nature     := in_out ;
+        ST(form_name).type_of    := type_mark ;
+        ST(form_name).default_expr := opt_init ;
+	ST(form_name).root_type := type_mark;
+    else
+	errmsg("Duplicate formal parameter: ", form_id, "6.1") ;
+        continue;
+    end if;
+ 
+
+    -- Assignable parameters must not appear in functions.
+    if in_out /= "in" and ST(scope).nature = "function" then
+	errmsg(in_out, " parameter not allowed for functions","6.5") ;
+    end if;
+
+    new_form_list with:= form_name ;
+end loop;
+popscope() ;
+if #form_list > 0 then 
+    -- Preserve the declaration tree for conformance checks later on.
+    -- It is attached to the unused overloads field of the first formal.
+    ST(new_form_list(1)).overloads := form_list.formal_decl_tree(5);
+end if;
+sem_trace_proc_exit(3, "Process_Formals");
+return new_form_list ;
+end process_formals;
+
+--S+ reprocess_formals
+procedure reprocess_formals(scope, sig) ;
+
+sem_trace_proc_entry(3, "Reprocess_Formals");
+
+old_sig  := ST(scope).signature ;
+old_decl := if #old_sig = 0 then [] else ST(old_sig (1)).overloads end if;
+new_decl := if #sig = 0 then [] else sig.formal_decl_tree(5) end if;
+
+sem_trace(3,"tree1: " + str(old_decl) ) ;
+sem_trace(3,"tree2: " + str(new_decl) ) ;
+
+if #old_decl /= #new_decl then 
+    conformance_error ;  
+    return ;
+end if;
+
+for i in [1..#old_decl] loop 
+   [id_list,  fmode,  type_id,  opt_init,  type_mark,  init_val] := new_decl(i);
+   [oid_list, ofmode, otype_id, oopt_init, otype_mark, oinit_val]:= old_decl(i);
+
+    if id_list /= oid_list       or fmode /= ofmode
+      or type_mark /= otype_mark or not conform(type_id, otype_id) 
+      or init_val /= oinit_val   or not conform(opt_init, oopt_init)
+    then
+	conformance_error ;    
+        return ;			    -- No need for more than one
+    else 
+    -- Save the formal declaration tree of the body's formal part so that
+    -- we can check conformance with the stub properly.
+	if #old_sig /= 0  then
+           ST(old_sig(1)).overloads := new_decl;
+        end if;
+    end if;
+
+end loop;
+sem_trace_proc_exit(3, "Reprocess_Formals");
+end reprocess_formals;
+
+--S+ normalize
+procedure normalize(typ, opt_init) ;
+
+-- Transform the default expression of a discriminant or a formal para-
+-- meter, into a standard form for conformance checking. Name resolution
+-- by itself is not sufficient, because of the possible presence of over-
+-- loaded operators. Full type-checking with constant-folding is too much
+-- because two identical-looking expressions may be non-conforming. (see
+-- ACV test c38105ab for examples). We therefore resolve the expression
+-- but inhibit constant folding by means of the global flag fold_context.
+-- Finally, the expression may have a constraint imposed on it in one
+-- place and not in the other, because of additional information on a
+-- private type, e.g. The constraint is removed for conformance checking.
+
+if opt_init = [] then return [] ;
+else
+    fold_context := false ;
+    v := check_type(typ, opt_init) ;
+    fold_context := true ;
+    return if is_tuple(v) and v(1) in qualifiers then v(3) else v end if;
+end if;
+
+end normalize;
+--S+ conform
+procedure conform(t1, t2) ;
+
+-- Check conformance of two expressions. The expressions have been 
+-- resolved but not constant folded. In some cases involving private
+-- types, one of the expressions may include a constraint check while
+-- the other doesn't; in that case remove the constraint before veri-
+-- fying conformance.
+
+if is_identifier(t1) then
+  return
+    if is_identifier(t2) then t1=t2
+    elseif is_tuple(t2) then 
+        (t2(1) = "." 				-- expanded name
+        and top(t2) = t1 			-- with the same selector
+	and t1 notin op_designators		-- which is a simple name
+	and (#t1 /= 3 				-- and not an operator
+           or t1(1) /= "'" or t1(3) /= "'"))  -- or character literal
+
+        or					-- constrained expression
+	(t2(1) in qualifiers and conform(t1, t2(3)))
+    else false 
+  end if;
+
+elseif is_tuple(t1) then
+  return
+    if is_identifier(t2) then conform(t2, t1) 
+
+    elseif is_tuple(t2) then 
+
+	if t1(1) = "int_literal" then
+	     (t2(1) = "int_literal" and
+                sem_adaval("universal_integer", t1(2)) = 
+				sem_adaval("universal_integer", t2(2)))
+
+	elseif t1(1) = "real_literal" then
+	     (t2(1) = "real_literal" and
+                rat_eql(sem_adaval("universal_real", t1(2)) , 
+				sem_adaval("universal_real", t2(2))))
+
+        elseif t1(1) in qualifiers and t2(1) notin qualifiers then
+	    conform(t1(3), t2)
+
+        else
+         #t1 = #t2 and (forall i in [1..#t1] | conform (t1(i), t2(i))) 
+        end if
+
+    else false 
+  end if;
+
+elseif is_atom(t1) then
+    -- a node in the tree appears only to place an error message. Clearly
+    -- different nodes will appear at congruent places.
+    return is_atom(t2) ;
+
+elseif is_overloaded(t1) then
+    -- overloaded name: ok if both are overloaded. The visibility may be
+    -- different, and the overload sets don't have to match.
+    return is_overloaded(t2) ;
+
+else						-- numeric quantity
+    return t1=t2 ;
+
+end if;
+
+end conform;
+
+--S+ statement_name  
+procedure statement_name(name) ;
+sem_trace_proc_entry(3, "Statement_Name");
+ 
+-- This procedure resolves statements which consist of a single name.
+-- These statements can have one of the following meanings :
+-- 	a) Procedure call.
+-- 	b) entry call .
+-- 	c) Code insertions.
+ 
+-- This last case is ignored in the current implementation.
+--
+-- Procedure and entry calls are handled by first resolving the name,
+-- and then type-checking the argument list. Complications arise
+-- for parameterless procedures and entries, and for parameterless
+-- entries in entry families. In those cases, this procedure reformats
+-- the name by appending an empty argument list.
+ 
+if is_identifier(name) 		-- Parameterless procedure or entry.
+or name(1) = "." then		-- Qualified name of entry or proc.
+    return  trace_and_return(3, "Statement_Name", 
+            proc_or_entry(["call?", name, []] ) );
+elseif name(1) = "call?" then
+    return  trace_and_return(3, "Statement_Name", 
+            proc_or_entry(name) );
+else
+    errmsg("Invalid statement: not procedure or entry call","","5.1") ;
+    sem_trace_proc_exit(3, "Statement_Name");
+    return [];
+end if;
+ 
+end statement_name;
+ 
+--S+ proc_or_entry 
+procedure proc_or_entry(name) ;
+sem_trace_proc_entry(3, "Proc_or_Entry");
+ 
+-- Process procedure calls, entry calls, and calls to members of
+-- entry families.
+-- The statement :             name(args) ;
+-- can have 3 meanings :
+-- 	a) It can be a procedure call.
+-- 	b) It can be an entry call.
+-- 	c) -name- can be the name of an entry family, and -args- an index
+-- 	   into that family. This is recognized by the fact that the type of
+-- 	   -name- is an array type.
+-- In the first two cases, we must type-check and format the argument
+-- list. In the last one, we must emit a parameterless entry call.
+--
+-- If the statement has the format :    name(arg)(args) ;
+--
+-- then it can only be a call with parameters to an element of an
+-- entry family.
+ 
+[-, obj, arg_list] := name ;
+
+if is_identifier(obj) or obj(1) = "." then
+    obj_name := find_old(obj) ;
+ 
+    if is_tuple(obj_name) and obj_name(1) = "." then
+	return trace_and_return(3, "Proc_or_Entry", 
+               entry_call(obj_name, arg_list));
+
+    elseif is_overloaded(obj_name) then
+	-- Type-checking of the argument list must be done as usual,
+	-- but there is no required type on the result of the call.
+	call := check_type("none", [obj_name] + arg_list) ;
+
+	if call = [] then 
+            sem_trace_proc_exit(3, "Proc_or_Entry");
+            return  [] ;	-- Error emitted already.
+	elseif not is_tuple(call) 
+          or call(1) notin {"call", "ecall"}
+	    then errmsg("Invalid procedure or entry call",
+                                          "","6.5, 9.5") ;
+            sem_trace_proc_exit(3, "Proc_or_Entry");
+            return [] ;
+	else 
+            sem_trace_proc_exit(3, "Proc_or_Entry");
+            return call;
+	end if;
+
+    elseif is_identifier(obj_name) and ST(obj_name).nature = "entry_family" then
+        -- case of entry family called within the task body. (Preposterous
+        -- case tested in B95095C).
+        return trace_and_return(3, "Proc_or_Entry", 
+               entry_call(
+	            [".", ST(obj_name).scope_of, original_name(obj_name)], arg_list));
+    else
+	-- If the name was undeclared, an error message was emitted 
+        -- already. We can detect this case by the fact that the identifier
+        -- has type -any-.
+	if (not is_identifier(obj_name)) or 
+	    ST(obj_name).type_of /= "any" then        
+	    errmsg("Invalid statement","","5.1") ;
+	else				
+	    -- Make up a dummy symbol table entry,so that subsequent uses
+	    -- of it have a chance of looking plausible.
+	    ST(obj_name).nature := "procedure" ;
+	    ST(obj_name).signature := #arg_list * ["any_id"] ;
+	    ST(obj_name).type_of := "none";
+            ST(obj_name).overloads := {obj_name} ;
+        end if;
+        sem_trace_proc_exit(3, "Proc_or_Entry");
+        return [] ;
+    end if;
+else
+    -- Case of an entry family call with parameters.
+    obj_name := find_old(obj) ;
+    if obj_name = [] or obj_name(1) /= "[]" then
+	errmsg("Invalid call", "","9.5") ;
+        sem_trace_proc_exit(3, "Proc_or_Entry");
+        return [] ;
+    else
+	return  trace_and_return(3, "Proc_or_Entry", 
+                entry_call(obj_name, arg_list)) ;
+    end if;
+end if;
+end proc_or_entry;
+
+--S+ desig_to_name
+procedure desig_to_name(desig) ;
+
+-- This procedure is invoked at places where an operator designator
+-- can appear. If -desig- is a name, it is returned as is. If it is a
+-- string, it can only be one of the predefined operators in the
+-- language, excluding those that cannot be overloaded.
+
+const to_lower := { ["A", "a"], ["D", "d"], ["E", "e"], ["M", "m"],
+       	      ["N", "n"], ["O", "o"], ["R", "r"], ["T", "t"], 
+	      ["S", "s"], ["B", "b"],
+			  ["X", "x"]} ; 
+
+sem_trace_proc_entry(3, "Desig_to_Name");
+
+if desig(1) /= "\"" then 
+    sem_trace_proc_exit(3, "Desig_to_Name");
+    return desig ;
+else
+    op_name := +/[to_lower(c) ? c : c in desig(2..#desig-1)] ;
+    if op_name in op_designators then
+        sem_trace_proc_exit(3, "Desig_to_Name");
+        return op_name ;
+    else
+        errmsg(desig, " is not an operator designator", "4.5") ;
+        sem_trace_proc_exit(3, "Desig_to_Name");
+        return desig ;
+    end if;
+end if;
+sem_trace_proc_exit(3, "Desig_to_Name");
+end desig_to_name;
+
+--S+ chain_overloads
+procedure chain_overloads(id, new_specs) ;
+sem_trace_proc_entry(3, "Chain_Overloads");
+sem_trace(3, "id : " + str(id) );
+sem_trace(3, "new specs: " + str(new_specs) ) ;
+ 
+-- Insert procedure, function, or enumeration literal into the current
+-- symbol table. Because these names can be overloaded, each set of
+-- overloaded names visible in the current scope is held in the
+-- -overload- attribute of the corresponding identifier.
+-- If there is no actual overload, the unique name is generated as for
+-- any other identifier. Otherwise, successive overloads in the same
+-- scope are given an additional arbitrary suffix to distinguish them
+-- one from the other.
+-- The overloaded name in inserted in the current scope. 
+ 
+new_name := name_prefix + id ;
+if not is_comp_unit() then  -- insure uniqueness of name.
+    new_name +:= newat_str(); 
+end if;
+[new_nat, new_typ, new_sig, parent_subp] := new_specs ;
+ 
+if (seen := declared(current_scope)(id)) = om then
+    -- First occurrence in this scope. Define therein.
+ 
+    declared(current_scope)(id) := new_name ;
+    new_over_spec(new_name, new_specs) ;
+else
+    -- Name already appears in current scope. One of the following
+    -- may be the case :
+    -- 	a) It is a redeclaration, either because a non-overloaded
+    -- 	   instance of that id exists, or because an object with the
+    -- 	   same signature has already been declared : indicate error.
+    -- 	b) It is the body of a function or procedure, whose specs
+    -- 	   have already been seen. Update the corresponding entry.
+    -- 	c) It is a new object. Generate a new name, and make entry
+    -- 	   for it.
+    -- 	d) It is a redeclaration of a derived subprogram. in that case
+    -- 	   the derived subprogram becomes inaccessible.
+    -- 	e) If it is a derived subprogram, and there is an explicit user
+    -- 	   defined one already, the derived one is discarded.
+ 
+    if not can_overload(seen) then
+	errmsg("Redeclaration of identifier: ",id,"8.3, 8.4") ;
+	sem_trace_proc_exit(3, "Chain_Overloads");
+	return seen ;
+    else
+        current_overload :=  ST(seen).overloads ;
+    end if;
+    
+    -- If the current scope is a private part, make sure the visible de-
+    -- claration has been saved, before modifying the overloads set.
+
+    if ST(current_scope).nature in ["private_part", "package"] 
+    and ST(current_scope).private_decls(seen) = om then
+	ST(current_scope).private_decls(seen) := ST(seen) ;
+    end if;
+
+    for name in current_overload loop 
+        if  same_sig_spec(name, new_sig) 
+        and same_type(ST(name).type_of, new_typ) 
+	then
+	   -- A homograph of the current declaration exists in the
+	   -- scope. This is permissible only if one or both are
+	   -- implicit declarations of derived subprogram or prede-
+	   -- fined operation. The latter do not appear in Ada/Ed,
+	   -- and we only need to consider derived subprograms.
+
+	   if is_derived_subprogram(name) then
+		-- An explicit declaration redefines an implicitly
+		-- derived subprogram. Make the latter unreachable.
+		ST(seen).overloads less:= name ;
+
+	   elseif parent_subp /= om and id = original_name(parent_subp) then
+		-- New declaration is derived subprogram or literal.
+	        new_name := named_atom(id) ;
+		if new_nat /= "literal" then
+		    -- A derived subprogram is hidden by any other
+		    -- homograph, but may itself be further derived. It
+		    -- is inserted in the symbol table as a separate
+		    -- entity, and only retrievable by explicit iteration
+	            -- over DECLARED during type derivation.
+	            declared(current_scope)(newat_str()) := new_name ;
+		else
+		    -- A derived literal is hidden by any other decl.
+		    -- but still exists as a literal of the type.
+		    null;
+		end if;
+	        new_over_spec(new_name, new_specs) ;
+		sem_trace_proc_exit(3, "Chain_Overloads");
+	        return new_name ;
+
+	    elseif 
+	       ((n := ST(name).nature)= "procedure_spec" and new_nat = "procedure")
+		or 
+	        (n = "function_spec" and new_nat = "function")
+	     then
+		-- Subprogram body whose spec was already seen.
+		ST(name).nature := new_nat ;
+		-- Verify conformance of formal parameter declarations.
+		reprocess_formals(name, new_sig);
+		sem_trace_proc_exit(3, "Chain_Overloads");
+		return name ;
+	    else
+		errmsg("invalid declaration of homograph ", id, "8.3(17)");
+		sem_trace_proc_exit(3, "Chain_Overloads");
+		return name ;
+	    end if;
+	end if;
+    end loop;
+    -- If we fall through, this is a new entity. Build its symbol table
+    -- entry, and add it to the overload set already seen. 
+    -- As declared(scope)(id) is already defined, we enter the entity in
+    -- the declared map using an  arbitrary string. The new entity  will
+    -- always be retrieved through overload(seen).
+ 
+    new_name := named_atom(id) ;
+    declared(current_scope)(newat_str()) := new_name ;
+    new_over_spec(new_name, new_specs) ;
+    ST(seen).overloads with:= new_name ;
+end if;
+ 
+sem_trace_proc_exit(3, "Chain_Overloads");
+sem_trace(3,"with return value: " + str(new_name) ) ;
+return new_name ;
+end chain_overloads;
+
+procedure can_overload(name) ;
+
+return 
+    ST(name).nature?"" in {"procedure_spec", "function_spec", "op",
+    			"function", "procedure", "entry", "literal"} ;
+end can_overload;
+ 
+--S+ new_over_spec 
+procedure new_over_spec(name, specs) ;
+sem_trace_proc_entry(4, "New_Over_Specs");
+ 
+-- Place in symbol table maps the specification of a new overloadable
+-- object .
+
+[nat, typ, sig, parent_subp] := specs ;
+
+ST(name) := [];
+ST(name).nature    := nat ;
+ST(name).type_of   := typ ;
+ST(name).signature := 
+   if nat = "literal" then [] else process_formals(name,sig) end if;
+ST(name).overloads := {name} ;
+ST(name).scope_of  := current_scope ;
+ST(name).alias     := parent_subp ;
+
+if original_name(name) = "=" then
+    -- an equality operator can only be defined on limited types
+    -- unless it is introduced by a renaming declaration or derivation
+    
+    arg_type := ST(ST(name).signature(1)).type_of;
+    if (not is_limited_type(arg_type) and parent_subp = om) then
+       errmsg("= can only be defined for limited types", "", "6.7");
+    end if;
+end if;
+sem_trace_proc_exit(4, "New_Over_Specs");
+end new_over_spec;
+ 
+--S+ same_signature 
+procedure same_signature(sub1, sub2) ;
+sem_trace_proc_entry(3, "Same_Signature");
+
+-- Compare the signatures of two subprograms to determine whether 
+-- they hide each other. Two signatures are considered identical if
+-- they have the same length, and the formals match in type.
+
+old := ST(sub1).signature ; new := ST(sub2).signature ; 
+sem_trace_proc_exit(3, "Same_Signature");
+if old = new then 
+    return true;
+elseif not is_tuple(old) or not is_tuple(new) then return false ;
+elseif #old /= #new then return false ;
+else return
+      (forall i in [1..#old] | same_type(ST(old(i)).type_of, ST(new(i)).type_of));
+end if;
+
+end same_signature;
+--S+ same_sig_spec
+procedure same_sig_spec(subp, spec) ;
+
+sem_trace_proc_entry(3, "Same_Sig_Spec");
+
+-- Compare the signature of a subprogram with the formals list of a
+-- new subprogram specification.
+
+sig := ST(subp).signature ; 
+if not is_tuple(sig) or not is_tuple(spec) then 
+   sem_trace_proc_exit(3, "Same_Sig_Spec");
+   return false ;
+elseif #sig /= #spec then 
+   sem_trace_proc_exit(3, "Same_Sig_Spec");
+   return false ;
+else 
+  new_types := [t : [-,-, t] = spec(i)] ;
+  return (forall i in [1..#sig] | same_type(ST(sig(i)).type_of, new_types(i)));
+end if;
+
+end same_sig_spec;
+--S+ same_type 
+procedure same_type(type1,type2) ;
+return base_type(type1) = base_type(type2) ;
+ 
+end same_type;
+--S+ Check out parameters
+procedure check_out_parameters (formals) ;
+
+-- Enforce the restrictions on usage of out formal parameters
+-- as given in LRM 7.4.4
+
+for form in formals loop 
+	[-, formal_mode, type_mark, -] := form ;
+	scope := ST(type_mark).scope_of ;
+	nat := ST(scope).nature ;
+	if formal_mode /= "out" or is_access(type_mark) then
+		null ;
+	elseif (ST(type_mark).type_of = "limited private"
+		 and nat in {"package_spec", "generic_package_spec",
+				"generic_part"}
+		 and scope in open_scopes ) then
+		 -- We are in the visible part of the package that
+		 -- declares the type. Its full declaration will 
+		 -- have to be given with an assignable type.
+
+		 ST(type_mark).misc_type_attributes :=
+			(ST(type_mark).misc_type_attributes ? {}) with "out" ;
+	elseif is_limited_type(type_mark) then
+		errmsg("Invalid use of limited private type for out parameter",
+					"","7.4.4") ;
+	end if;
+end loop;
+
+end check_out_parameters;
+end adasem6;

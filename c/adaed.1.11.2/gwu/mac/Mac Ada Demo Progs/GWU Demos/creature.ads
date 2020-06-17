@@ -1,0 +1,1 @@
+---- Creatures is the package in which worms resides.-- Charles Kann, The George Washington university  --PACKAGE Creatures IS    TASK TYPE Worm IS         ENTRY Init_Worm( Symbol : IN CHARACTER  );    END Worm;    TYPE Coordinate IS        RECORD            x,y : Integer;        END RECORD;    Maximum_xy : Coordinate;    Minimum_xy : Coordinate;END Creatures;

@@ -1,0 +1,13 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_procs_.stl,v 1.1 91/01/02 15:26:14 banner Exp $
+--
+package int_procs;
+  procedure bind_enter(rd formals, rw called_emap, rd caller_valstack);
+  procedure bind_exit(rd formals, rw caller_valstk);
+  procedure elaborate_call(actuals, formals, operation) ;
+  procedure param_eval(actuals, formals) ;
+  procedure convert_array(array, from_type, to_type) ;
+  procedure set_bounds(array, to_type) ;
+  procedure get_array_bounds(index_types) ;
+  procedure flatten_record (component_list);
+end int_procs;

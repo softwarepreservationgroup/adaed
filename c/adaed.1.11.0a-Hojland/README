@@ -1,0 +1,50 @@
+Since the tarball at metalab didn't compile out of the box on linux 2.2
+glibc2 platforms, I did a couple of tweaks in the case you know ada but
+don't know basic C .. which could be possible since I have no clue on ada :)
+
+If you are compiling under linux, just type make.  No need to edit config.h
+Also, have a look to the README.ancient file.  If you run into problems, you
+can email me at <ragnar@lightside.ddns.org> or <ragnar@redestb.es>
+
+Disclaimer:
+This version isn't released by the New York University.  I tried contacting
+them with no luck, so I'm bumping version up to 1.12  If you happen to know
+how to get in touch with the original developers, please let me know.
+
+-- 
+____/|  Ragnar Hojland     Freedom - Linux - OpenGL      Fingerprint  94C4B
+\ o.O|                                                   2F0D27DE025BE2302C
+ =(_)=  "Thou shalt not follow the NULL pointer for      104B78C56 B72F0822
+   U     chaos and madness await thee at its end."       hkp://keys.pgp.com
+
+
+Since there is no changelog file, this will have to do.
+Files changed since Adaed-1.11.0a:
+
+-rw-r--r--   1 ragnar   users         710 Jun 21 01:05 3.h
+-rw-r--r--   1 ragnar   users         867 Jun 21 01:05 4.h
+-rw-r--r--   1 ragnar   users       13618 Jun 21 00:48 Makeext
+-rw-r--r--   1 ragnar   users        5521 Jun 21 01:10 Makefile
+-rw-r--r--   1 ragnar   users         986 Jun 28 18:05 README
+-rw-r--r--   1 ragnar   users        7132 Jun 21 01:02 ada.h
+-rw-r--r--   1 ragnar   users         601 Jun 21 01:02 adalex.h
+-rw-r--r--   1 ragnar   users       16418 Jun 21 01:04 adamrg.c
+-rw-r--r--   1 ragnar   users        1770 Jun 21 01:02 adared.h
+-rw-r--r--   1 ragnar   users         403 Jun 21 00:55 axqrprots.h
+-rw-r--r--   1 ragnar   users       11866 Jun 21 00:56 bmain.c
+-rw-r--r--   1 ragnar   users        6532 Jun 21 00:59 config.h
+-r--r--r--   1 ragnar   users        3545 Jun 21 01:05 ghdr.h
+-rw-r--r--   1 ragnar   users        1892 Jun 21 00:55 gmiscprots.h
+-rw-r--r--   1 ragnar   users        1910 Jun 21 00:55 gutilprots.h
+-r--r--r--   1 ragnar   users       17415 Jun 21 01:05 hdr.h
+-rw-r--r--   1 ragnar   users       66780 Jun 21 01:05 hdr.vbs
+-rw-r--r--   1 ragnar   users       14372 Jun 21 00:56 int.h
+-rw-r--r--   1 ragnar   users        4429 Jun 21 01:04 ipredef.h
+-r--r--r--   1 ragnar   users        1443 Jun 21 01:05 libhdr.h
+-rw-r--r--   1 ragnar   users        1372 Jun 21 01:05 libprots.h
+-rw-r--r--   1 ragnar   users        9129 Jun 21 00:55 main.c
+-rw-r--r--   1 ragnar   users       22307 Jun 21 00:51 misc.c
+-rw-r--r--   1 ragnar   users        1634 Jun 21 00:51 miscprots.h
+-rw-r--r--   1 ragnar   users           0 Jun 21 01:05 prs.lm
+-r--r--r--   1 ragnar   users        5903 Jun 21 01:06 vars.c
+-r--r--r--   1 ragnar   users        6461 Jun 21 01:05 vars.h

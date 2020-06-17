@@ -1,0 +1,904 @@
+package body adaio; 
+
+use globals;
+
+const 
+    tab_char := 9,	-- tab character (^I) := HT
+    maxline := 120,	-- maximum source line length
+    max_width := 80,	-- line width limit for Pretty_prints
+    front_window := 0,	-- # lines to preceed line of error message
+			-- completely contained in 1 line.
+    back_window := 0,	-- # lines to follow error message completely
+			-- contained in 1 line.
+    max_window := 2,	-- Maximum block of contigious lines to print
+			-- for an error not completely on 1 line.
+    top_low_npc_set := 31,	-- << ASCII values
+    bot_high_npc_set := 127,	-- << ASCII values
+    line_break_characters := [10,11,12,13],	-- which break line into
+						-- logical line hunks
+    end_of_file_line := om;	-- EOF constant to pass to LEXPARSE @EOF.
+
+var
+    list_switch := true,	-- Boolean value that indicates whether listing
+                        	--  status is on or off.
+    text_buffer := [], 		-- Tuple of all non-Error messages
+    source_file := [], 		-- Tuple containing the text of the source file.
+    error_buffer := {}, 	-- Map from Source linenumber to errors attached
+    listing_level,		-- Global level for SET_ & ERR_LIST
+    iw_line,chop,single_line,	-- Global vars for PRETTY_PRINT
+    line_break_characters_string, -- String of characters for
+				  -- later BREAK operation to separate logical
+				  -- lines for 1 physical line.
+    tab,			-- Ascii character TAB
+    non_printing_characters_string,	
+    source_line,		-- Current source line being sent
+				-- initially set to OM.
+    line_buffer := [],          -- buffer for lines to be listed, starts empty.
+    last_errloc := [[]],        -- buffer for last error location; used
+				-- to suppress redundant information in
+				-- error messages. dummy start value for
+				-- last error location.
+
+    last_text_line := 0,	-- last line of TEXT_BUFFER printed.
+    last_line;
+
+--
+-- 	This module exports a series of procedures which interface
+--	Between all other compiler and interpreter (but not program)
+--	procedures and the external file system.    Files are
+--	opened by the main program and their names are passed in
+--	appropriate global variables.    The principle procedures of
+--	this package are:
+--
+--	GETLINE		Reads one line from the source program ADAFILE
+--			and returns it (to Gettok in LexParse) updates
+--			Global LINENUM and if Listing_level = 2, forces
+--			incremental listings of "safe" lines (ones to 
+--			which no new error message will be attached.)
+--			It will return Omega on end of file.
+--
+--	SET_LIST_LEVEL	Called in the Main program to set the internal 
+--			state of this module and control what general
+--			work must be done. (See proc for details).
+--
+--	TO_LIST		Takes lines of text and inserts them into 
+--			the TEXT_BUFFER. It is called for all compiler
+--			level messages other than headings (which
+--			are handled separately) and ERROR"s (see below).
+--			Any messages sent to the LISFILE (immediately,
+--			or saved for later) will be printed immediately 
+--			on the ERRFILE.
+--
+--	TO_ERRFILE	Takes lines of text, usually debuging output,
+--			and prints them immediately on the ERRFILE.
+--
+--	ERR_LIST	Takes an error message (pair of location tuple
+--			and line of text). If the error is on a line not
+--			yet printed it saves the message, otherwise
+--			it snaps the message and ints context onto 
+--			the LISFILE. and in any case it snaps the 
+--			message and its context to the ERRFILE.
+--
+--	format_1_line	forms the location paart of a message into
+--			textual location which can be attached to the
+--			actual message when the location can not
+--			be indicated by a pointer (^) or an error
+--			span ( <---> or <--^--> ).
+--
+--	snap_error	Puts an error message (line) onto a file
+--			(file) with a context about its location
+--			(line). The size of the contex is set by
+--			The front_winddow and back_window parameters
+--			for errors which appear entirely on 1 line
+--			and by max_window for errors which span several
+--			lines (that is max_window determines the number
+--			of lines actually printed in full, the rest are
+--			elided.
+--
+--	PsourceERR	Prints on file (file) source lines numbered
+--			frm to upto if any.
+--
+--	src_fl_len	Returns the length of line ln of the source_file
+--			counting tabs as the correct number of spaces
+--			(8 col Tab stops) for overlining purposes in
+--			snapping errors.
+--
+--	convert_tab	Takes as argument a line of text and returns
+--			an identical line of text except for TAB 
+--			characters being replaced by the appropriate 
+--			number of spaces.
+--
+--
+--	PRODUCE_LISTING	Forces the list buffers to be dumped and a 
+--			partial listing printed up to line # (toline)
+--			or the end of the file (in case toline = OM)
+--
+--	PRETTY_PRINT	Formats output to file in an easily readable
+--	et al		yet SETL read - able manner.
+--
+--
+procedure top(x);
+   return x(#x);
+end top;
+
+procedure getline;
+
+    const  buffer_size := 15;  -- number of listing lines pending printing
+
+    const  blank := " ";
+
+  while true loop 
+    
+    if source_line = om then		-- start of program, get 1st line
+	geta(adafile,source_line);
+	if source_line = om then	-- at end of file, return special
+	    return end_of_file_line;	-- value
+	end if;
+    end if;
+
+    if (#source_line > maxline) then
+      err_list([[[#source_file+1,1,1]], 
+		"*** Error - Line "+ str (#source_file+1) + 
+	        " exceeds maximum length; truncated to " + str(maxline) + 
+		" characters"]);
+      errcount +:= 1;
+      source_line := source_line(1..maxline);
+    end if;
+
+
+-- now break line on LINE_BREAK_CHARACTERS_STRING
+
+    if exists c = source_line(i) | abs(c) < 14 and abs(c) > 9 then
+	line := source_line(1 .. i - 1);
+	source_line := source_line(i + 1 .. );
+    else
+	line := source_line;		-- to force a get SOURCE_LINE
+	source_line := om;
+    end if;
+
+    source_file with:= line;
+    linenum := #source_file;
+
+    if exists c = line(i) | c /= blank and c /= tab then
+        null;
+    else continue ;
+    end if;
+ 
+    if cdebug3 > 3 then 
+	to_errfile("reading "+ str(line),""); 
+    end if;
+ 
+    line_buffer with:= linenum;
+    if #line_buffer > buffer_size then
+	to_line fromb line_buffer;
+	if listing_level = 2 then
+	    produce_listing(to_line);
+	end if;
+    end if;
+ 
+    return line;
+  end loop;
+ 
+end getline;
+ 
+procedure to_list(msg);
+ 
+  --	For the listing of messages which  should appear in
+  --	the source listing and output file (and which will appear in
+  --	the error listing file as well.)
+ 
+  if listing_level > 0 then
+    text_buffer with:= msg;
+  else
+     if lisfile /= om then
+       printa(lisfile,msg);
+     else
+       print(msg);
+     end if;
+  end if;
+
+  if cdebug3 > 3 then
+	to_errfile("TO-LIST",""); 
+	err_pretty_print(msg);
+	err_pretty_print(text_buffer);
+  end if;
+end to_list;
+ 
+procedure warning(msg);
+   p_s := spans(current_node) ? [[1, 1, 1]] ;
+   err_list([p_s, "*** Warning: " + msg]);
+end warning;
+
+procedure err_list(msg);
+ 
+  -- Called by error routines during all phases.   The
+  -- argument msg is a tuple of one of six forms:
+--	[ position, text message]
+--
+-- where
+--
+--  position := [ [line#] ]
+--		[ [line#, col#]]
+--		[ [line#, col#1, col#2]]
+--		[ [l#1,c#11,c#12],[l#2,c#21,c#22]]
+--		[ [l#1,c#11,c#12],[l#2,c#21,c#22],[l#3,c#31]]
+--		[ [l#1,c#11,c#12],[l#2,c#21,c#22],[l#3,c#31,c#32]]
+--
+--	and the first or first two arguements represent the
+--	token of token pair which spans the error.
+--	If a third element of the tuple is present it
+--	Represents a specific token within the range which 
+--	has some special significance and will be designated by a
+--	pointer:
+--
+--		blah blah opps opps2 opps3 splat slish slosh
+--			  <----------------^^^^^----------->
+--
+--	where the last form was used specifing all of splat as marked.
+-- 	alternately only 1 character could have been marked using
+-- 	next to last form.
+--
+
+if cdebug3>0 then
+	to_errfile("Error Message",msg);
+end if;
+
+if is_string (msg) then			-- must attach message to some line.
+	msg := [[#source_file],msg];
+end if;
+
+errloc := msg(1);
+errtext := msg(2);
+ 
+if not is_tuple (errloc) then 
+	to_errfile("Bad error message: ",msg);
+elseif #errloc > 3 then 
+	to_errfile("Bad error message: ",msg);
+elseif exists msgl in errloc | (not is_tuple (msgl)) then
+	to_errfile("Bad error message: ",msg);
+elseif exists msgl in errloc | exists msgls in msgl |
+		(not is_integer (msgls)) then
+	to_errfile("Bad error message: ",msg);
+else
+    if #errloc = 1 then
+	at_line := errloc(1)(1);	-- line to attach message to.
+    else
+	at_line := errloc(2)(1);	-- attach message to last line 
+					-- relevant to it.
+    end if;
+
+    if last_errloc = errloc then
+	suppress_location := true;
+        suppress_source := true;
+    elseif (#errloc = 3 and errloc(1)(2) = errloc(1)(3)
+		and #last_errloc(1) = 2
+		and errloc(1)(2) = last_errloc(1)(2))
+	   or (#last_errloc = 3 and last_errloc(1)(2) = errloc(1)(3)
+		and #errloc(1) = 2
+		and errloc(1)(2) = last_errloc(1)(2)) then
+	suppress_location := true;
+	suppress_source := true;
+    elseif #errloc = 1 and #last_errloc = 1 
+		       and errloc(1)(1) = last_errloc(1)(1) then
+	suppress_location := false;
+	suppress_source := true;
+    else
+	suppress_location :=false;
+ 	suppress_source := false;
+    end if;
+ 
+    if at_line <= last_line then  -- problem
+	if listing_level = 2 then 	-- late message SAVE or repeat?
+	
+	    printa(lisfile,format_1_line(errloc));
+	    printa(lisfile,errtext);
+	else				-- must be legal to list context
+	    snap_error(lisfile,errloc,errtext,
+				suppress_source,suppress_location);
+	end if;
+    else
+	if at_line in domain error_buffer then
+		error_buffer(at_line) with:= msg;
+	else
+		error_buffer(at_line) := [ msg ];
+	end if;
+    end if;
+    last_errloc := errloc;
+end if;
+end err_list;
+ 
+procedure format_1_line(el);
+if #el = 1 then
+    rv := "--- In line " + str (el(1)(1)) + ", column " +
+		str (el(1)(#(el(1)))) ;
+elseif #el = 2 or #el = 3 then
+    if el(1)(1) = el(2)(1) then 	-- both tokens on same line
+	if el(1)(2) = el(2)(#(el(2))) then
+	    rv := "--- In line " + str (el(1)(1)) + ", column " +
+		str (el(1)(2)) ;
+	else
+	    rv := "--- In line " + str (el(1)(1)) + ", between columns "
+		     + str (el(1)(2)) + " and " + str(el(2)(#(el(2))));
+	end if;
+    else
+	rv := "--- Between line " + str(el(1)(1)) + " column " +
+		str(el(1)(2))+ " and line " + str(el(2)(1)) +
+		" column " + str(el(2)(#(el(2))));
+    end if;
+else
+	rv := ">>> Bad error message format -- Suspect Compiler Error";
+end if;
+ 
+return rv;
+ 
+end format_1_line;
+
+procedure snap_error(file,loc,line,suppress_source,suppress_location);
+
+if not (suppress_source or suppress_location) then
+    printa(file," ");
+    printa(file," ");
+end if;
+
+if cdebug3 >0 then 
+  to_errfile("SNAP-ERROR",file); 
+  to_errfile("SNAP-ERROR",loc); 
+  to_errfile("SNAP-ERROR",line); 
+end if;
+
+if #loc = 1 then 
+    if loc(1)(1) > #source_file then
+	-- error at line after eof or in separate program.
+	-- just print line.
+	printa(file,format_1_line(loc));
+	printa(file,line);
+    else
+	if not suppress_source then
+	    psourceerr(file,loc(1)(1)-front_window,loc(1)(1));
+	end if;
+	if not suppress_location then
+	    lead := " " * (7 + loc(1)(2) ) +
+		(loc(1)(#(loc(1))) - loc(1)(2)) * " " + "^";
+	    printa(file,lead);
+	end if;
+	printa(file,line,"");
+	if not suppress_source then
+	    psourceerr(file,loc(1)(1)+1,loc(1)(1)+back_window);
+	end if;
+    end if;
+elseif #loc = 2 or (#loc = 3 and (loc(3)=loc(1) or loc(3)=loc(2))) then
+    if loc(1)(1) > #source_file or loc(2)(1) > # source_file then
+	-- error... as above ... out of range
+	printa(file,format_1_line(loc));
+	printa(file,line);
+    elseif loc(1)(1) = loc(2)(1) then	-- on 1 line
+	if loc(1)(2..) = loc(2)(2..) then 	-- at same point...
+	    -- insert 1 token err message here.
+	    if not suppress_source then
+		psourceerr(file,loc(1)(1)-front_window,loc(1)(1));
+            end if;
+	    if not suppress_location then
+		lead := " " * (7 + loc(1)(2) ) +
+	    	        (loc(1)(#(loc(1))) - loc(1)(2)) * " " + "^";
+		printa(file,lead,"");
+	    end if;
+	    printa(file,line);
+	    if not suppress_location then
+		psourceerr(file,loc(1)(1)+1,loc(1)(1)+back_window);
+	    end if;
+	else
+	    if not suppress_source then 
+		psourceerr(file,loc(1)(1)-front_window,loc(1)(1));
+	    end if;
+	    if not suppress_location then
+		lead := " " * (7 + loc(1)(2)) + "<" +
+			"-" * (loc(2)(#(loc(2))) - loc(1)(2) - 1 ) +
+			">";
+		printa(file,lead); 
+	    end if;
+	    printa(file,line);
+	    if not suppress_source then
+		psourceerr(file,loc(1)(1)+1,loc(1)(1)+back_window);
+	    end if;
+	end if;
+    else	--on different lines.
+	if not suppress_location then
+	    lead := " " * (7 + loc(1)(2) ) + "<" +
+		"-" * (src_fl_len(loc(1)(1)) - loc(1)(2))
+		+ " - - - ";
+	    printa(file,lead);
+	    lines := [loc(1)(1) .. loc(2)(1)];
+	    if # lines > max_window then
+		lines(max_window / 2 + 1 ..) :=
+			[ 0 ] + lines(#lines - (max_window / 2) .. );
+	    end if;
+	    for ln in lines loop 
+		if ln /= 0 then
+		    printa(file,lpad(str(ln),5)+"   "+source_file(ln));
+		else
+		    printa(file,"  ...   . . . ");
+		end if;
+	    end loop;
+	    lead := "  - - - " + "-" * (-1 + loc(2)(#(loc(2)))) + ">";
+	    printa(file,lead);
+	end if;
+	printa(file,line);
+    end if;
+elseif #loc = 3 then	-- 2 ends and a pointer point in the middle
+    if loc(1)(1) = loc(2)(1) then 	-- on 1 line
+	if loc(1)=loc(2) then 		-- at same spot ...
+	    -- INSERT 1 point code here.
+	if not suppress_source then
+	    psourceerr(file,loc(1)(1)-front_window,loc(1)(1));
+	end if;
+	if not suppress_location then
+	    lead := " " * (7 + loc(1)(2) ) +
+		(loc(1)(#(loc(1))) - loc(1)(2)) * " " + "^";
+	    printa(file,lead,"");
+	end if;
+	printa(file,line);
+	if not suppress_source then
+	    psourceerr(file,loc(1)(1)+1,loc(1)(1)+back_window);
+	end if;
+	else
+	    if loc(3)(1) /= loc(1)(1) or loc(3)(1) < loc(1)(1) 
+		or loc(3)(#(loc(3))) > loc(2)(3)  then
+		printa(file,"-- inconsistent location: ",loc,line);
+	    else
+		if not suppress_source then
+ 		    printa(file,lpad(str (loc(1)(1)),5)+"   "+
+			source_file(loc(1)(1)));
+		end if;
+		if not suppress_location then
+		    lead := " " * ( 7 + loc(1)(2) ) +
+			"<" + "-" * (0 max (loc(3)(2) - loc(1)(2) - 1))
+			+ "^" * ((loc(3)(#(loc(3))) min (loc(2)(3)-1)) -
+			 (loc(3)(2)-1 max loc(1)(2) ) max 0 ) +
+			"-" * (0 max (loc(2)(3) - loc(3)(#(loc(3)))
+			 - 1)) + ">";
+		    printa(file,lead,"");
+		end if;
+		printa(file,line);
+	    end if;
+	end if;
+    else 				-- on several lines...
+	-- INSERT as above for [[loc][loc]]
+	if suppress_location then
+	    lead := " " * (7 + loc(1)(2) ) + "<" +
+		"-" * (src_fl_len(loc(1)(1)) - loc(1)(2) ) 
+		+ " - - -" ;
+	    printa(file,lead);
+	    lines := [loc(1)(1) .. loc(2)(1)];
+	    if # lines > max_window then
+	        lines(max_window / 2 + 1 ..) :=
+		    [ 0 ] + lines(#lines - (max_window / 2) .. );
+	    end if;
+	    for ln in lines loop 
+	        if ln /= 0 then
+		    printa(file,lpad(str(ln),5)+"   "+source_file(ln));
+		else
+		    printa(file,"  ...  . . .");
+		end if;
+	    end loop;
+	    lead := "  - - - " + "-" * (-1 + loc(2)(#(loc(2)))) + ">";
+	    printa(file,lead);
+	end if;
+	printa(file,line);
+    end if;
+else
+    printa(file,"*** Bad error message format: ",loc,line);
+end if;
+
+end snap_error;
+
+procedure psourceerr(file,frm,upto);
+for lines in [1 max frm .. upto min #source_file] loop 
+    printa(file,lpad(str(lines),5)+"   "+source_file(lines));
+end loop;
+end psourceerr;
+
+ 
+procedure src_fl_len(ln);
+
+    lng := 0;
+    for c in source_file(ln) loop 
+        if c = tab then
+	    lng +:= 8 - (lng mod 8);
+        else
+            lng +:= 1;
+        end if;
+    end loop;
+
+    return lng;
+
+end src_fl_len;
+
+
+procedure convert_tab(line);
+
+    output_line := "";
+
+    for c in line loop 
+	if c = tab then
+	    output_line +:= (8 - (#output_line mod 8)) * " ";
+	else
+	    output_line +:= c;
+	end if;
+    end loop;
+
+    return output_line;
+
+end convert_tab;
+
+procedure to_errfile(msg1, msg2);
+  printa(errfile, msg1);
+  printa(errfile, msg2);
+end to_errfile;
+ 
+procedure set_list_level(lvl);
+ 
+listing_level ?:= 0;
+linenum ?:= 0; 
+last_line ?:= 0; 
+if last_line <0 then 
+  last_line := 0; 
+end if;
+text_buffer ?:= [];
+source_file ?:= [];
+error_buffer ?:= {}; 
+line_break_characters_string ?:= ""+/[char(c): c in 
+						line_break_characters];
+non_printing_characters_string ?:= ""+/[char(c): c in 
+	[0..top_low_npc_set] | c /= tab_char ] + ""+/[char(c):c in
+			[bot_high_npc_set .. 127]];
+tab ?:= char(tab_char);
+
+if lvl = 2  or lvl <= 0 or listing_level = 2 then
+	produce_listing(om);
+end if;
+ 
+if cdebug3 mod 2 = 1 then
+	to_errfile("SET-LIST-LEVEL",listing_level);
+	to_errfile("SET-LIST-LEVEL",lvl);
+	err_pretty_print(text_buffer);
+	err_pretty_print(source_file);
+	err_pretty_print(error_buffer);
+	to_errfile("Errfile",errfile);
+	to_errfile("Lisfile",lisfile);
+	to_errfile("LineNum",linenum);
+	to_errfile("LAST_LINE",last_line);
+end if;
+ 
+listing_level := lvl;
+ 
+end set_list_level;
+ 
+procedure produce_listing(toline);
+
+if last_line = om then 
+    last_line := 0;
+end if;
+
+if toline = om then 
+    toline := #source_file;
+end if;
+
+if cdebug3 > 3 then
+    to_errfile("last_line", last_line);
+end if;
+ 
+for ln in [last_line + 1 .. toline] loop 
+
+--
+-- Translate all TAB characters into the appropriate number of blanks
+-- and find the position of the first non-blank character in the line.
+-- Note that the scan is performed 1 character past the line length,
+-- to prevent an error in case the line is empty or consists only of 
+-- blank characters.  In that case, begin_col = Length(line) + 1.
+--
+
+    line := convert_tab(source_file(ln));
+
+    assert exists begin_col in [1 .. #line + 1] | line(begin_col) /= " ";
+
+--
+-- LIST_CONTROL(i) is a tuple of integers that indicates for line
+-- "i" of the source text where the listing is to be switched on or
+-- off.  Wheter the listing is to be turned on or off is determined
+-- by the global LIST_SWITCH initially true.
+--
+
+    if list_control(ln) /= om then
+	start_col := 0;
+        for end_col in list_control(ln) loop 
+	    if not list_switch and end_col > start_col then
+		line(start_col + 1 .. end_col) := 
+				(end_col - start_col) * " ";
+            end if;
+	    start_col := end_col;
+	    list_switch := not list_switch;	-- reverse switch
+	end loop;
+	if not list_switch then
+	    line(start_col + 1 ..) := (#line - start_col) * " ";
+	end if;
+    elseif not list_switch then	-- Listing was turned off before
+	line := om;		-- reaching this line.
+    end if;
+
+    if line = om then			-- listing is off for this line.
+	null; 				-- do nothing.
+
+    elseif page_control(ln) /= om then	-- page eject(s) requested
+
+--
+-- PAGE_CONTROL(i) is a tuple of integers that indicates for line
+-- "i" the column positions on that line after which a pragma page
+-- should take effect.
+--
+
+	start_col := 0;
+	for end_col in page_control(ln)   
+	    | line(end_col) /= " " loop -- column that used pragma 
+					   -- that point.
+	        if exists i in [start_col + 1 .. end_col]
+		    | line(i) /= " " then  -- find first non-blank symbol
+
+		    if error_buffer(ln) /= om	-- errors in line
+		        or start_col = 0 then	-- first line segment
+		        printa(lisfile, lpad(str(ln) ,5)
+			    + (start_col + 3) * " "
+			    + line(start_col + 1 .. end_col));
+		    else		      -- align with start of line
+			printa(lisfile, lpad(str(ln) ,5)
+			    + (begin_col + 2) * " "
+			    + line(i .. end_col));
+		    end if;
+	        end if;
+  		-- generate form feed (ASCII.FF) to skip to new page in listing
+	        to_list(char(12)); 
+
+	    start_col := end_col;
+	end loop;
+
+	if exists i in [start_col + 1 .. #line] -- Is last pragma
+	    | line(i) /= " " then    		-- followed by more text?
+
+		if error_buffer(ln) /= om 	-- errors in line
+		    or start_col = 0 then	-- first line segment
+		    printa(lisfile, lpad(str(ln) ,5)
+			+ (start_col + 3) * " "
+			+ line(start_col + 1 .. ));
+		else		      -- align with start of line
+		    printa(lisfile, lpad(str(ln) ,5)
+			+ (begin_col + 2) * " "
+			+ line(i .. ));
+		end if;
+	end if;
+
+    else	-- listing is on and no page ejects are requested
+	printa(lisfile, lpad(str(ln) ,5) + "   " + line);
+
+    end if;
+
+    if cdebug3 > 3 then
+	err_pretty_print(error_buffer(ln));
+    end if;
+
+    if error_buffer(ln) /= om then
+	oneline := [em in error_buffer(ln) 
+			| #em(1) = 1 or em(1)(1)(1) = em(1)(2)(1)];
+	lastpoint := 0;
+	messages := [];
+	header := "        ";
+	for em in oneline loop 
+	    if em(1)(1)(2) <= lastpoint then
+		-- Print common header line and messages.
+		printa(lisfile,header);
+		for mes in messages loop 
+		    printa(lisfile,mes);
+		end loop;
+		header := "        ";
+		messages := [];
+		lastpoint := 0;
+	    end if;
+	    messages with:= em(2);
+
+	    if line /= om then	-- If listing is off, do not underline.
+
+	        header +:= " "*(em(1)(1)(2)-lastpoint-1) +
+				if # em(1) = 1 then
+			    	" "*(top(top(em(1)))-em(1)(1)(2))+
+					"^"
+				elseif #em(1) = 2 and 
+					em(1)(1) = em(1)(2) then
+					" "*(top(em(1)(2))-em(1)(1)(2))
+					+ "^" 
+				elseif #em(1) = 2 or 
+				 (#em(1)=3and(em(1)(3)=em(1)(1)or
+				  em(1)(3)=em(1)(2))) then
+					"<" + "-" * (top(em(1)(2)) -
+					em(1)(1)(2) - 1 max 0) + ">"
+				elseif #em(1) = 3 then 
+					"<" + "-" * (em(1)(3)(2) -
+					em(1)(1)(2) - 1 max 0 ) + "^"
+					* (((top(em(1)(3)) min 
+					em(1)(2)(3)-1)-	(top(em(1))(2)
+					-1 max em(1)(1)(2))
+					 max 0))+"-" * (top(em(1)(2)) -
+					top(em(1)(3)) - 1 max 0) + ">"
+				else "? "+ str(em) +" ?" end if;
+	
+	        lastpoint := if #em(1) = 1 then top(em(1)(1))
+				else top(em(1)(2)) end if;
+	    end if;
+
+	end loop;
+	if #messages > 0 then
+	    printa(lisfile,header);
+	    header := om;
+	    for mes in messages loop 
+		printa(lisfile,mes);
+	    end loop;
+	end if;
+	messages := om;
+	for em in error_buffer(ln) | em notin oneline loop 
+	    printa(lisfile,format_1_line(em(1)));
+	    printa(lisfile,em(2));
+	end loop;
+    end if;
+end loop;
+
+if toline > 0 then
+    last_line := toline;
+end if;
+
+for lines in text_buffer(last_text_line + 1 ..) loop 
+    printa(lisfile,lines);
+end loop;
+last_text_line := #text_buffer;
+
+end produce_listing;
+ 
+procedure pretty_print(file,obj);		-- capture old PP calls
+	internal_pretty_print(file,obj);
+end pretty_print;
+ 
+procedure err_pretty_print(obj);		-- PP to ERRFILE
+	internal_pretty_print(errfile,obj);
+end err_pretty_print;
+ 
+procedure internal_pretty_print(file,obj);
+    if is_tuple (obj) or is_set (obj) then
+	iw_line := "";
+	chop := {};
+	single_line := 0;
+	indented_write(file,obj,0);
+	if single_line = 0 then 
+          printa(file,iw_line); 
+        end if;
+    else
+	printa(file,mkstr(obj));
+    end if;
+end internal_pretty_print;
+ 
+procedure indented_write(file,obj,indent);
+    left  := { ["tuple","["], ["set","{"], ["TUPLE","["], ["SET","{"] };
+    right := { ["tuple","]"], ["set","}"], ["TUPLE","]"], ["SET","}"] };
+    typ := type(obj);
+    iw_line +:= left(typ);
+    margin := (indent mod max_width) * " ";
+    single_line := indent min single_line;
+    first_element := true;
+    composite_list := false;
+    if #iw_line > max_width then
+	chop_write(file,indent,max_width);
+    end if;
+    for element in obj  loop 
+	if iw_line = "" then 
+        iw_line := margin; 
+        end if;
+	if is_tuple (element) or is_set (element) then
+	    if first_element then
+		if #obj > 1 and is_tuple (obj) then
+		    composite_list := true;
+		end if;
+	    else
+		iw_line +:= " ";
+	    end if;
+	    indented_write(file,element,indent+1);
+	    if iw_line /= "" then 
+              chop(indent+1) := #iw_line; 
+            end if;
+	else
+	    elem := mkstr(element);
+	    if first_element then
+		iw_line +:= elem;
+	    else
+		iw_line +:= " " + elem;
+	    end if;
+	    if #iw_line > max_width then
+		chop_write(file,indent,max_width);
+	    end if;
+	    if iw_line /= "" then 
+              chop(indent+1) := #iw_line; 
+            end if;
+	end if;
+	first_element := false;
+	if composite_list and iw_line /= "" then
+	    chop_write(file,indent,0);
+	end if;
+    end loop;
+ 
+    iw_line +:= right(typ);
+    if #iw_line > max_width then
+	chop_write(file,indent,max_width);
+    end if;
+    if indent < single_line then
+	if #iw_line > 1 and iw_line(#iw_line-1) /= " " then
+	    printa(file,iw_line(1..#iw_line-1));
+	end if;
+	printa(file,margin+iw_line(#iw_line));
+	iw_line := "";
+    end if;
+    chop(indent + 1) := om;
+end indented_write;
+ 
+procedure chop_write(file,indent,line_width);
+    until #iw_line <= line_width loop 
+	if chop /= {} then
+	    level := min/(domain chop);
+	    ch := chop(level);
+	    chop(level) := om;
+	    printa(file,iw_line(1..ch));
+	    if iw_line(ch+1) = " " then
+               ch +:= 1; 
+            end if;
+	    if ch = #iw_line then
+		iw_line := "";
+	    else
+		iw_line := (level mod max_width)*" " + iw_line(ch+1..);
+	    end if;
+	    diff := ch - level;
+	    chop := {[x,y-diff] : [x,y] in chop};
+	    single_line := level max single_line;
+	else
+	    span(iw_line," ");
+	    iw_line := lpad(iw_line,max_width);
+	    printa(file,iw_line);
+	    iw_line := "";
+	    single_line := (indent + 1) max single_line;
+	end if;
+    end loop;
+end chop_write;
+
+-- Converts the AST to a tuple format, for pretty printing.
+-- Moved here from adared.stl and adamain.stl.
+procedure convert_ast(x);
+
+    y := [];
+    for i in [1..#x] loop 
+    if is_atom(x(i)) then
+        y with:= convert_ast(ast(x(i)));
+    elseif is_tuple(x(i)) then
+        y with:= convert_ast(x(i));
+    else
+        y with:= x(i);
+    end if;
+    end loop;
+    return y;
+end convert_ast;
+ 
+procedure mkstr(a);
+ 
+  -- Not to be used for tuples or sets.
+ 
+    const 
+          q  := "\"";
+ 
+    if is_string (a) and #a > 65 then
+	return q +/[if y=q then "\\\"" else y end if : y in a] + q;
+    else
+	return q + str (a) + q;
+    end if;
+end mkstr; 
+end adaio;

@@ -1,0 +1,543 @@
+package body adasem9;
+--*
+--* $Header: /cs.a/ada/ada/src/ada9x/adasem9.stl,v 1.2 91/01/02 14:57:21 banner Exp $
+--*
+--T+ 9. Tasks.
+--S+ task_spec 
+
+use globals;
+use adasem1;
+use adasem2;
+use adasem3;
+use adasem4;
+use adasem5;
+use adasem6;
+use adasem7;
+use adasem8;
+use adasem10;
+use adasem11;
+use adasem12;
+use adasem13;
+use evalstat;
+use adalib;
+use adaio;
+
+procedure task_spec(task_node) ;
+sem_trace_proc_entry(3, "Task_Spec");
+
+[kind, id_node, entries_node, opt_repr_clause_list] := ast(task_node) ;
+
+-- If this is a task declaration, an anonymous task type is introduced
+-- for it. Entry declarations are always attached to the task type.
+-- TBSL : processing of specifications.
+
+anon := (kind = "task_spec") ;
+id := adasem(id_node) ;
+t_id := if anon then ( "task_type:" + id + newat_str())
+		else id end if;
+
+task_type_name := find_type_name(t_id) ;
+if task_type_name = "any" then
+   sem_trace_proc_exit(3, "Task_Spec");
+   return [] ;				-- Illegal redeclaration.
+end if;
+old_kind := ST(task_type_name).type_of ;	-- May be a private type.
+
+ST(task_type_name) := 
+    ["task_type_spec", task_type_name, [], {}, current_scope, task_type_name];
+initialize_representation_info(task_type_name,"task");
+if old_kind in priv_types then 
+    check_private_declaration(kind, task_type_name) ; 
+end if;
+if anon then 
+    t_name := find_new(id) ;
+    ST(t_name) := ["task_obj_spec", task_type_name, [], {}, current_scope, om];
+else 
+    t_name := task_type_name ;
+end if;
+
+newscope(task_type_name);			-- introduce new scope
+name_prefix +:=  id + "."  ;			-- For unique names.	
+
+entries := [] ;
+priority := om ;
+
+for e in entries_node loop 
+    entry := adasem(e) ;
+    if is_tuple(entry(1)) then
+	-- priority declaration. Extract it from task specification.
+	[-, priority] := entry(1) ;
+    -- Check for an invalid pragma priority and ignore it.
+    elseif entry = [] then
+	null;
+    else
+ 	entries with:= entry ;
+    end if;
+end loop;
+
+entry_list := declared(current_scope) ;
+
+for repr_node in opt_repr_clause_list loop 
+    adasem(repr_node);
+end loop;
+
+popscope() ;
+ST(task_type_name).signature := entry_list ;
+
+result := [["type", task_type_name, 
+			["task_former", entries, [priority]]  ]] ;
+
+if anon then		
+    -- Attach entry declarations for task object as well, and emit a
+    -- declaration for the task object itself.
+
+    declared(t_name) := ST(t_name).signature := entry_list ;
+    for entry = entry_list(id) loop 
+	ST(entry).scope_of := t_name ;
+    end loop;
+
+    result with:= ["object", t_name, task_type_name] ;
+end if;
+sem_trace_proc_exit(3, "Task_Spec");
+return result ;
+end task_spec;
+--S+ task_body
+
+procedure task_body(blk) ;
+sem_trace_proc_entry(3, "Task_Body");
+
+task_name := current_scope ;
+if ST(task_name).nature = "task_type" then
+    -- Insert declaration for symbol that refers to self, for use by tasks of
+    -- this type.
+    [decls, stats, except] := blk ;			
+    decls := [["current_task", find_old("current_task")] ] + decls ;
+    blk := [decls, stats, except];		
+end if; 
+
+lab_end() ;
+popscope();
+sem_trace_proc_exit(3, "Task_Body");
+return [["task_body", ST(task_name).type_of, blk ]];
+end task_body;
+--S+ accept_statement 
+procedure accept_statement(id, indx, formals, body_node) ;
+sem_trace_proc_entry(3, "Accept_Statement");
+ 
+-- This procedure opens a new scope when an ACCEPT statement is seen.
+-- In the case of an overloaded entry name, it selects the one with
+-- the matching signature.
+
+
+-- Find the task  in which the accept statement occurs. The accept
+-- may of course appear within a block or another accept statement.
+
+certain := exists task_name in open_scopes  |  
+	   ST(task_name).nature notin {"block", "entry", "entry_family"} ;
+
+if ST(task_name).nature notin {"task_type", "task_obj"} then
+	errmsg("Accept statements can only appear in tasks", "","9.5") ;
+        entry_name := id ;
+        sem_trace_proc_exit(3, "Accept_Statement");
+        return [] ;
+end if;
+ 
+task_type := if ST(task_name).nature = "task_obj" then
+             ST(task_name).type_of else task_name end if;
+
+
+
+real_name := entry_name := declared(task_name)(id) ;
+
+
+if entry_name = om then
+    errmsg("Undefined entry name in ACCEPT: ", id, "9.5") ;
+    entry_name := id ;			-- For dummy scope.
+    sem_trace_proc_exit(3, "Accept_Statement");
+    return [] ;			--  to Initialize it .
+
+elseif ST(entry_name).nature = "entry" then
+    -- Collect all its overloadings and select the one with the
+    -- correct signature.
+    entries := ST(entry_name).overloads ;
+
+    if indx /= [] then 
+	errmsg("invalid index on entry (not entry family)","","9.5") ;
+    end if;
+
+    if exists entry_name in entries | same_sig_spec(entry_name, formals)
+    then
+        real_name := entry_name ;
+    else
+	errmsg("ACCEPT statement does not match any entry","","9.5") ;
+        sem_trace_proc_exit(3, "Accept_Statement");
+        return [] ;						
+    end if;
+
+elseif ST(entry_name).nature = "entry_family" then
+
+	ix_t := index_type(ST(entry_name).type_of) ;
+
+        if indx = [] then
+	    errmsg("Missing index for entry family.","","9.5") ;
+
+	else
+	    indx := check_type(ix_t, indx) ;
+	end if;
+
+        real_name := ["[]", entry_name, [indx]] ;
+else
+    errmsg("invalid entry name in accept: ", id, "9.5") ;
+    sem_trace_proc_exit(3, "Accept_Statement");
+    return [] ;
+end if;
+ 
+reprocess_formals(entry_name, formals) ;
+
+if entry_name in open_scopes then
+    errmsg("An accept statement cannot appear within an accept ",
+			" for the same entry","9.5") ;
+end if;
+newscope(entry_name) ;
+ 
+accept_body := adasem(body_node) ;
+popscope() ;
+sem_trace_proc_exit(3, "Accept_Statement");
+return ["accept", real_name, accept_body] ; 
+end accept_statement;
+
+--S+ entry_decl 
+procedure entry_decl(id, formals) ;
+sem_trace_proc_entry(3, "Entry_Decl");
+
+-- An entry declaration is treated like a procedure specification.
+-- An anonymous type is created for the entry object. This type is
+-- used by the interpreter to build the environment of an entry.
+
+
+check_out_parameters(formals);
+
+entry := chain_overloads(id, ["entry", "none", formals]) ;
+
+entry_type := anonymous_type() ;
+ST(entry_type) := ["entry_former", current_scope, ST(entry).signature, 
+		   {}, current_scope, entry_type];
+
+sem_trace_proc_exit(3, "Entry_Decl");
+return ["object", entry, entry_type] ;				
+end entry_decl;
+--S+ entry_family_decl
+
+procedure entry_family_decl(id, opt_range, formals) ;
+sem_trace_proc_entry(3, "Entry_Family_Decl");
+
+-- An entry family  is not  an overloadable  object. It  is  constructed
+-- as an array of entries. An anonymous type is introduced for the entry
+-- former, just  as for an  entry declaration, and another is introduced
+-- for the array representing the family.
+ 
+entry := find_new(id) ;
+ 
+check_out_parameters(formals);
+
+f := process_formals(entry,formals) ;
+ 
+entry_type := anonymous_type() ;
+ 
+ST(entry_type) := ["entry_former", current_scope, f, {}, 
+		   current_scope, entry_type] ;
+
+opt_range := make_index(opt_range) ;
+family_type := anonymous_type() ;
+ST(family_type) := 
+  ["array", family_type, [[opt_range], entry_type],
+				   {}, current_scope, family_type] ;
+ 
+ST(entry) := ["entry_family", family_type, f, {}, current_scope, entry] ;
+ 
+sem_trace_proc_exit(3, "Entry_Family_Decl");
+return ["object", entry, family_type] ;
+end entry_family_decl;
+--S+ entry_call
+
+procedure entry_call(obj, arg_list) ;
+sem_trace_proc_entry(3, "Entry_Call");
+
+-- process an entry call. -obj- is a selected component of an expression,
+-- whose type is a task type, or else an indexed component of an array 
+-- expression, in the case of a call to a member of an entry family.
+ 
+full_name := find_entry_name(obj) ;
+
+if full_name = [] then			-- previous error.
+    sem_trace_proc_exit(3, "Entry_Call");
+    return [] ;
+else
+    [task1, entry_names, indx] := full_name ;
+end if;
+
+if is_array(family := ST(e := arb entry_names).type_of) then
+
+    entry_type := component_type(family) ;
+    range_typ  := index_type(family) ;
+
+    if indx = om then
+	-- Case of a call to a parameterless family. The arg-list
+	-- is actually the index expression.
+        if #arg_list /= 1 then
+	    errmsg("Call to member of entry family requires one", 
+					" index","9.5, 3.6.1") ;
+            sem_trace_proc_exit(3, "Entry_Call");
+	    return [] ;
+        else
+	    indx := arg_list(1) ;
+	    arg_list := [] ;
+        end if;
+    end if;
+    -- The actual entry name is given by an indexed expression.
+    e_name := [ "[]", e, [check_type(range_typ , indx)]] ;
+
+    -- but resolution of the call needs only the family name.
+    ecall := check_type(family, [entry_names] + arg_list);
+else
+    if indx /= om then
+	errmsg("invalid index on " + original_name(arb entry_names) ,
+		" (not an entry family)", "9.5") ;
+    end if;
+
+    ecall := check_type("none", [entry_names] + arg_list) ;
+    e_name := ecall(3) ;		-- The resolved simple entry
+end if;
+
+-- If there was a type checking error previously stop processing
+if (ecall = []) then
+    sem_trace_proc_exit(3, "Entry_Call");
+    return [] ;
+end if;
+
+-- having resolved the call, use the unique entry name to complete the
+-- resolution of the task name itself.
+[-, task, -, arg_list] := ecall ;
+
+return trace_and_return(3, "Entry_Call",
+     ["ecall", complete_task_name(task1, ST(task).type_of), 
+						  e_name, arg_list]) ;
+
+end entry_call;
+--S+ check_entry_call
+
+procedure check_entry_call(stat_node) ;
+
+-- Verify that the call in a timed entry call or a conditional entry call
+-- is indeed a call to an entry,  and not to  a procedure, even if it re-
+-- names and entry.
+
+stat := adasem(stat_node) ;
+if stat=[] then return stat ;			       -- previous error.
+elseif stat(1) = "ecall" then return stat ;	       -- simple case
+elseif stat(1) = "call" then
+    errmsg("context requires entry call", "", "9.7.2, 9.7.3") ;
+    return [] ;
+else						       -- Previous error.
+    return stat ;
+end if;
+end check_entry_call;
+
+--S+ find_entry_name 
+procedure find_entry_name(obj) ;
+sem_trace_proc_entry(3, "Find_Entry_Name");
+
+-- Find the name of an entry or entry family, given by a qualified and
+-- ( in the case of a family) indexed expression. This differs from other
+-- cases of name resolution in that the name of the task containing the
+-- entry can be given by a complex expression that must be resolved.
+-- This procedure is also called to validate the argument of the COUNT
+-- attribute; this attribute can only be used within the task body, in
+-- which the entry need not be named as a selected component. An entry
+-- name will then be seen as an overloaded identifier. The task name is
+-- the scope of the entry.
+
+if is_overloaded(obj) then
+    entry_name := arb obj ;
+    task_name:= ST(entry_name).scope_of ;
+    entry := original_name(entry_name) ;
+    if not is_task_type(ST(task_name).type_of) then		
+       errmsg("invalid entry name","","9.5") ;
+       sem_trace_proc_exit(3, "Find_Entry_Name");
+       return [];
+    end if;
+
+elseif is_identifier(obj) then
+    -- Member of entry family, with index missing.
+    errmsg("Missing index in name of member of entry family","","9.5") ;
+    sem_trace_proc_exit(3, "Find_Entry_Name");
+    return [] ;    
+
+elseif obj(1) = "." then 
+    [-, task_name, entry] := obj ;
+    indx := om ;
+else						-- case of entry family.
+    [-, family_name, indx_list] := obj ;
+
+    if is_identifier(family_name) then
+	-- Entry family named in task body. Get enclosing task name.
+	task_name := ST(family_name).scope_of ;
+	entry := original_name(family_name) ;
+
+    else				-- Name is selected component.
+        [-,task_name, entry] := family_name ;
+    end if;
+    
+    if # indx_list /= 1 then
+       errmsg("Member of entry family requires a single index ",
+                                  "","9.5, 3.6.1") ;
+        sem_trace_proc_exit(3, "Find_Entry_Name");
+        return [] ;
+    end if;
+    indx := indx_list(1) ;			-- In any case.
+
+end if;
+task1 := valid_task_name(task_name) ;
+task_types := task1(2) ;
+if task_types = {} then -- Not a task.
+   sem_trace_proc_exit(3, "Find_Entry_Name");
+   return [] ; 
+end if;		   
+
+entry_names := {} ;
+for t in task_types loop 
+  if is_access(t) then 
+     t := ST(t).designated_type ; 
+  end if;
+
+  if (e := ST(t).signature(entry)) /= om then
+    if ST(e).nature = "entry" then
+	entry_names +:= ST(e).overloads ;
+    else				-- entry family name
+	entry_names with:= e ;
+    end if;
+  end if;
+end loop;
+
+if entry_names = {} then 
+    errmsg("Undefined entry name in task : ", entry,"9.5") ;
+    sem_trace_proc_exit(3, "Find_Entry_Name");
+    return [] ;
+elseif #entry_names > 1 and (exists e in entry_names |
+			    ST(e).nature = "entry_family") then
+    errmsg("ambiguous entry family name: ", entry, "9.5") ;
+    sem_trace_proc_exit(3, "Find_Entry_Name");
+    return [] ;
+else
+    sem_trace_proc_exit(3, "Find_Entry_Name");
+    return [ task1, entry_names, indx] ;
+end if;
+end find_entry_name;
+--S+ select_statement
+
+procedure select_statement(node) ;
+sem_trace_proc_entry(3, "Select_Statement");
+
+[-, alternative_list, else_stat_node] := ast(node) ;
+
+has_delay := exists delay_node in alternative_list 
+			 | node_kind(delay_node) = "delay_alt" ; 
+
+has_term  := exists  term_node in alternative_list
+		      | node_kind(term_node) = "terminate_alt" ; 
+
+has_else  := not is_empty(else_stat_node) ;
+
+if has_delay and has_term then
+    current_node := term_node ;
+    errmsg("Delay and terminate alternatives cannot appear ",
+		"in the same SELECT statement", "9.7.1") ;
+
+elseif (has_delay or has_term) and has_else then
+    current_node := else_stat_node ;
+    errmsg("ELSE part cannot appear in SELECT statement if ",
+		"delay or terminate alternatives are present","9.7.1");
+
+elseif #[n in alternative_list | node_kind(n) = "terminate_alt"] > 1
+then
+    errmsg("Only one terminate alternative can appear ",
+				"in a SELECT statement","9.7.1") ;
+
+end if;
+
+alternatives := [adasem(alt_node): alt_node in alternative_list] ;
+else_stat := if is_empty(else_stat_node) then om
+			else adasem(else_stat_node) end if;
+
+if not (exists alt in alternatives | 
+	alt(1) = "accept" or 
+	(alt(1) = "guard" and alt(3)(1) = "accept")) then
+   errmsg("SELECT statement must have at least one ACCEPT alternative", "",
+	  "9.7.1") ;
+end if;
+
+sem_trace_proc_exit(3, "Select_Statement");
+return ["selective_wait", alternatives, else_stat] ;
+
+end select_statement;
+--S+ terminate_statement
+
+procedure terminate_statement ;
+
+-- A terminate alternative is annotated with the nesting level of the
+-- statement, to simplify the retrieval of the task environment.
+sem_trace_proc_entry(3, "Terminate_Statement");
+certain := exists scope = open_scopes(i) | 
+			    ST(scope).nature in ["task_obj", "task_type"] ;
+if not certain then
+    errmsg("Invalid context for TERMINATE alternative", "", "9.7.1") ;
+    i := 1 ;
+end if;
+-- Loops and exception handlers are scopes for syntactic purposes, but
+-- not at run-time: exclude them from depth count.
+out_depth := i - 1 - #[scope in open_scopes(1..i) | 
+			    ST(scope).type_of in ["loop", "handler"] ] ;
+return ["terminate", out_depth] ;
+end terminate_statement;
+--S+ abort_statement
+procedure abort_statement(node_list) ;
+sem_trace_proc_entry(3, "Abort_Statement");
+
+tasks := [] ;
+
+for name_node in node_list loop 
+    task_name := find_old(adasem(name_node)) ;
+    task1 := valid_task_name(task_name) ;
+    types := task1(2) ;
+    if types = {} then				-- previous error
+	continue;
+    else
+	task_type := arb types ;
+	if not is_task_type(task_type) then	-- access type maybe.
+	    errmsg("expect task name in ABORT", "", "9.10") ;
+	    continue;
+	else
+            task_obj := resolve2(task1, task_type) ;
+	end if;
+    end if;
+
+    if is_identifier(task_obj) and ST(task_obj).nature = "task_type"
+    then
+	-- This is a reference to the task currently executing the body.
+	-- replace the name of the task type by its run-time identity.
+
+	if task_obj in open_scopes then
+	      task_obj := declared(task_obj)("current_task") ;	
+
+	else
+	      errmsg("Invalid task type in ABORT statement","","9.10") ;
+	end if;
+    end if;
+
+    tasks with:= task_obj ;
+end loop;
+sem_trace_proc_exit(3, "Abort_Statement");
+return ["abort", tasks] ;
+
+end abort_statement;
+end adasem9;

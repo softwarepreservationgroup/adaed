@@ -1,0 +1,2 @@
+adacomp -nl Mortage -b Mortage
+adaexec Mortage

@@ -1,0 +1,28 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem6_.stl,v 1.1 90/12/05 16:16:55 ada Exp $
+--
+package adasem6;
+   procedure subprogram_declaration(node) ;
+   procedure subprogram_specification(node) ;
+   procedure new_subprogram(specs);
+   procedure check_new_op(proc_id,formals,ret);
+   procedure subprogram_body(node) ;
+   procedure new_not_equals(prog_name) ;
+   procedure build_signature(prog_name) ;
+   procedure get_formals(formal_part, proc_id) ;
+   procedure invisible_designator(id, expn) ;
+   procedure process_formals(scope, form_list) ;
+   procedure reprocess_formals(scope, sig) ;
+   procedure normalize(typ, opt_init) ;
+   procedure conform(t1, t2) ;
+   procedure statement_name(name) ;
+   procedure proc_or_entry(name) ;
+   procedure desig_to_name(desig) ;
+   procedure chain_overloads(id, new_specs) ;
+   procedure can_overload(name) ;
+   procedure new_over_spec(name, specs) ;
+   procedure same_signature(sub1, sub2) ;
+   procedure same_sig_spec(subp, spec) ;
+   procedure same_type(type1,type2) ;
+   procedure check_out_parameters (formals) ;
+end adasem6;

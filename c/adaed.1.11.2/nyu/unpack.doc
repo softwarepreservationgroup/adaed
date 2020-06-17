@@ -1,0 +1,20 @@
+The Ada/Ed-C system version 1.11.2 for 386/DOS machines is packaged 
+using the Zoo archiver, Version 2.01. There are two Zoo files adaedexe.zoo 
+and adaedsrc.zoo. In addition Dewar's Advanced Syntax Checker (DASC) is 
+included in this distribution. It is a very fast syntax checker which detects
+the first syntax error in the program if any and then stops. To run simply
+type "DASC filename". DASC without any arguments will list the options.
+
+adaedexe.zoo contains the executables, demo programs, README, RELEASE.TXT, etc
+adaedsrc.zoo contains the sources and makefile to rebuild the system
+
+adaedexe.zoo is all that is necessary to compile and execute Ada program.
+
+To unpack simply copy both the zoo.exe and the appropriate zoo file to your 
+hard disk and then simply type
+
+    zoo x// adaedexe.zoo
+or
+    zoo x// adaedsrc.zoo
+
+Then look at the README and RELEASE.TXT files for further instructions.

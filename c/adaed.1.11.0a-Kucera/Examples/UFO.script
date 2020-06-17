@@ -1,0 +1,2 @@
+adacomp -nl UFO -b UFO
+adaexec UFO

@@ -1,0 +1,6 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_init_.stl,v 1.1 91/01/02 15:25:55 banner Exp $
+--
+package int_init;
+  procedure init_env(rd predef_procs);
+end int_init;

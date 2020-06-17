@@ -1,0 +1,9 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_expr_.stl,v 1.1 91/01/02 15:25:47 banner Exp $
+--
+package int_expr;
+  procedure veval_proc(rd evalexpr);
+  procedure opfix(opname);
+  procedure opbinary(opname);
+  procedure opunary(opname);
+end int_expr;

@@ -1,0 +1,640 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_types.stl,v 1.1 91/01/02 15:55:35 banner Exp $
+--
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_types.stl,v 1.1 91/01/02 15:55:35 banner Exp $
+--
+package body int_types;
+
+  use globals;
+  use int_attributes;
+  use int_globals;
+  use int_util;
+  use adaarith;
+
+--T+ TEVAL: Type evaluation (Chap.3)
+procedure teval_proc(type_expr);
+int_trace("TEVAL_PROC " , str(type_expr) ) ;
+
+--
+-- This procedure carries out the bulk of the type expression evaluation
+-- needed by 'teval_' . Type_expr is the expression to be evaluated.
+--
+-- Forms processed by TEVAL_PROC:
+-- ------------------------------
+--
+      if absent(type_expr) or type_expr = [] then
+         system_error("in TEVAL_PROC: type_expr absent or []");
+      end if;
+      case type_expr.opcode 
+--
+-- Quoted ITYPE
+--
+-- An ITYPE is essentially a constant value, and can be referenced
+-- directly in a TEXPR by using the form:
+-- 
+--   ['itype', itype]
+-- 
+-- where itype is any of the allowable ITYPE values, including the
+-- string name of an ITYPE whose value is obtained through EMAP.
+-- 
+      when "itype" => 
+        [-, typeval] := type_expr;
+        push( typeval );
+--
+-- Anonymous ITYPE
+--
+--   ['tname', texpr]
+--
+--   Used when a type name must be supplied for a texpr.
+--   If texpr is already a name it is simply returned.If not, a name
+--   is generated, and a type entry is created in EMAP for the value
+--   of the texpr.
+--
+      when "tname" => 
+        [-, texpr] := type_expr;
+        if is_simple_name(texpr) then
+          push( texpr );
+        elseif texpr.opcode = "itype" then
+          [-, itype_name] := texpr;
+          push( itype_name );
+        else
+          new_name := "$anon" + newat_str();
+          push( new_name );
+          exec( [["type", new_name, texpr]]);
+        end if;
+-- Private type with delayed elaboration
+--   [ 'delayed', delayed_statements ]
+--
+--    Internal type used to delay elaboration of subtypes of private 
+--    types
+--
+   when "delayed" => 
+       push( ["delayed", []] );
+--
+-- Fixed former
+--
+--   ['fixed_former', lower_bound_ivalue, upper_bound_ivalue, small, delta]
+--
+-- This forms returns a fixed ITYPE. The language rules guarantee that
+-- the bounds and the delta are static expressions (ivalues).
+
+    when "fixed_former" => 
+        [-, lbd, ubd, small, delta] := type_expr;
+        push( ["fixed", lbd(2), ubd(2), small(2), delta(2)] );
+--
+-- Float former
+--
+--   ['float_former', lower_bound_ivalue, upper_bound_ivalue, 
+--			digits_used, digits_declared]
+--
+-- Note: We may use a different value for the digits than the one
+-- specified by the user, as long as we are at least as accurate. The 
+-- value we use is given in -digits_used-. The value from the 
+-- declaration is in -digits-declared-.
+-- For all arithmetic we will use -digits-used-. -digits_declared- is 
+-- only for attributes.
+-- This forms returns a float ITYPE. The language rules guarantee that
+-- the bounds and the digits are static expressions (ivalues).
+
+    when "float_former" => 
+        [-, lbd, ubd, digits_used, digits_declared] := type_expr;
+        push( ["float", lbd(2), ubd(2), 
+		digits_used(2), digits_declared(2)] );
+--
+-- Enumeration Former
+-- 
+--   ['enum_former', lower_bound_ivalue, upper_bound_ivalue, enum_map]
+-- 
+--   This form returns an enumeration ITYPE, whose map
+--   is given by the enum_map entry, and whose bounds are given
+--   by the bounds ivalues, which are non_negative integers.
+--   This form is used when an enumeration type is constructed
+--   which is not declared in the source as a subtype of a previously 
+--   defined enumeration type. The language rules guarantee that all
+--   quantities may be evaluated statically in this case.
+--
+--
+      when "enum_former" => 
+        [-, lbd, ubd, enum_map] := type_expr;
+        push( ["enum", lbd, ubd, enum_map] );
+--
+-- Access Former
+--
+--  ['access_former', object_texpr]
+--
+--  Object_texpr evaluates to the type of the access object.
+-- 
+      when "access_former" =>  
+        [-, t_expr] := type_expr;
+        exec( [["teval_", ["tname", t_expr]],
+               ["teval_", ["access_former_"]] ]);
+--
+      when "access_former_" => 
+        pop( typename );
+        push( ["access", typename, curtask, height(curtask)] );
+--
+-- 
+-- Array Former
+-- 
+--   ['array_former', [index_texpr, index_texpr, ...], 
+--                                 element_texpr, is_constrained]
+-- 
+--   Again this is similar to the corresponding ITYPE form, except
+--   that ITYPE references are replaced by TEXPR's which
+--   must be evaluated to obtain the ITYPE for the array, and the entry
+--   for the index type is a sequence, to account for the case of
+--   multi-dimensional arrays 
+--
+       when "array_former" => 
+         [-, index_list, element_name] := type_expr;
+         push( ["array", index_list, element_name, false] );
+
+--
+-- Record Former
+-- 
+--   ['record_former', component_list]
+-- 
+--     component_list  ::=  [objdec_list, variant_part]
+--     objdec_list     ::=  [[field_kind, field_name, field_texpr,
+--                              field_vexpr]...]
+--     field_kind      ::=  'field' | 'object'
+--     variant_part    ::=  [variant_name, altern_list] | []
+--     altern_list     ::=  { [{choice, ...}, component_list], ... }
+--     choice          ::=  choice_vexpr | 'others'
+ 
+--   The record former is very similar in structure to a record ITYPE.
+--   The differences are that ITYPE references are replaced by TEXPR
+--   references, and IVALUE's are replaced by VEXPR's. Note that if
+--   several different fields are defined at once (using comma), the
+--   front end expands them as defined in RM 3.7.3.
+
+--   Discriminant fields have 'object' as the field_kind so that
+--   they may be extracted readily to form the disc_list for the itype.
+--   If the 'others' choice appears in altern_list, it must be the
+--   only component of the list for the last variant.  Note that the
+--   field_vexpr should be explictly
+--   qualified by the type of the field, if the type does not depend
+--   on a discriminant (Impl. Guide 3.7, RM 3.7, 3.2) .
+-- 
+       when "record_former" => 
+         [-, component_list] := type_expr;
+         [objdec_list, variant_part] := component_list;
+
+--   Component declarations may generate anonymous types. these must be
+--   elaborated before construction of the record can proceed.
+
+         inner_subtypes := [t: t in objdec_list | 
+				t.opcode in ["type", "delayed_type"]];
+         if inner_subtypes /= [] then
+            objdec_list := [t:t in objdec_list | 
+				t.opcode notin ["type", "delayed_type"]];
+            component_list := [objdec_list, variant_part];
+            exec(inner_subtypes with
+                 ["teval_", ["record_former", component_list]]);
+            return;
+         end if;
+
+         if variant_part /= [] then
+           [variant_name, altern_list] := variant_part;
+         else
+           variant_name := om;
+           altern_list := {};
+         end if;
+         exec([["teval_", ["record_former_", #objdec_list, #altern_list,
+                            variant_name]]]);
+
+	 disc_list := {};
+          for field_desc in objdec_list loop
+           [field_kind, field_name, field_texpr, field_vexpr] := 
+							field_desc;
+
+	   if field_kind = "object" then
+					-- extract discriminants
+	     disc_list with:= field_name; 
+	   end if;
+
+  -- Put proper initialization expression in place. If there is none,
+  -- then we supply a dummy one which assigns the value uninitialized.   
+
+           if present(field_vexpr) then 
+             exec( [["push_", field_vexpr]]);
+           else                         -- put place holder on stack
+             exec( [["push_", ["ivalue", uninitialized]] ]);
+           end if;
+
+           exec( [["teval_", ["tname", field_texpr]],
+                  ["push_", field_name] ]);
+         end loop;
+
+	 exec([["push_", disc_list]]);    -- save discriminants 
+
+          for component_list = altern_list(choice_set) loop
+           exec( [["push_", #choice_set],
+                  ["teval_", ["record_former", component_list]] ]);
+            for choice in choice_set loop
+             if is_range(choice) then
+               exec( [["push_", choice] ]);
+             elseif choice = "others" then
+               exec( [["push_", "others"] ]); 
+             else -- single value
+               exec( [["veval_", choice] ]);
+             end if;
+           end loop;
+         end loop;
+--
+--
+      when "record_former_" => 
+
+        [-, num_objs, num_alts, variant_name ] := type_expr;
+        objdec_list := [];
+
+        for i in [1..num_objs] loop
+          pop( field_vexpr );
+          pop( field_name );
+          pop( field_itype );
+          objdec_list with:= [field_name, [field_itype, field_vexpr]];
+        end loop;
+
+	pop( disc_list );
+
+        if absent(variant_name) then
+          variant_part := [];
+        else
+          altern_list := {};			
+           for i in [1..num_alts] loop
+            pop( component_itype );
+            [-, component_list] := component_itype;
+            pop( num_choices );
+            choices := {};
+             for j in [1..num_choices] loop
+              pop( choice );
+          --$    if is_range(choice) then       
+          --$     [-, lc, uc] := choice;
+          --$    choices +:= {lc..uc};  
+          --$ else
+                choices with:= choice;
+          --$    end if;
+            end loop;
+
+            altern_list (choices) := component_list;
+
+          end loop;
+
+          variant_part := [variant_name, altern_list];
+
+        end if;
+
+        component_list := [objdec_list, variant_part];
+        push( ["record", component_list, om, disc_list] );
+
+--
+--
+-- Task Former
+--
+-- ['task_former', entry_list, priority]
+--
+-- Task_former processes a task type declaration. The body of the
+-- task is added by a 'task_body' statement (q.v.). The entry_list
+-- is a list of object declarations for the entries of the task.
+-- The type of the entry must have been previously declared by
+-- a type declaration using entry_former (q.v.).
+--
+  when "task_former" => 
+    [-, entry_list, priority] := type_expr;
+    exec( [["teval_", ["task_former_",
+                priority(1) ? undef_prio, #entry_list] ]]);
+    ename_list := [];
+     for [-, ename, etype] in entry_list loop
+      ename_list with:= ename;
+      exec( [["teval_", ["tname", etype]]] );
+    end loop;
+    push( ename_list );
+--
+  when "task_former_" => 
+    [-, priority, num_entries] := type_expr;
+    etype_list := [];
+     for i in [1..num_entries] loop
+      pop( etype );
+      etype_list with:= etype;
+    end loop;
+    pop( ename_list );
+    entryids := [];
+     for i in [1..num_entries] loop
+      ename frome ename_list;
+      etype frome etype_list;
+      etype_desc := get_itype(etype);
+
+      if etype_desc.type_mark = "array" then
+         [-, [index_type], elmt_type] := etype_desc;
+         exec([["object", ename, elmt_type]]);			
+         [-, lbd, ubd] := get_itype(index_type);
+
+          for i in {lbd..ubd} loop
+              entryids with:= [ename, i];
+         end loop;
+
+      else
+         exec([["object", ename, etype]]);			
+         entryids with:= [ename, 1];
+      end if;
+    end loop;
+
+    taskbody := "$body_of_" + newat_str() ;
+    push( ["task", entryids, priority, taskbody] );
+--
+-- Entry former
+--
+--  ['entry_former', task_name, formals]
+--
+--  Entries are treated as objects which have type entry. Entry_former
+--  creates an entry type in a type declaration. The entry objects
+--  are created by the task_former. 
+--
+    when "entry_former" =>  
+      [-, -, formals] := type_expr; -- for the moment ignore the task name
+                                  -- the front end guarantees that entry
+                                  -- names are made unique
+      push( ["entry", formals] );
+--
+-- Subtype Operation
+--
+-- ['subtype', typemark, constraint]
+--
+--  The subtype operation takes a typemark and a constraint
+--  and produces a new type description meeting that constraint.
+--
+         when "subtype" =>  
+           [-, typemark, constraint] := type_expr;
+           if constraint = [] then
+             push( get_itype(typemark) );
+           else
+	     case constraint.opcode 
+-- 
+-- Index Constraint
+-- 
+--   ['subtype', array_itype, ['index', [texpr, texpr, ...]]]
+-- 
+--   The index constraint form is used to obtain an array ITYPE
+--   by applying the indicated list of index constraints. The
+--   array_itype entry type must be an array with the appropriate 
+--   subscript count. The TEXPR entries evaluate to discrete (integer
+--   or enum) ITYPE's which specify the range on each bound.
+--   Typically these are explicit ITYPE's evaluated by the front end, 
+-- 
+    when "index" => 
+      [-, index_list] := constraint;
+      [-, -, component_type] := get_itype(typemark);
+      if component_type = om then
+	  -- typemark is a delayed type.
+          component_type := "delayed";
+      end if;
+      exec( [["teval_", ["$index", #index_list]]] );
+      exec( [["push_", component_type]] );
+       for index in index_list loop
+         exec( [["teval_", ["tname", index] ]] );
+      end loop;
+-- 
+-- Range Constraint
+-- 
+--   ['subtype', discrete_itype, ['range', lowb_vexpr, highb_vexpr]]
+-- 
+--   The range constraint is used to form an ITYPE by constraining
+--   an existing integer or enumeration ITYPE with a bounds constraint.
+--   The bounds expressions are integer VEXPR's. 
+-- 
+-- 
+-- 
+       when "range" => 
+	 [-, l_vexpr, u_vexpr] := constraint;
+         exec( [["teval_", typemark],
+               ["veval_", l_vexpr],
+                ["veval_", u_vexpr],
+                ["teval_", ["$range"]] ]);
+-- 
+-- Accuracy Constraint
+-- 
+--   ['subtype', fixed_itype, ['delta', lb_vexpr, ub_vexpr, 
+--                             small_ivalue, delta_ivalue]]
+--   ['subtype', float_itype, ['digits', lb_vexpr, ub_vexpr, digs_ivalue,
+--					digits_declared_ivalue]]
+-- 
+-- 
+--   These forms are used to constrain existing float or fixed ITYPE's
+--   by applying bounds constraints (given as float or fixed VEXPR's)
+--   and either a digits constraint (given as an integer IVALUE), or
+--   a delta value (given as a fixed IVALUE).
+-- 
+--
+                 when "delta" => 
+                   [-, l_vexpr, u_vexpr, small, delta] := constraint;
+                   exec([["teval_", typemark],
+			 ["veval_", small],
+                         ["veval_", delta],
+                         ["veval_", l_vexpr],
+                         ["veval_", u_vexpr],
+                         ["teval_", ["$delta"]] ]);
+--
+                 when "digits" => 
+                   [-, l_vexpr, u_vexpr, digits, digits_declared] 
+						:= constraint;
+                   exec([["teval_", typemark],
+                         ["veval_", digits_declared],
+                         ["veval_", digits],
+                         ["veval_", l_vexpr],
+                         ["veval_", u_vexpr],
+                         ["teval_", ["$digits"]]]);
+-- 
+-- Discriminant Constraint
+-- 
+--   ['subtype', record_itype, ['discr', record_aggregate]]
+-- 
+--   This form is used to obtain an ITYPE for the result of applying
+--   discriminant constraints to an ITYPE for an existing record type.
+--   The record_aggregate component is a standard format record
+--   aggregate VEXPR whose entries give the names and values
+--   of the discriminants which form the constraint. If the ITYPE being
+--   created is the type of a record component of another record, one 
+--   or more of the discriminant values in the record_aggregate may be
+--   of the form ['discr_ref', discrim_name], if these values are the 
+--   values of the correspondingly named discriminants of the enclosing 
+--   record.
+--  
+--
+       when "discr" => 
+         [-, field_list] := constraint;
+         exec( [["teval_", typemark],
+                ["teval_", ["$discr", #field_list]] ]);		
+          for [field_name, field_vexpr] in field_list loop	
+             exec( [["veval_", field_vexpr],
+                     ["push_", field_name ]] );
+         end loop;
+--
+--
+         otherwise =>
+           system_error("constrain");
+--
+         end case;
+--
+       end if;
+--
+         when "$index" => 
+           [-, nbdim] := type_expr;
+           pop( component_name );
+           index_list := [];
+            while (nbdim -:= 1) >= 0 loop
+               pop( index_name );
+               index_list with := index_name;
+           end loop;
+           if component_name /= "delayed" then
+               push( ["array", index_list, component_name, true] );
+           -- else the subtype will be elaborated again.
+	   end if;
+--
+--
+         when "$range" => 
+	   int_trace("At $range","") ;
+           pop( valhi );
+           pop( vallo );
+           pop( typedesc );
+	   if is_tuple(valhi) and not is_discr_ref(valhi)  then 
+              valhi := valhi(3);
+           end if;
+	   if is_tuple(vallo)  and not is_discr_ref(vallo) then 
+              vallo := vallo(2); 
+           end if;
+	   int_trace("valhi=" , str(valhi) ) ;
+	   int_trace("vallo=" , str(vallo) ) ;
+	   int_trace("typedesc=" , str(typedesc) ) ;
+	   case typedesc.type_mark 
+             when "integer" => 
+	       [-, lbd, ubd] := typedesc;
+               lbd := maybe_discr(lbd) ;
+               ubd := maybe_discr(ubd) ;
+               if is_discr_ref(vallo)			       
+                   or is_discr_ref(valhi) then		       
+                 push( ["integer", vallo, valhi] );
+	       elseif vallo > valhi then -- null range
+
+ -- temp cut out constraint checks for null ranges see IG 3.6.1.a
+
+--                if lbd <= vallo and vallo <= ubd then
+                   push( ["integer", vallo, valhi] );
+--                 else
+--                   exec( [['raise', 'CONSTRAINT_ERROR',
+--				'out of bounds']] );	
+--                 end if;
+	       elseif lbd <= vallo and valhi <= ubd then
+		 push( ["integer", vallo, valhi] );
+               else
+		 exec([["raise", "CONSTRAINT_ERROR", "out of bounds"]]);
+	       end if;
+             when "enum" => 
+	       [-, lbd, ubd, enumlist] := typedesc;
+               lbd := maybe_discr(lbd) ;
+               ubd := maybe_discr(ubd) ;
+               if is_discr_ref(vallo) 			        
+                   or is_discr_ref(valhi) then                  
+                 push( ["enum", vallo, valhi, enumlist] );
+               elseif vallo > valhi then -- null range
+
+ -- see above
+ --                 if lbd <= vallo and vallo <= ubd then 
+                   push( ["enum", vallo, valhi, enumlist] );
+--                 else
+--                   exec( [['raise', 'CONSTRAINT_ERROR',
+--				'out of bounds']] );
+--                 end if;
+	       elseif lbd <= vallo and valhi <= ubd then
+		 push( ["enum", vallo, valhi, enumlist] );
+               else
+		 exec([["raise", "CONSTRAINT_ERROR", "out of bounds"]]);
+               end if;
+             otherwise =>
+               system_error("$index_range");
+           end case;
+--
+--
+         when "$digits" => 
+           pop( valhi );
+           pop( vallo );
+           pop( new_digits );
+           pop( new_digits_declared );
+           pop( typedesc );
+           [-, lbd, ubd, digits, digits_declared] := typedesc;
+           if typedesc.type_mark /= "float" then
+             system_error("$digits");
+           elseif new_digits_declared > digits_declared or 
+		  new_digits_declared <= 0 then
+             exec([["raise", "CONSTRAINT_ERROR", "digits"]]);
+           elseif float_leq(lbd, vallo) and 
+		  float_leq(valhi, ubd) then
+	     -- The actual digits used are those of the parent.
+             push( ["float", vallo, valhi, digits,
+	     				new_digits_declared] );
+           else
+             exec( [["raise", "CONSTRAINT_ERROR", "out of bounds"]]);
+           end if;
+--
+         when "$delta" => 
+           pop( valhi );
+           pop( vallo );
+           pop( new_delta );
+	   pop( new_small ) ;
+           pop( typedesc );
+           [-, lbd, ubd, small, delta] := typedesc;
+           if typedesc.type_mark /= "fixed" then
+             system_error("$delta");
+           elseif rat_lss(new_delta, delta) then
+             exec([["raise", "CONSTRAINT_ERROR", "too small delta"]]);
+           elseif fix_leq(lbd, vallo) and fix_leq(valhi, ubd) then
+             push( ["fixed", vallo, valhi, new_small, new_delta] );
+           else
+             exec( [["raise", "CONSTRAINT_ERROR", "out of bounds"]]);
+           end if;
+--
+      when "$discr" => 
+        [-, num_field_values] := type_expr;
+        pop( rectype );
+        field_map := {};
+         for i in [1..num_field_values] loop 
+          pop( field_name);
+          pop( field_value );
+          field_map( field_name ) := field_value;
+        end loop;
+        if rectype.opcode /= "delayed" then
+            push( apply_discr(field_map, rectype) );
+        else 
+           -- for a delayed (incomplete or private) type, the subtype
+           -- elaboration will take place later, but the discriminants that
+           -- do not depend on outer discriminants have been evaluated.
+           -- Note that the current system evaluates them twice (a minor error).
+             null ;
+        end if;
+--
+      when "'" => 
+        attribute_eval(type_expr); -- for 'range only       
+--
+  otherwise =>
+     system_error("attempt to elaborate unknown type " + str(type_expr) );
+--
+  end case;
+end teval_proc;
+
+procedure maybe_discr(e) ;
+
+-- The bounds of a subtype in an index constraint on a array aggregate for a
+-- component that is constrained by discriminants are found in the environment.
+
+if is_discr_ref(e) then
+    [-, disc, -] := e ;
+    v :=  emap(disc) ; 
+    if absent(v) then 
+        system_error("discriminant not visible") ;
+        return 0 ;
+    else return v ;
+    end if;
+else return e ;
+end if;
+end maybe_discr;
+end int_types;

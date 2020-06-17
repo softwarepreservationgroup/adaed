@@ -1,0 +1,13 @@
+---
+layout: post
+title:  "Ada/Ed project at New York University"
+date:   2020-06-17 13:27:00 -0700
+categories: source code, documents
+---
+This repository is intended to archive the source code and documentation for the Ada/Ed project at New York University.
+
+Ada/Ed began as an "executable specification" for the evolving Ada
+language standard, and was originally written in SETL. Later Ada/Ed
+was rewritten in C, which was available on a wide range of
+computers. The original SETL version was also translated to SETL2, the
+language designed by W. Kirk Snyder.

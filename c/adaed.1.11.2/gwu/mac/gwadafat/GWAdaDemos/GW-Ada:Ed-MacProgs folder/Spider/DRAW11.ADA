@@ -1,0 +1,1 @@
+WITH Spider; USE Spider;  WITH Left;PROCEDURE Drawing11 ISPROCEDURE Walk ISBEGINWHILE NOT AtWall LOOP     Step;END LOOP;END Walk;PROCEDURE Diagonal ISBEGINWHILE NOT AtWall LOOP     Step; Turn;     Step; Left;END LOOP;END Diagonal;BEGINStart;Turn;Walk;Left;Walk;Left;Left;Diagonal;Quit;END Drawing11;

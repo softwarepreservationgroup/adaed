@@ -1,0 +1,831 @@
+--
+--Header: /cs.a/ada/ada/src/hll/adasem7.stl,v 1.29 90/08/14 15:36:14 schonber Exp $
+--
+package body adasem7;
+
+use globals;
+use adasem1;
+use adasem2;
+use adasem3;
+use adasem4;
+use adasem5;
+use adasem6;
+use adasem8;
+use adasem9;
+use adasem10;
+use adasem11;
+use adasem12;
+use adasem13;
+use evalstat;
+use adalib;
+use adaio;
+
+--T+ 7. Packages
+--S+ package_specification
+
+procedure package_specification(node) ;
+sem_trace_proc_entry(3, "Package_Specification");
+
+[-, id_node, vis_node, priv_node] := ast(node) ;
+
+id := adasem(id_node) ;
+new_compunit("spec", id);
+new_package(id, "package_spec") ;
+
+specs := package_declarations(vis_node, priv_node) ;
+sem_trace_proc_exit(3, "Package_Specification");
+return end_specs("package", specs) ;
+
+end package_specification;
+--S+ new_package
+procedure new_package(id, kind) ;
+sem_trace_proc_entry(3, "New_Package");
+-- As a concession to readability, the unique names of compilation
+-- units are identical to their identifiers.
+if is_comp_unit() then
+    new_name := id ;
+    -- Enter module name in STANDARD
+    if declared(current_scope)(id) = om then
+        declared(current_scope)(id) := new_name ;
+        -- Enter "void" entry, with all field to be filled in below
+        ST(new_name) := ["void", "none", [], om, current_scope, om] ;
+    else   
+        errmsg("Duplicate unit name ", id , "8.3");
+    end if;
+else
+    new_name := find_new(id) ;
+end if;
+newscope(new_name) ;
+-- Initialize its symbol table, and enter new scope.
+declared(current_scope)      := {} ;
+visible(current_scope)       := {} ;
+ST(current_scope).private_decls := {} ;
+ST(current_scope).nature  := kind ;
+ST(current_scope).type_of := "none" ;
+
+-- Create dummy entry to hold use clauses, which are declarative items.
+find_new("$used") ;
+-- use_declarations(current_scope) := [] ;
+ST(declared(current_scope)("$used")).signature := [] ;
+
+-- Construct prefix for names declared within.
+name_prefix +:= id + "." ;
+sem_trace_proc_exit(3, "New_Package");
+end new_package;
+--S+ package declarations.
+procedure package_declarations(vis_node, priv_node) ;
+
+-- Process first declarations in visible part, save, and then process
+-- private declarations.
+
+sem_trace_proc_entry(3, "Package_Declarations");
+visible_decls := adasem(vis_node) ;
+-- The declarations so far constitute the visible part of the package
+visible(current_scope) := declared(current_scope) ;
+
+-- Check that all  incomplete types got full declarations.
+for [-,name] in visible(current_scope) loop 
+if ST(name).type_of = "incomplete" then
+    errmsg("missing full declaration for ", original_name(name),"3.8.1") ;
+end if;
+end loop;
+-- Now process private part of package.
+    
+priv_decls := private_part(priv_node) ;
+
+sem_trace_proc_exit(3, "Package_Declarations");
+return visible_decls + priv_decls ;
+end package_declarations;
+
+--S+ private_part
+procedure private_part(priv_node) ;
+
+-- Process private part of package or generic package specification.
+-- The current scope is marked 'private_part' to process all private
+-- declarations.
+
+sem_trace_proc_entry(3, "Private_Part");
+
+nat := ST(current_scope).nature ;			-- Save.
+ST(current_scope).nature := "private_part" ;
+priv_decls := adasem(priv_node);
+-- Force remaining types and emit information at the end of declarations.
+force_all_types() ;
+
+ST(current_scope).nature := nat  ;			-- restore.
+
+-- Check that private types and deferred constants got full declarations. 
+    
+for [nam, u_name] in visible(current_scope)  loop 
+
+     if  (ST(u_name).type_of in priv_types
+	  and ST(u_name).scope_of = current_scope			
+          and not is_generic_type(u_name))
+        or 
+	  (ST(u_name).nature = "constant" and ST(u_name).signature = []) 
+     then         
+	    -- Private object did not get private description.
+	  errmsg("Missing full declaration in private part for ", nam, "7.4.1");
+     end if;
+end loop;
+
+for [kind, u_name,-] in priv_decls loop 
+    if is_identifier(u_name)	-- to mask out "stmt" and "repr" decls
+	and ST(u_name).nature = "subtype" 
+	and ST(ST(u_name).type_of).type_of = "incomplete" then	
+        errmsg("premature constraint on incomplete type ", 
+			original_name(ST(u_name).type_of), " AI-0007");
+    end if;
+end loop;
+ 
+priv_decls +:= collect_reprs(); 
+
+-- Now exchange contents of private_decls and symbol table. In this
+-- fashion the declarations that were visible in the private part of
+-- the package, and that will be visible in the package body, become
+-- inaccessible outside of the package specification.
+
+for [u_name, vis_decl] in ST(current_scope).private_decls loop 
+     priv_decl := ST(u_name) ;
+     ST(u_name) := vis_decl ;
+     ST(current_scope).private_decls(u_name) := priv_decl ;
+end loop;
+sem_trace_proc_exit(3, "Private_Part");
+return priv_decls;
+end private_part;
+--S+ module_body_id
+
+procedure module_body_id(mod_nature, name) ;
+
+
+const
+  specs_of := 
+     {["package", {"package_spec", "generic_package_spec", "generic_package"}],
+      ["task",    {"task_type_spec", "task_obj_spec"}]} ;
+
+sem_trace_proc_entry(3, "Module_Body_Id");
+
+-- This procedure is invoked when the name of a module body has been
+-- seen. It opens the new scope, and if necessary retrieves from the
+-- library the specifications for the module.
+ 
+-- Check to see if the package name already refers to an instantiated unit
+if name in instantiations then
+    errmsg("Illegal redeclaration of instance ", name, "none");
+else null;
+end if;
+
+new_compunit("body", name);
+
+mod_name := find_old(name);
+if not is_comp_unit() and ST(mod_name).scope_of /= current_scope then
+    errmsg("specification and body are in different scopes", "", "7.1, 9.1") ;
+end if;
+
+if is_comp_unit() and ST(mod_name).nature = "generic_package_spec" then
+   generic_units with:= unit_name;
+end if;
+
+-- Nature of specification must match that of current body
+if ST(mod_name).nature in specs_of(mod_nature) then
+    sem_trace(3,str(mod_name) + " is Not a spec any longer") ;
+    rmatch(ST(mod_name).nature, "_spec") ;	-- not a spec any longer	
+else
+   errmsg("Matching specification not found for body ",name,"7.1, 9.1");
+end if;
+
+ST(mod_name).private_decls ?:= {} ;	-- For safe processing of body.
+declared(mod_name) ?:= {} ;					
+newscope(mod_name) ;
+name_prefix +:= name + ".";
+
+if ST(mod_name).nature = "task_type" then
+    -- Within the body of a task type, the name of the task can be used 
+    -- to designate the task currently executing the body. We create an 
+    -- alias to be elaborated at run-time, under the name 'current_task'.
+
+    c := find_new("current_task") ;
+    ST(c).type_of := mod_name ;
+    ST(c).nature := "obj" ;
+
+elseif ST(mod_name).nature = "task_obj" then
+    -- remove -spec marker from its anonymous task type as well.
+    ST(ST(mod_name).type_of).nature := "task_type" ;
+
+elseif mod_nature = "package" then
+
+    -- Within a package body, declarations from the private part of the 
+    -- specification are  visible. Swap  visible and  private versions.
+
+    for [item, pdecl] in ST(mod_name).private_decls loop 
+        [ST(item), ST(mod_name).private_decls(item)] := [pdecl, ST(item)];	
+    end loop;
+
+    -- Furthermore, composite types that depend on (outer) private types
+    -- may now be fully useable if the latter received full declarations,
+    -- (as long as they do not depend on external private types...)
+
+    for [-, t] in declared(mod_name) | is_type(t) and 
+	  (exists mark in ["private", "limited private", "incomplete"]
+		      | mark in  (ST(t).misc_type_attributes ? {})) loop 
+
+     	  real_t := if is_access(t) then ST(t).designated_type else t end if;
+
+          if not is_private(real_t) then			
+              -- full declaration  of private ancestor(s) has been seen.
+	      -- save visible declaration before updating.
+	      ST(mod_name).private_decls(t) := ST(t) ;
+	      ST(t).misc_type_attributes less:= mark ;
+          end if;
+
+    end loop;
+
+    -- and install the use clauses that were encountered in the specifi-
+    -- cation.
+    -- used_mods +:= use_declarations(mod_name) ? [];		
+    used_mods +:= ST(declared(mod_name)("$used")).signature ? [];
+
+-- Else the body was not found. Error was emitted already.
+end if;
+
+-- Initialize the stacks used for label processing.
+lab_init() ;
+sem_trace_proc_exit(3, "Module_Body_Id");
+end module_body_id;
+ 
+--S+ package_body
+procedure package_body(blk) ;
+
+sem_trace_proc_entry(3, "Package_Body");
+
+package_name := current_scope ;
+lab_end() ;
+popscope();
+
+-- Having finished the package_body, we restore the visible 
+-- declarations and save the private ones. 
+
+for [item, pdecl] in (ST(package_name).private_decls)  loop 
+     [ST(item), ST(package_name).private_decls(item)] := [pdecl, ST(item)];
+end loop;
+
+sem_trace_proc_exit(3, "Package_Body");
+if ST(package_name).nature =  "generic_package" then 
+    return generic_package_body(package_name, blk) ;
+else
+    save_body_info(package_name) ;
+    return [["package_body", package_name, blk]] ;		
+end if;
+
+end package_body;
+--S+ generic_package_body
+procedure generic_package_body(package_name, blk) ;
+
+-- For purposes of generic instantiation, we must save not only
+-- the visible part of the package, but all declarations in the
+-- body as well, including declarations  for nested non-generic
+-- objects. This parallels what is done at the point of instan-
+-- tiation. We also save a list of all local identifiers, which
+-- will have to be renamed during the instantiation process.
+
+sem_trace_proc_entry(3, "Generic_Package_Body");
+locals := {} ;
+
+if unit_name(1) in {"body","subprog"} and #unit_name = 2 then
+   spec_name := ["spec", unit_name(2)] ;
+   if lib_unit(spec_name) = aisfile and
+	#(unit_decl(spec_name) ? []) > 0 then
+	-- Unpack unit specification.
+	[unit_unam, specs, decmap, old_vis, notvis,ctx] := unit_decl(spec_name) ;
+		
+	scopes := {package_name} ;
+	-- Update the specs of generic types, that may carry the
+	-- marker "$constrain', because of usage in body.
+	for [-, t_name] in declared(package_name) | is_generic_type(t_name) loop 
+	   specs(t_name) := ST(t_name) ;
+	end loop;
+	while scopes /= {} loop 
+	    scope from scopes ;
+
+	    specs(scope)  := ST(scope) ;
+	    decmap(scope) := declared(scope) ;
+	    body_decls    := declared(scope) - (visible(scope) ? {});
+	    notvis(scope) := body_decls ;
+
+	    for [-,u_name] in body_decls loop 
+		specs(u_name) := ST(u_name) ;
+
+		if ST(u_name).scope_of = scope then
+		    -- Local declaration, and not a renaming.
+		    locals with:= u_name ;
+		end if;
+
+		if declared(u_name) /= om 
+			    and not can_overload(u_name)
+                              and ST(u_name).nature /= "generic_package"
+		then	-- Contains further collectible decls.
+		    scopes with:= u_name ;
+		end if;
+	    end loop;
+
+	end loop;
+	-- The body and locals are part of the generic signature.
+	if (errcount = pre_errcount) then
+       	   ST(package_name).signature +:= [blk, locals] ;
+        end if;
+
+	specs(package_name) := ST(package_name) ;
+		
+	-- Repackage the unit's information.
+
+	unit_decl(spec_name) := [unit_unam, specs, decmap, old_vis, notvis,ctx]; 
+    elseif is_comp_unit() then
+	-- Repackage as a specification. 
+       	ST(package_name).signature +:= [blk, locals] ;
+	newscope(package_name) ;			-- For end_specs
+	end_specs("generic_package", {}) ;
+    else 
+        -- subunit defined in  another compilation. Needs work.               
+        null;
+    end if;
+else 
+    -- body is proper body of a subunit. Probably complications lurk...
+    null;
+end if;
+ST(package_name).signature +:= [blk, locals] ;  -- In any case.
+
+sem_trace_proc_exit(3, "Generic_Package_Body");
+return [["procedure", package_name, [], [[],[["return", package_name, 0]],[]]]];
+end generic_package_body;
+
+--S+ private_decl
+procedure private_decl(id, opt_discr, priv_kind) ;
+sem_trace_proc_entry(3, "Private_Decl");
+
+if declared(current_scope)(id) = om then
+    name := find_new(id) ;
+    ST(name).type_of := priv_kind ;
+    ST(name).root_type := name ;					
+    process_discriminants(name, opt_discr) ;
+    ST(name).nature := "type" ; 
+    ST(name).misc_type_attributes := {} ;				
+    popscope() ;
+    
+    if ST(current_scope).nature notin 
+      {"package_spec", "generic_package_spec", "generic_part" } then
+        errmsg("Invalid context for private declaration", "", "7.4, 12.1.2") ;
+    end if;
+else
+    errmsg("Invalid redeclaration of ", id, "8.2");
+    name := "" ;
+end if;
+sem_trace_proc_exit(3, "Private_Decl");
+return name ;
+end private_decl;
+
+--S+ fully_declared
+procedure check_fully_declared(type_mark) ;
+
+-- Called from object and constant declarations, to ensure that a
+-- private or incomplete type is not used in a declaration before its
+-- full declaration has been seen.
+
+if is_incomplete_type(type_mark) then
+    errmsg("invalid use of type " + original_name(type_mark),
+	" before its full declaration","3.8.1, 7.4.1") ;
+end if;
+
+-- If the type is a generic private type, and is used as an unconstrained
+-- subtype indication, note that its instantiations will have  to be with
+-- a constrained type.
+
+check_generic_usage(type_mark) ;
+
+end check_fully_declared;
+--S+ check_fully_declared2
+procedure check_fully_declared2(type_mark) ;
+
+-- Called from array element and component declarations, to ensure that 
+-- an incomplete type is not used before its full declaration is  seen.
+
+check_incomplete(type_mark) ;
+check_generic_usage(type_mark) ;
+
+end check_fully_declared2;
+
+--S+ is_private
+procedure is_private(type_mark) ;
+
+-- A type is private if its parent type is private, or if it is a
+-- composite type with private subcomponent. This differs
+-- from what is done in private_ancestor, where only incomplete priv.
+-- subcomponents are of interest.
+
+return ST(base_type(type_mark)).type_of in priv_types
+    or ST(ST(type_mark).root_type).type_of in priv_types
+
+    or (is_array(type_mark) and is_private(component_type(type_mark)))
+
+    or (is_record(type_mark) and (exists [-, comp] 
+		in ST(base_type(type_mark)).signature.declared_components
+		| is_private(ST(comp).type_of))) ;
+end is_private;
+--S+ is_limited_type
+procedure is_limited_type(type_mark) ; 
+
+-- A type is limited if its parent type is a limited private type or a task
+-- type, or if it is a composite type with a limited subcomponent. 
+
+attr := ST(type_mark).misc_type_attributes ? {} ;
+return ST(base_type(type_mark)).type_of = "limited private"
+    or ST(ST(type_mark).root_type).type_of = "limited private" 
+    or is_task_type(type_mark)
+
+    or (is_array(type_mark) and	
+       (is_limited_type(component_type(type_mark))
+	   or "limited private" in attr
+	   or "limited "        in attr))
+
+    or (is_record(type_mark) and 
+       ((exists [-,comp] in 
+		ST(base_type(type_mark)).signature.declared_components
+	    		| not is_type(comp)  
+			  and is_limited_type(ST(comp).type_of))
+	   or "limited private" in attr 
+	   or "limited "        in attr)) ;
+end is_limited_type;
+--S+ private_kind
+procedure private_kind(type_mark) ;
+-- Called to establish the private attributes of composite types that
+-- might have a incomplete and/or private or limited component.
+--
+-- We must distinguish between fully limited types, such as task types,
+-- and  limited private types, which  are not limited  in the  defining
+-- package body. Limited private types become limited when used outside
+-- of their scope  of definition, and so  do composite  types with such
+-- components, or derived  types of them. This procedure is used to set
+-- the corresponding attribute in a type definition.
+-- For a composite type  T that has subcomponents of a private (non limited)
+-- type PT  and is defined in the scope of PT, operations that depend on
+-- the full declaration of PT are not available until the immediate
+-- scope of T is entered. (This is significant only if T is defined in
+-- an inner package). For such composite types, the attribute 'private'
+-- indicates that these operations are not yet available.
+-- On the other hand,  outside of the scope of PT, there are no restrictions
+-- on the use of T, and no attribute is attached to it.
+--   Generic  limited types  and composites of them are always limited.
+-- On the other hand, composites of generic private types are fully usa-
+-- ble, and do not receive a private attribute.
+
+r := ST(type_mark).root_type ;
+kind :=  
+    if is_scalar_type(type_mark) then om
+
+    elseif (t := ST(r).type_of) in priv_types
+    then t
+				
+    elseif exists attr in incp_types |
+		         attr in (ST(type_mark).misc_type_attributes ?{})
+    then attr
+
+    elseif is_task_type(type_mark) then "limited"
+
+    elseif is_access(type_mark)  and
+     (t := ST(base_type(ST(type_mark).designated_type)).type_of) in incp_types
+	then t
+
+    else om 
+end if;
+
+if (is_generic_type(type_mark) or ST(r).scope_of notin open_scopes)
+   then if kind = "limited private" then kind := "limited" ;
+   elseif kind = "private"   	    then kind := om ;
+   end if;
+end if;
+
+return kind ;
+
+end private_kind;
+
+--S+ is_fully_private
+procedure is_fully_private(type_mark) ;
+
+-- Check whether a composite type has an 'incomplete' private component.
+
+f_types := ["private", "limited private", "incomplete"] ;
+
+return     is_set (a := ST(base_type(type_mark)).misc_type_attributes) 
+	and 
+	   (exists kind in f_types | kind in a) ;
+end is_fully_private;
+--S+ Check Private Declaration
+procedure check_private_declaration(kind, type_name) ;
+
+-- Verify that the full declaration of a private type satisfies the
+-- restrictions stated in 7.4.1., 7.4.4.
+
+package_name := ST(type_name).scope_of ;
+if kind = "private" and is_limited_type(ST(type_name).type_of) then
+    errmsg("Private type requires full declaration ",
+				" with non limited type","7.4.1") ;
+
+elseif ST(type_name).nature = "array" then
+    errmsg("Private type cannot be fully declared ",
+		" as an unconstrained array type","7.4.1") ;
+else
+    -- If the private type is not declared with discriminants, it cannot 
+    -- be instantiated with a type with discriminants. Retrieve the pri-
+    -- vate declaration to find if discriminant list was present.
+
+    [-,-, [invar_part, -], attributes ] := 
+				ST(package_name).private_decls(type_name) ;
+    has_discr := exists [-, n, -] in invar_part | ST(n).nature = "discriminant";
+    if can_constrain(type_name) and not has_discr then
+	errmsg("Private type without discriminants cannot be given ",
+	"full declaration with discriminants","7.4.1") ;
+    -- and viceversa.
+    elseif has_discr and 
+     (ST(type_name).nature /= "record" or not has_discriminants(type_name))
+    then
+	errmsg("A private type with discriminants must be given full ",
+	"declaration with a discriminated type", "7.4.1") ;
+    elseif "out" in attributes ? {}
+    and is_limited_type(type_name) then
+        errmsg("Use of type for an OUT parameter requires ",
+               " full declaration  with non limited type", "7.4.4") ;
+    end if;
+end if;
+-- Composite types defined in the package and which include a component
+-- whose type is type_name are now usable in full (if type_name itself is
+-- not limited). They  may be defined in the visible part of the package,
+-- or in the (current) private part.
+-- The private dependents are part of the attributes of the private type.
+
+if not is_limited_type(type_name) then
+    for t in attributes | 
+	t notin misc_attributes and 
+	(ST(t).scope_of = package_name or ST(t).scope_of = current_scope) 
+    loop 
+        -- Save visible definition before updating.
+        ST(package_name).private_decls(t) := ST(t) ;
+        ST(t).misc_type_attributes less:= kind ;
+    end loop;
+end if;
+check_generic_usage(type_name) ;
+
+end check_private_declaration;
+--S+ private_ancestor
+procedure private_ancestor(type_name) ;
+
+-- A type name has  a private ancestor  if it  is a subtype of, or has a
+-- component which is a subtype of, a private type whose full definition
+-- has not been seen yet. If the private ancestor of  t is defined, then
+-- t cannot  appear in  a type derivation,  and its  elaboration must be
+-- performed after that of the ancestor.
+
+sem_trace_proc_entry(4, "Private_Ancestor");
+sem_trace(4, "type_name: " + str(type_name) );
+
+relevant_scopes := ["package_spec", "generic_package_spec",
+				      "generic_part", "private_part"] ;
+ret_val := 
+   if  ST(current_scope).nature in relevant_scopes 
+   or (ST(current_scope).nature in ["record", "void"]
+   and ST(ST(current_scope).scope_of).nature in relevant_scopes)
+then trace_ancestor(type_name, {})  
+    else om 				
+end if;
+sem_trace_proc_exit(4, "Private_Ancestor");
+return ret_val;
+end private_ancestor;
+
+procedure trace_ancestor(type_name, seen) ;
+
+-- Recursive procedure to find the private components of a composite
+-- type. this procedure uses a collection variable in order to detect 
+-- (invalid) recursive type definitions of private types.
+
+sem_trace_proc_entry(4, "Trace_Ancestor");
+-- For now, just trace exit immediately.
+sem_trace_proc_exit(4, "Trace_Ancestor");
+
+if type_name in seen then
+    errmsg("recursive definition of private type ",
+				original_name(type_name), "7.2") ;
+    return "any";
+else
+    seen with:= type_name ;
+end if;
+
+if is_scalar_type(type_name) then return om ;
+
+elseif ST(type_name).type_of in priv_types 
+    and ST(type_name).scope_of in open_scopes then
+    if not is_generic_type(type_name) then			
+    	return type_name ;
+    else	      -- A generic type is never seen by the interpreter 
+	return om ;
+    end if;
+else 
+    case ST(type_name).nature  
+    when "subtype" =>  
+        return trace_ancestor(base_type(type_name), seen) ;
+
+    when "array" => 
+        pr := trace_ancestor(component_type(type_name), seen) ;
+        if pr = "any" then
+           -- Circular definition of private type.
+	   -- component_type(type_name) := "any" ;
+           type_name.signature(2) := "any";
+        end if;
+        return pr ;
+
+    when "record" => 
+      if exists [id, comp] in 
+		ST(base_type(type_name)).signature.declared_components
+ 		|  (not is_type(comp)
+		    and (pr := trace_ancestor(ST(comp).type_of, seen)) /= om )
+      then
+         if pr = "any" then
+              -- Circular definition of private type. Obliterate offending
+	      -- component.
+	      ST(comp).type_of := "any" ;
+         end if;
+         return pr ;
+      else return om;
+      end if;
+
+    when "access" => 
+	-- Access types need not be deferred.
+	return om ;
+
+    end case;
+
+end if;
+
+return om ;		-- If none of the above.
+
+end trace_ancestor;
+
+--S+ end_specs
+procedure end_specs(kind, declarations) ;
+sem_trace_proc_entry(3, "End_Specs");
+ 
+-- This procedure is invoked at the end of a module specification.
+-- If this spec. is a compilation unit, then we save in UNIT_DECL
+-- all the declarations processed for the module. These declarations
+-- are retrieved (by procedure get_specs) when the separate compilation
+-- facility is used.
+-- In the case of generic modules, we must we must save the
+-- specs of the generic object in its signature, to simplify its instan-
+-- tiation. In order to insure that a separately compiled generic object
+-- is properly saved, we make the object name accessible within its own
+-- scope. This insures that its symbol table entry is correctly saved.
+ 
+-- save visible mods for this scope.
+old_vis := [v in vis_mods | v /= "ASCII"];
+-- Save the names of all subprogram specifications found in the package
+-- spec. for use by code generator.
+if kind /= "generic_package" then
+    ST(current_scope).signature := [] ;
+
+    for [-, n] in declared(current_scope) loop 
+        if ST(n).nature in 
+	  ["procedure_spec", "function_spec", "task_type_spec"] then
+	    ST(current_scope).signature with:= n ;
+        elseif ST(n).nature = "package_spec" then
+	    ST(current_scope).signature +:= ST(n).signature ? [] ;
+        end if;
+    end loop;
+
+end if;
+nam := current_scope ;
+popscope() ;
+
+if is_comp_unit() then
+    save_spec_info(nam, old_vis) ;
+else
+    -- If the module is a sub-unit, make sure that it is visible in
+    -- its enclosing scope (except if it is a generic package).
+
+    vis_mods +:= [v in old_vis | v notin vis_mods] ;
+    if kind /= "generic_package" then
+        vis_mods +:=  [nam];
+    end if;
+
+end if;
+ 
+sem_trace_proc_exit(3, "End_Specs");
+return if kind = "package" then [["package", nam, declarations]] 
+                           else [] end if;
+ 
+end end_specs;
+--S+ check_incomplete_decls
+procedure check_incomplete_decls(scope, rw decls) ;
+
+-- At the end of a block, verify that entities that need a body received
+-- one, and add dummy package bodies for package specs that do not have
+-- an explicit one.
+
+for [id, name] in declared(scope)  loop 
+    if needs_body(name)
+     and (not is_anonymous_task(name))
+     and (not (exists stub in new_stubs  | stub(2) = original_name(name)))
+    then
+        errmsg("Missing body for " + ST(name).nature + " ", 
+	    		original_name(scope) + "." + id, "7.3") ;
+
+    elseif ST(name).type_of = "incomplete" then
+	errmsg("Missing full type declaration for incomplete type ",
+		id, "3.8.1") ;
+
+    elseif ST(name).nature = "package_spec" then
+        decls with:= ["package_body", name, []] ;
+    end if;
+end loop;
+
+end check_incomplete_decls;
+--S+ needs_body 
+procedure needs_body(name) ;
+
+-- Procedures and function specs need bodies of course. So do package
+-- specs that contain objects which need bodies. Nested declarations in
+-- package specification may contain circularities because of renamings.
+-- ( See c45307d for an example). Thus the recursive call to needs_body
+-- must exclude renamed objects from other scopes.
+
+nat := ST(name).nature ;
+
+return 
+    if nat in ["package_spec", "generic_package_spec"]
+	then (exists [-,obj] in visible(name) | 
+		              ST(obj).scope_of = name and needs_body(obj))
+	or
+	(exists [-,obj] in declared(name) | ST(obj).type_of = "incomplete")
+    elseif rmatch(nat, "_spec") /= "" then true
+    else false
+    end if;
+end needs_body;
+
+--S+ get_specs
+procedure get_specs(name) ;
+sem_trace_proc_entry(4, "Get_Specs");
+ 
+-- Obtain the specification for a module name. This is done in
+-- two cases :
+-- a) When we process the WITH clause of a new compilation
+-- unit.
+-- b) When we compile the body of a module. The corresponding
+-- module specification must have been compiled already, an must be
+-- available. The specs for the module are used to initialize the
+-- declarations for the body. Note that this is not equivalent to 
+-- placing the module name in the list of used modules for this
+-- compilation.
+ 
+ 
+ 
+if retrieve(["spec", name]) then
+    spec_name := ["spec", name] ;
+elseif retrieve(["spec instance", name]) then
+    spec_name := ["spec instance", name] ;
+else
+    errmsg("Compilation unit not found: ", name,"10.1");
+    sem_trace_proc_exit(4, "Get_Specs");
+    return;
+end if;
+
+versions_used(spec_name) := if comp_date(spec_name) = om then om
+			  else comp_date(spec_name)(spec_name) end if;
+
+-- Read in the unique names and the declared types of all visible
+-- names in the module specification.
+[unit_unam, specs, decmap, old_vis, notvis] := unit_decl(spec_name) ;
+specs   ?:= {};
+decmap  ?:= {};
+old_vis ?:= {};
+notvis  ?:= {};
+
+for info = specs(u_nam) loop 
+    ST(u_nam) := info ;
+end loop;
+
+for dec = decmap(sn) loop  
+    declared(sn) := dec;
+    visible(sn) :=  dec - (notvis(sn) ? {});
+end loop;
+-- Predefined unit that are mentioned in a WITH clauses are not saved in
+-- UNIT_LIB, for storage reasons. Their contents must be brought in ex-
+-- plicitly, but their direct visibility must not be modified.
+
+for u in old_vis | ["spec",u] in predef_units and u notin vis_mods loop 
+    maybe_decl := declared("STANDARD#0")(u);
+    get_specs(u) ;
+    declared("STANDARD#0")(u) := maybe_decl ;
+end loop;
+vis_mods +:= [v in old_vis | v notin vis_mods];
+declared("STANDARD#0")(name) := unit_unam;
+ 
+sem_trace_proc_exit(4, "Get_Specs"); 
+end get_specs;
+
+end adasem7;

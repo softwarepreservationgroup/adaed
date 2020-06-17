@@ -1,0 +1,192 @@
+# This makefile is for building the Ada/Ed system with Intels Code Builder.
+# Note that this makefile is edited by a sed script from a Makefile for
+# the unix version of Ada/Ed and therefore has extraneous stuff which
+# isnt used for the 386 version.
+#
+
+SHELL=/bin/sh
+
+CC=icc
+CFLAGS=-O3 -DIBM_PC -DMONITOR
+#CFLAGS=-O3 -DIBM_PC
+
+#CC= g++
+
+#CC= CC
+
+LINKER= $(CC)
+
+
+
+.SUFFIXES:
+.SUFFIXES: .obj .c .h .ch .s .vbs
+
+.c.obj:
+	$(CC)$(CCVAR) $(CFLAGS) -c $<  
+
+.s.obj:
+	$(CC)$(CCVAR) $(CFLAGS) -c $<
+
+# always remake .h file when rebuild .c from .ch
+# we make the derived files read-only so that attempts to edit them
+# will fail, and so hopefully remind the user that the .ch file
+# is the (single) file to be edited.
+
+.ch.h:
+	del $*.h
+	echo >$*.h
+	chmod u+w $*.h
+	makech -h  < $< > $*.h
+	chmod a-w $*.h
+
+.ch.c:
+	del $*.c
+	echo >$*.c
+	chmod u+w $*.c
+	makech -c < $< > $*.c
+	chmod a-w $*.c
+
+.vbs.h:
+	del $*.h
+	touch $*.h
+	chmod u+w $*.h
+	cdecom <$*.vbs | uniq >$*.h
+	chmod a-w $*.h
+
+# TARGET TO MAKE EVERYTHING
+
+EXECS =	adafront.exe adagen.exe adabind.exe adaexec.exe adacomp.exe adalib2.exe adalib.exe
+
+all: $(EXECS)
+
+predef.lib: $(EXECS)
+	.\adafront -s p -nl .\ predef.ada
+	.\adagen -g p -nl .\ predef
+	rename 0.axq predef.axq
+	rename 0.trc predef.trc
+	rename lib predef.lib
+
+install : all predef.lib
+
+# remove all targets
+clean:
+	del *.obj *.lm core $(EXECS) adaint
+	del  $(MADE_HDRS) $(MADE_SRCS)
+
+#---------------------------#
+# adalib FILES AND ACTIOONS #
+#---------------------------#
+
+LIB_OBJS = adalib.obj misc.obj libf.obj
+
+adalib.exe: $(LIB_OBJS)
+	$(LINKER) -n -e adalib @lib.lnk 
+
+LIB_OBJS2 = adalib2.obj misc.obj libf.obj
+
+adalib2.exe: $(LIB_OBJS2)
+	$(LINKER) -n -e adalib2 @lib2.lnk   
+
+#---------------------------#
+# adacomp FILES AND ACTIONS #
+#---------------------------#
+
+COMP_OBJS = adacomp.obj adamrg.obj misc.obj
+
+adacomp.exe: $(COMP_OBJS)
+	$(LINKER) -n -e adacomp @comp.lnk   \intelc\lib\graphics.lib
+
+#----------------------------#
+# adafront FILES AND ACTIONS #
+#----------------------------#
+
+FRONT_OBJS = action.obj acttoks.obj adalex.obj adafront.obj adared.obj debug.obj errs.obj \
+			follow.obj libf.obj lookup.obj makecorr.obj misc.obj ppredef.obj \
+			prserr.obj prsinit.obj prsutil.obj pspans.obj recover.obj reduce.obj shift.obj \
+			0a.obj 0b.obj 2.obj 3a.obj 3b.obj 4a.obj 4b.obj 4c.obj 5.obj 6.obj 7.obj 8.obj 9.obj 10.obj \
+			11.obj 12a.obj 12b.obj 12c.obj 13.obj 14.obj arith.obj dbx.obj dclmap.obj \
+			errmsg.obj eval.obj lib.obj libr.obj libw.obj machine.obj  \
+			nodes.obj set.obj smisc.obj sspans.obj units.obj util.obj vars.obj
+
+adafront.exe: $(FRONT_OBJS)
+	$(LINKER) -n -e adafront @front.lnk   \intelc\lib\graphics.lib
+
+
+#--------------------------------------#
+# adagen and adabind FILES AND ACTIONS #
+#--------------------------------------#
+
+GEN_OBJS =	12b.obj aggr.obj arith.obj axqr.obj axqw.obj dbg.obj dbx.obj dclmap.obj decl.obj \
+			expand.obj expand2.obj expr.obj g0a.obj gen.obj glib.obj  gmain.obj gmisc.obj \
+			gnodes.obj gpredef.obj gutil.obj gvars.obj init.obj initobj.obj lang.obj lib.obj \
+			libf.obj libr.obj libw.obj maincase.obj misc.obj nam.obj opdesc.obj pack.obj \
+			peep.obj proc.obj read.obj segment.obj sep.obj set.obj smisc.obj stat.obj \
+			type.obj util.obj vars.obj
+
+BND_OBJS =	12b.obj arith.obj axqr.obj axqw.obj blib.obj bmisc.obj bmain.obj bnodes.obj \
+			dbg.obj dbx.obj dclmap.obj g0a.obj gen.obj ginter.obj glib.obj gpredef.obj \
+			gutil.obj gvars.obj init.obj lang.obj lib.obj libf.obj libr.obj libw.obj misc.obj \
+			opdesc.obj peep.obj read.obj segment.obj sep.obj set.obj smisc.obj util.obj vars.obj
+
+adagen.exe: gvars.c vars.c hdr.h ghdr.h libhdr.h $(GEN_OBJS) 
+	$(LINKER) -n -e adagen @gen.lnk   \intelc\lib\graphics.lib
+
+adabind.exe: vars.c gvars.c hdr.h ghdr.h libhdr.h $(BND_OBJS)
+	$(LINKER) -n -e adabind @bnd.lnk   \intelc\lib\graphics.lib
+
+# $(GEN_OBJS): gvars.c vars.c hdr.h libhdr.h
+
+# $(BND_OBJS): vars.c
+
+# Dependence on gmisc.obj causes extra compile but gets dependencies right.
+bmisc.obj: gmisc.obj
+	copy gmisc.c bmisc.c
+	$(CC) -DBINDER -c bmisc.c
+	del bmisc.c
+
+# Look at last comment.
+bnodes.obj: gnodes.obj
+	copy gnodes.c bnodes.c
+	$(CC) -DBINDER -c bnodes.c
+	del bnodes.c
+
+#---------------------------#
+# adaexec FILES AND ACTIONS #
+#---------------------------#
+
+INT_OBJS = 	axqr.obj farith.obj ilist.obj imain.obj imisc.obj intb.obj intc.obj \
+			ipar.obj ivars.obj libf.obj machine.obj  misc.obj opname.obj \
+			predef1.obj predef2.obj predef3.obj predef4.obj predef5.obj \
+			predef6.obj tasking.obj
+
+XINT_OBJS =	inta.obj load.obj
+
+adaexec.exe: ivars.c   $(INT_OBJS) $(XINT_OBJS)
+	$(LINKER) -n -e adaexec $(LFLAGS) @int.lnk @xint.lnk   \intelc\lib\graphics.lib
+
+#inta_interface.obj: inta.obj
+#	$(CC)$(CCVAR) -c -DINTERFACE $(CFLAGS) -o inta_interface.obj inta.c
+
+inta_interface.obj: inta.obj
+	mv inta.obj inta.obj.b
+	$(CC)$(CCVAR) -c -DINTERFACE $(CFLAGS) inta.c
+	mv inta.obj inta_interface.obj
+	mv inta.obj.b inta.obj
+	touch inta_interface.obj
+
+load_interface.obj: load.obj
+	mv load.obj load.obj.b
+	$(CC)$(CCVAR) $(CFLAGS) -DINTERFACE -c load.c
+	mv load.obj load_interface.obj
+	mv load.obj.b load.obj
+	touch load_interface.obj
+
+misc.obj :
+
+ALL_OBJS =  $(FRONT_OBJS) $(GEN_OBJS) $(BND_OBJS) $(INT_OBJS) \
+			$(XINT_OBJS)
+
+Makeext :
+	x2hdeps $(ALL_OBJS) >Makeext
+
+include Makeext

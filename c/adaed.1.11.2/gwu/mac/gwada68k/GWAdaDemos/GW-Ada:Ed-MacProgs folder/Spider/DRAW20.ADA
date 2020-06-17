@@ -1,0 +1,1 @@
+WITH Spider; USE Spider;PROCEDURE Drawing20 IS BEGIN Start;Black;Step;Step;Step;Step;Turn;Turn;Turn;Blue;Step;Step;Step;Step;Step;Step;Step;Turn;Black;Step;Step;Step;Step;Step;Turn;Step;Step;Step;Step;Red;Turn;Step;Step;Step;Step;END Drawing20;

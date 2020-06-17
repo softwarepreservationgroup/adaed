@@ -1,0 +1,712 @@
+-- Copyright 1990. Ada Project, Courant Institute, New York University
+-- 
+--Author: rennels $ $Date: 91/01/09 17:34:20 $ $Revision: 1.3 $
+--Source: /cs.a/ada/ada/src/hll/adamain.stl,v $ $State: Exp $
+--
+program adamain;
+ 
+        ------------------------------------------
+        --                                       -
+        --            A D A - M A I N            -
+        --                                       -
+        --                                       -
+        --               written by              -
+        --                                       -
+        --              Ada Project              -
+        --           Courant Institute           -
+        --          New York University          -
+        --           251 Mercer Street           -
+        --        New York, New York 10012       -
+        --                                       -
+        ------------------------------------------
+
+--
+--	Main program which gets parameters and drives the individual
+--	phases of the compiler & interpreter. 	The phases are 
+--	discussed in more detail below and in the actual modules
+--	themselves.
+--
+ 
+--
+-- Perform computed initializations, inits that are order dependent and 
+-- those that cover SETL init bugs. A garbage collection is then forced 
+-- and a dump taken.  Non-initializtion runs will be able to start
+-- with this general initialization already done, saving the time cost.
+--
+-- Some features of the underlying operating system are apparent to
+-- SETL, and are parameterized according to OPSYS. The issues are:
+--	Names of the standard input, output and error files
+--	Case of result returned by GETIPP and GETSPP
+--	Case of result of SETL type
+--
+
+   use globals;
+   use adautil;
+   use adaprs;
+   use adaio;
+   use adalib;
+   use adasem1;
+   use adasem3;
+   use adaarith;
+   use int_main;
+   use int_init;
+   use callout_package;
+
+var 	stdin,	-- name of standard input file
+	stdout,	-- name of standard output file
+	stderr;	-- name of standard error file
+
+const 
+-- Month map defined for both cases since month obtained from value
+-- returned by setl DATE primitive, and case may vary from implementation
+-- to implementation.
+
+    month :=   {["JAN",1],["FEB",2],["MAR",3],["APR",4],["MAY",5],
+		["JUN",6],["JUL",7],["AUG",8],["SEP",9],["OCT",10],
+		["NOV",11],["DEC",12],
+		["jan",1],["feb",2],["mar",3],["apr",4],["may",5],
+		["jun",6],["jul",7],["aug",8],["sep",9],["oct",10],
+		["nov",11],["dec",12]},
+
+    month_ :=   ["Jan","Feb","Mar","Apr","May","Jun",
+                 "Jul","Aug","Sep","Oct","Nov","Dec"],        
+
+    opsys_unix := 1, 	-- for UNIX 
+
+    opsys_vms := 2;  	-- for VMS
+
+
+--
+-- Acquire parameters for this run using GETSPPC and GETIPPC, set up
+-- file names and command dependent options. GETSPPC and GETIPPC are
+-- fold their arguments to the appropriate case and then call GETIPP
+-- and GETSPP respectively.
+--
+
+    --lisfile := getsppc("L="+stdout+"/");	-- output ""
+    --errfile := getsppc("ERRFILE="+stderr+"/");
+    infile := get_option("a=");			-- source program
+    list_file_name := 
+    --adafile := astfile := aisfile := libfile := aixfile := "";
+    aisfile := "";
+    libfile := "";
+    cname := get_option("cname=");
+    if cname = "" then
+       cname := "ada";
+    end if;
+    list_level := 1;
+    --list_level := case getippc("SL=999/1")
+		  --when 0 => 1
+		  --when 1 => 2
+		  --when 999 => if lisfile = stdout then 2 else 1 end if
+    		  --otherwise => 1
+		  --end case;
+
+-- Combined listing (LIST_LEVEL = 1) unless no SL parameter present
+-- and the listfile is sys$output or SL is present and has value 1.
+
+--
+-- 	CNAME is the Command Name which executed this program
+--	ADAP 	Parse ADAFILE producing ASTFILE
+--	ADAC	Compile and ADAFILE into an AIXFILE (ADAP + ADAS)
+--	ADAB	Bind an AIS file (with an optional LIBFILE) into
+--		an AIXFILE. (Equivalent to ADAX /NORUN)
+--	ADAX	Bind an AISFILE and execute the resulting AIXFILE
+--	ADAXL	Bind a LIBFILE of compilation units together and
+--		execute the resulting AIXFILE.
+--	ADAXB	Execute the bound AIXFILE produce by a prior run.
+--	ADA	Parse, sematically analyze, bind, and execute the
+--		ADAFILE.
+--
+-- Each command implies that the standard input file is one of 
+-- the internal files listed below.
+--
+
+    upper_cname := upper_case_of(cname);
+    case upper_cname
+	when "ADAP","ADA","ADAC" =>	adafile_name := infile;
+	when "ADACB" =>			adafile_name := infile;
+	when "ADAX","ADAB" =>		aisfile := infile;
+	when "ADAXL" =>			libfile := infile;
+	when "ADAXB" =>			aixfile := infile;
+    end case;
+ 
+--
+-- Other files can be specified specified by expicitly including the 
+-- appropriate parameter. (Certain commands:	 ADAP => /ASTFILE, 
+--	ADAS => /AISFILE specify such a parameter automatically and 
+--	hence the /NOCODE option)
+--
+
+ 
+    --featurefile := getspp("f=/featuresfile");    -- Features for Task 1
+    --patfile  := getspp("pat=/pat");              -- To indicate PAT mode	
+    --adafile  := getsppc("ADAFILE="+adafile+"/"); -- Source
+    --astfile  := getsppc("ASTFILE="+astfile+"/"); -- PP in text
+    astfile_name := "t.ast";
+    aisfile  := get_option("aisfile="); 	-- Unbound code
+    aixfile  := get_option("aixfile="); 	-- Bound code
+    --datafile := getsppc("DATA="+stdin+"/");      -- Input file
+    libfile  := get_option("libfile=");		    -- Library
+    new_library := is_option_present("newlib");     -- LIBfile is to be created
+    predef_option := is_option_present("predef");
+    --executable := getsppc("EXECUTABLE=/");	 -- name of executable cod file
+    if predef_option and new_library then
+       except_unames := {};
+    end if;
+    executable := "NYU Ada/Ed 1.11 SUN UNIX Version";
+
+    --feature_option := featurefile /= "" and featurefile /= "NL:";
+
+    -- For now, only the parameter "pat" alone will indicate PAT mode.
+    -- (Later - give the file to dump the pattern "AIS" in.)
+    --pat_option := patfile = "pat";
+
+    --list_option := lisfile /= "" and lisfile /= "NL:" and lisfile /= "NL:.LIS";
+
+    --ada_option := adafile /= "" and adafile /= "NL:" and adafile /= "NL:.ADA";
+
+    ais_option := aisfile /= "";
+
+    aix_option := aixfile /= "" and aixfile /= "NL:" and aixfile /= "NL:.AIX";
+
+    lib_option := libfile /= "";
+
+    --ast_option := astfile /= "" and astfile /= "NL:" 
+			--and astfile /= "NL:.AST" and not nocode;
+
+
+    noerrors := true;			-- try to execute if command 
+					-- permits and no errors occur.
+    --norun := 1 = getippc("NORUN=0/1");	-- Do not execute AIX code.
+
+    parse_errors := sem_errors := 0;
+	
+    ais_main := get_option("main=");	 -- Name of main procedure
+    ais_main := upper_case_of(ais_main); -- Keep in upper case
+    --max_memory_allocated := getippc("MEMORY_SIZE=5000/20000");
+    max_memory_allocated := 20000;
+    reset_clock();
+
+    trace := get_num_option("trace");			-- Interpreter Tracing
+    --trctime := getippc("$TTIME=0/1")=1;		-- digit positions
+    cdebug := get_num_option("cdebug=");		-- debugging Switches
+
+    -- as decomposed below allow separate or combined debugging
+    -- $debug=54321 sets CDEBUGn=n for each n ...
+    -- to set say SEMANTIC debuging level to 3 and
+    -- binder Debugging level to 1 used /#DEBUG=1030
+    -- (leading zeroes being ommited.)
+
+ 
+    cdebug1 := cdebug mod 10;		   -- Lex & Parser Debuging Switch
+    cdebug2 := (cdebug mod 100) / 10 ;     -- Semantic Debugging Switch
+    cdebug3 := (cdebug mod 1000) / 100 ;   -- IO Debugging Switch
+    cdebug4 := (cdebug mod 10000) / 1000;  -- Binder Debugging Switch
+    cdebug5 := cdebug / 10000;	       	   -- Interpreter Debugging Switch
+
+
+    -- SEMTRACE is added for Softech Task 4, semantic tracing.
+    -- If CDEBUG = 0, then we are just doing tracing, not debugging,
+    -- and we set some CDEBUG values from the SEMTRACE values.
+    -- (Most internal references are still to CDEBUG, not SEMTRACE).
+
+    -- SEMTRACE1 sets the overall level of tracing of semantics by
+    --    setting CDEBUG2.
+    -- SEMTRACE2 and SEMTRACE3 set tracing facilities not available
+    --    through CDEBUG, but only through SEMTRACE.
+    -- SEMTRACE2 turns on tracing in adaarith.stl.
+    -- SEMTRACE3 turns on representation tracing.
+    -- SEMTRACE4 turns on library tracing by setting CDEBUG4.
+
+    --semtrace  := getippc("SEMTRACE=0/777"); 
+    --semtrace1 := semtrace mod 10;  	        -- Sets CDEBUG2, basic level.
+    --semtrace2 := (semtrace mod 100) / 10 ;    	-- Arithmetic
+    --semtrace3 := (semtrace mod 1000) / 100 ;  	-- Representations
+    --semtrace4 := (semtrace mod 10000) / 1000; 	-- Library, binding
+
+    --if cdebug = 0  then         -- We are just doing tracing, not debugging:
+      --cdebug2 := semtrace1;     -- Set basic tracing level.
+      --if semtrace4 > 0 then     -- Set library tracing level to > 3.
+          --cdebug4 := 4;         --    (3 is the parameter in all trace stats.)
+      --end if;
+    --end if;
+
+    -- semtrace output header is generated below, with Debugging headers.
+
+    --trace_count :=
+	--getippc("TRACE=1073741823/1"); -- Interpreter Tracing
+      -- The TRACE parameter is decomposed into two parts:
+      -- The number of interpreter statements to trace, and
+      -- the level of tracing.  The trace level is indicated by
+      -- the last digit of the trace parameter, and the count
+      -- is computed by subtracting the trace level from the
+      -- original number specified.  A trace count of 0 indicates
+      -- that the whole execution should be traced at the specified
+      -- level.
+      -- 
+    --if trace_count /= 1073741823 then
+       --trace := trace_count mod 10;  -- The statement trace level.
+       --trace_count := trace_count - trace;
+       --trace_mode := if trace_count = 0 then "free"
+                     --else "list"
+                     --end if;
+    --else
+       --trace := 0;
+    --end if;
+
+    --select_mode := getsppc("$SELECT=FAIR/ARB");	
+						-- Multitasking scheduler
+    --select_mode := upper_case_of(select_mode); 
+						-- Keep in upper case
+    --time_slice := getippc("$SLICE=2000/0");	-- mode & time slice
+
+    --if select_mode notin {"FAIR", "ARB"} then
+       --select_mode := "FAIR";
+    --end if;
+ 
+--
+-- there are four possible combinations of LIST and ERROR file
+-- parameters of interest.
+--
+-- 1) LISFILE = ERRFILE then produce only the LISFILE output
+--	appropriate. Else produce a separate ERRorFILE containing each
+--	error and its context as they occur.
+--
+--
+-- 2) LISFILE = STDOUT then produce an incremental listing of the
+--	source program during LRPARSEing, intermixing ERROR messages
+--	in the source listing as they occur.  Error messages in other
+--	parts of the program are printed (with contexts) as they occur.
+--	! IF a source listing has already been made. !
+--	This is represented by listing level = 2 for incremental
+--	listing and listing level = 1 for item by item error listing
+--	Otherwise, and in any case if LISFILE /= STDOUT the
+--	error messages are accumulated and printed in a fully intermixed
+--	listing produced when the listing level is set to 0 or -1 
+-- 	to dump listing and set up transparent Output Mode.
+--	(ll=0 => TO_LIST sends to both ERRFILE & LISFILE transparrently,
+--	 ll=-1=> TO_LIST only sends to LISFILE.)
+--
+-- Note that the LISFILE is implicitly opened by Setl under the internal
+-- name "" as a TEXT-IN file so it is never explicitly opened (this would
+-- create a second simultaneously open version and thus produce two 
+-- actual external files for VMS.)
+--
+-- Similarly the INFILE is also opened by Setl as a TEXT-IN file named ""
+-- and thus is not opened explicitly in the program. (Hence the test
+-- to see if any of the input files is = INFILE.
+--
+    --if lisfile = errfile then
+	--if lisfile = stdout then
+		--lisfile := errfile := "";
+	--else
+		--lisfile := errfile := "";
+	--end if;
+    --else
+
+    if upper_cname = "ADA" or upper_cname = "ADAC" or upper_cname="ADACB" then
+       full_name := adafile_name;
+       prefix := break(full_name, ".");
+       lisfile := open(prefix + ".out", "TEXT-OUT");
+       errfile := open(prefix + ".err", "TEXT-OUT");
+    elseif upper_cname = "ADAXL" then
+       full_name := get_option("l=");
+       prefix := break(full_name, ".");
+       lisfile := open(prefix + ".out", "TEXT-OUT");
+       errfile := open(prefix + ".err", "TEXT-OUT");
+    end if;
+
+    set_list_level(list_level);
+
+    if executable /= "" then
+	to_list("Executing file  "+ executable);
+    end if;
+
+if ada_option then
+    print_file("ADAfile:",lower_case_of(adafile_name));
+end if;
+if ast_option then
+    print_file("ASTfile:",lower_case_of(astfile));
+end if;
+if ais_option then
+    print_file("AISfile:",lower_case_of(aisfile));
+end if;
+if lib_option then
+    print_file("LIBfile:",lower_case_of(libfile));
+end if;
+if aix_option then
+    print_file("AIXfile:",lower_case_of(aixfile));
+end if;
+--if list_file_name /= stdout and list_option then
+   --print_file("LISfile:", lower_case_of(list_file_name));
+--end if;
+--if errfile /= lisfile and errfile /=  stdout then
+	 --print_file("ERRfile:",lower_case_of(errfile)); 
+--end if;
+to_list("	");
+
+   --if cdebug > 0 then 
+  	--to_errfile("	",
+		   --"Segment  DEBUG",
+		   --"=======  =====",
+  	           --"lexparse  " + str (cdebug1),
+  		   --"semantics " + str (cdebug2),
+  		   --"io        " + str (cdebug3),
+  		   --"lib       " + str (cdebug4),
+  		   --"interp    " + str (cdebug5)); 
+   --end if;
+
+    --if semtrace > 0 then 
+  	--to_errfile("	",
+		   --"Semantics Tracing",
+		   --"=================",
+  		   --"basic level      " + str (semtrace1),
+  		   --"arithmetic       " + str (semtrace2),
+  		   --"representations  " + str (semtrace3),
+  		   --"library          " + str (semtrace4));
+    --end if;
+    
+
+to_list("	");
+ 
+    initializations;
+
+    if upper_cname = "ADAINIT" then 
+      stop; 
+    end if;
+ 
+    if upper_cname in {"ADA","ADAC","ADACB"} then 
+	init_lib(false); 
+    elseif upper_cname in {"ADAX","ADAB","ADAXL"} then 
+	init_lib(true); 
+    end if;
+--
+--	If we are starting with an ADA source program, we must first
+--	parse ADAFILE into a stream of tokens and reductions.
+--	Procedure ADALEX breaks the input file into a sequence of tokens
+-- 	which are analysed and grouped together into syntactical
+--	structures by procedures LRPARSE and REDUCE.  The result of this
+--	syntactic analysis is an abstract syntax tree contained in a
+--	global map AST.  Whenever a stream of tokens is reduced to a
+--	compilation_unit(see REDUCE), a call is made to the routine
+--	ADASEM, which takes AST as input and produces another
+--	tree which may be dumped in the AISFILE.
+--
+    if upper_cname in {"ADA","ADAP","ADAC","ADACB"} then
+ 
+	--stime := time();
+
+        if adafile_name = "" then
+	   print("No Adafile specified"); 
+	   stop;
+	else
+	    adafile := check_open(adafile_name,"TEXT-IN");
+	end if;
+
+	if ast_option then
+	    astfile := check_open(astfile_name,"TEXT-OUT") ;
+	    if cdebug1>0 then 
+	        to_errfile("Opened ASTFILE", ""); 
+	    end if;
+	end if;
+
+-- Additions for Softech Task 1 - Feature recording.
+	--if feature_option then
+	        --check_open(featurefile,"TEXT-IN") ;
+		--reada(featurefile, feature_use_map);
+		--close(featurefile);
+	--end if;
+
+
+	compilation_unit_list := lrparse();
+
+	--if feature_option then
+	        --check_open(featurefile,"TEXT-OUT") ;
+	        --pretty_print(featurefile, feature_use_map);
+		--close(featurefile);
+	--end if;
+
+	if ast_option then
+	    set_list_level(0); 
+	    set_list_level(1);			-- dump LIST BUFFERS
+
+-- LPARSE always returns an empty tuple.
+--	    PRETTY_PRINT(ASTFILE, convert_ast(compilation_unit_list));
+
+	    if cdebug1>0 then 
+		to_errfile(compilation_unit_list, "");
+	        to_errfile("Closing ASTFILE", ""); 
+	    end if;
+	    close(astfile);
+
+	end if;
+
+	--if adafile /= "" then
+	    --close(adafile);
+	--end if;
+	tr_errors := errcount;
+        errorsum := if tr_errors = 0 then "No" 
+			else str (tr_errors) end if +
+		    if upper_cname = "ADAP" then " parse"
+			else " translation" end if +
+                    if tr_errors = 1 then " error" 
+			else " errors" end if +
+                    " detected";
+        --trtime := (time() - stime+500) / 1000;
+
+        to_list("   ");
+	to_list("  "+errorsum);
+
+	-- print this to errorfile also
+	if errfile /= lisfile and tr_errors /= 0 then
+	    to_errfile(errorsum, "");
+	end if;
+
+	--if trctime then
+            --to_list(
+	    	    --if upper_cname = "ADAP" then
+		         --"  Parsing"
+	    	    --else "  Translation"
+		    --end if
+		    --+ " time: " + str(trtime) + " seconds"
+                   --);
+	--end if;
+
+	set_list_level(1);
+ 
+	noerrors and:= ok_to_execute;
+
+        if ok_to_execute and ais_option and upper_cname /= "ADAP" then
+	    write_ais(aisfile);
+	    if lib_option then
+		write_lib;
+	    end if;
+        end if;
+
+    end if;
+ 
+--
+-- BIND checks the program library for a main procedure for completeness
+-- and correct compilation order, and, if no errors are detected, 
+-- assembles the tuple AIS_CODE for the interpreter.  If the AIX_OPTION
+-- is in effect, BIND also writes the AIX file.  If no main procedure
+-- has been named explicitly, the library is searched for a unique one.
+--
+-- In the case of ADAXB, the tuple AIS_CODE already exists and in the
+-- given AIX file.
+--
+    if noerrors then
+	if upper_cname = "ADAC" and not aix_option then
+	    well_bound := false;
+	else
+	    case upper_cname
+
+	    when "ADA","ADAX","ADAB","ADAXL","ADACB","ADAC" =>
+		--stime := time();
+		well_bound := bind(aixfile);
+		--bt := time() - stime;
+		--bts := str (bt / 1000);
+		--ms := "00" + str (50 + bt mod 1000);
+		--ms := ms(#ms-2);
+		--if trctime then
+		    --to_list("  Binding time: " + bts + 
+			    --"." + ms +" seconds");
+ 		--end if;
+		to_list("   ");
+	    --when "ADAXB" =>
+		--well_bound := read_aix(aixfile);
+	    otherwise =>
+		well_bound := false;
+	    end case;
+	end if;
+ 
+--
+-- At this point, if no errors have been encountered in any phase,
+-- the tuple AIS_CODE and main program name AIS_MAIN are ready
+-- for the interpreter.
+--
+    	--stime := time();
+ 
+      if well_bound and upper_cname in {"ADA","ADAX","ADAXB","ADAXL"} then
+ 
+        to_list("  Begin Ada execution");
+        to_list("   ");
+	
+	set_list_level(-1);
+ 
+	--stime := time();
+ 
+        interp();
+ 
+        --extime := (time() - stime+500) / 1000;
+ 
+	set_list_level(1);
+ 
+        --if trctime then 
+            --to_list("  Execution time: " + str(extime) + 
+		--" seconds"); 
+        --end if;
+        --to_list("  I-code statements executed: " + str(stmtcount));
+      else
+
+	set_list_level(1);
+
+      end if;
+    end if;
+ 
+    set_list_level(-1);
+ 
+    stop;
+ 
+    procedure initializations;
+
+-- First obtain OPSYS from the command line.
+-- The standard GETIPP is used.
+
+	opsys := opsys_unix;
+	--opsys := getipp("opsys=0/");
+	--if opsys = 0 then
+	    --opsys := getipp("OPSYS=0/");
+	--end if;
+	--if opsys notin {opsys_vms, opsys_unix} then
+	    --opsys := opsys_unix;		-- assume UNIX
+	--end if;
+
+	case opsys
+	when opsys_vms => -- VMS
+
+	stdin := "SYS$INPUT"; stdout := "SYS$OUTPUT";
+	stderr := "SYS$OUTPUT";
+	cdebug2 := 0;
+
+	ada_bits_integer       :=  30;
+	ada_max_integer        :=  1073741823;	 -- 2**30 - 1
+	ada_min_integer        := -1073741823;	 -- -(2**30 - 1)
+	ada_max_integer_sqrt   :=  32768;
+
+	float_digits 	       :=  6;
+	float_machine_emax     := 127;
+	float_machine_mantissa :=  24;
+	float_last  := upper_bound(float_digits,float_machine_emax);
+	float_first := float_umin(upper_bound(float_digits,float_machine_emax));
+
+	long_float_digits           := 33;
+	long_float_machine_emax     := 511;
+	long_float_machine_mantissa := 113;
+	long_float_last	   := 
+		upper_bound(long_float_digits,long_float_machine_emax);
+	long_float_first   := float_umin(
+		upper_bound(long_float_digits,long_float_machine_emax));
+
+	when opsys_unix =>	-- UNIX
+
+	stdin := "stdin"; stdout := "stdout";
+	stderr := "stdout";
+
+	ada_bits_integer       :=  30;
+	ada_max_integer        :=  1073741823;	 -- 2**30 - 1
+	ada_min_integer        := -1073741823;	 -- -(2**30 - 1)
+	ada_max_integer_sqrt   :=  32768;
+
+	float_digits 	       :=  6;
+	float_machine_emax     := 127;
+	float_machine_mantissa :=  24;
+	float_last  := upper_bound(float_digits,float_machine_emax);
+	float_first := float_umin(upper_bound(float_digits,float_machine_emax));
+
+	long_float_digits           := 33;
+	long_float_machine_emax     := 511;
+	long_float_machine_mantissa := 113;
+	long_float_last	   := 
+		upper_bound(long_float_digits,long_float_machine_emax);
+	long_float_first   := float_umin(
+		upper_bound(long_float_digits,long_float_machine_emax));
+	end case;
+
+        --lisfile := "";
+        --errfile := "";
+        datafile := stdin;
+	set_list_level(1);
+	init_parser();
+	init_sem;
+	-- put call to init_env right before exection starts
+	init_env(init_predef());
+        set_list_level(-1);
+
+    end initializations;
+
+    procedure print_file(file,name);		-- Print file line w/ folding
+	line := file + "	" + name;
+	to_list(line);
+   end print_file;
+
+    procedure get_num_option(x); 	-- get numeric option
+
+    const
+       conv := {["0",0],["1",1],["2",2],["3",3],["4",4],
+                 ["5",5],["6",6],["7",7],["8",8],["9",9]};
+	--case opsys
+    	   --when opsys_vms =>		return upper_case_of(x);
+    	   --when opsys_unix =>		return lower_case_of(x);
+ 	   --otherwise => 		return om;
+       --end case;
+       for i in command_line loop
+           parmname := match(i, x);     -- Extract parameter name
+           if parmname /= "" then
+	      if #i = 1 then
+                 return conv(i(1));
+              else
+                 return conv(i(1))*10 + conv(i(2));
+              end if;
+           end if;
+        end loop;
+        return 0;
+    end get_num_option;
+ 
+    procedure get_option(x);
+        --Put the parameter option in the approrpiate case
+	--case opsys
+	     --when opsys_vms =>	parmname := upper_case_of(parmname);
+	     --when opsys_unix =>	parmname := lower_case_of(parmname);
+	--end case;
+
+	for i in command_line loop
+	   parmname := match(i, x); 	-- Extract parameter name
+	   if parmname /= "" then
+	      return i;
+           end if; 
+	end loop;
+        return "";
+
+    end get_option;
+
+    procedure is_option_present(x);
+        --Put the parameter option in the approrpiate case
+	--case opsys
+	     --when opsys_vms =>	parmname := upper_case_of(parmname);
+	     --when opsys_unix =>	parmname := lower_case_of(parmname);
+	--end case;
+	for i in command_line loop
+	   parmname := match(i, x); 	-- Extract parameter name
+	   if parmname /= "" then
+	      return true;
+           end if; 
+	end loop;
+        return false;
+    end is_option_present;
+
+
+
+    procedure check_open(f, m);
+	if (handle := open(f, m)) /= om  then
+	    return handle;
+	else
+	   to_list("*** Cannot open file: " + f);
+	   set_list_level(-1);
+	   stop;
+	end if;
+    end check_open;
+
+end adamain;
+

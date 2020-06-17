@@ -1,0 +1,1118 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_attributes.stl,v 1.1 91/01/02 15:25:35 banner Exp $
+--
+package body int_attributes;
+
+  use globals;
+  use int_globals;
+  use int_procs;
+  use int_util;
+  use adautil;
+  use adaarith;
+
+--T+ ATTRIBUTE_EVAL
+procedure attribute_eval(attrib_expr);
+int_trace("ATTRIBUTE_EVAL",attrib_expr);
+--
+--  Processes non-static attribute evaluation. Attrib_expr is
+--  a tuple passed by 'veval_' consisting of '''' and the name 
+--  of the attribute followed by its arguments. The value of the 
+--  attribute is left on top of VALSTACK.
+--  Most attributes of floating-point types are static, and will be evaluated
+--  by the front-end, even in the case of generic instantiations. The code
+--  that follows in many cases duplicates the code found under static evaluation
+
+  case lower_case_of(attrib_expr(2)) 
+--
+-- ['''', 'address', object_expr]
+--
+--  An address is a value of the type SYSTEM.ADDRESS defined as
+--       type ADDRESS is new INTEGER;
+--  The address of an object is:
+--      - for a scalar, a access object, a task, a subprogram, or a label
+--        some unique integer associated once for all with that entity.
+--      - for a non null record, the address is that of the
+--          first component.
+--      - for a null record, the address is 0.
+--      - for an array, the address is that of the lower bound
+--      - for a package or an entry, it raises SYSTEM_ERROR
+
+    when "address" => 
+       [-, -, object_expr] := attrib_expr;
+       exec( [["oeval_", object_expr],
+              ["veval_", ["'", "address_"]] ]);
+
+    when "address_" => 
+      pop(iobject);
+      if not is_string(iobject) then
+         if is_tuple(iobject) then
+            case iobject.type_mark 
+            when "fixed_iobject", "label_iobject", "float_iobject",
+                 "task_iobject", "access_iobject" => 
+              [-, iobject] := iobject;
+            when "array_iobject" => 
+              [-, -, iobject] := iobject;
+            when "record_iobject" => 
+              [-, objdeclist] := iobject;
+              if is_empty(objdeclist) then
+                 push(0);
+              else
+                 iobject from objdeclist;
+                 push(iobject(2));
+                 exec([["veval_", ["'", "address_"]]]);
+              end if;
+              return;
+            when "proc_iobject" => 
+              [-, -, -, -, iobject] := iobject;
+            otherwise =>
+              system_error("no address for:" + str(iobject));
+            end case;
+         else
+            system_error("no address for:" + str(iobject));
+         end if;
+
+      end if;
+
+   -- here iobject is a string representing an address , that we convert 
+   -- into an integer;
+
+      s := str(iobject);
+      s := rbreak(s, "#");
+      v := 0;
+       while s /= "" loop
+         c := len(s, 1);
+         v := 10*v + abs(c) - abs("0");
+      end loop;
+      
+      push(v);
+
+--
+-- ['''', 'aft', type_expr]
+--
+    when "aft" => 
+      [-, -, type_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", ["'", "aft_"]]] );
+--
+    when "aft_" => 
+      pop( itype );
+      [-, lbd, ubd, small, delta] := itype ;
+      aft := 1;
+       while rat_lss(delta, rat_tenth) loop
+         aft +:= 1;
+         delta := rat_mul(delta, rat_10);
+      end loop;
+
+      push( aft );
+
+-- ['''', 'callable', task_expr]
+--
+-- Task_expr evaluates to a task_ivalue.
+--
+    when "callable" => 
+      [-, -, task_expr] := attrib_expr;
+      exec( [["veval_", task_expr],
+             ["veval_", ["'", "callable_"]] ]);
+--
+    when "callable_" => 
+      pop( task );
+      [tag, taskid] := task;
+      push(test (taskid notin terminated_tasks + completed_tasks
+                              + abnormal_tasks) );
+--
+-- ['''', 'o_constrained', obj_expr]
+--
+-- obj_expr evaluates to a record IOBJECT.
+--
+    when "o_constrained" => 
+      [-, -, obj_expr] := attrib_expr;
+      exec( [["oeval_", obj_expr],
+             ["veval_", ["'", "o_constrained_"]] ]);
+--
+    when "o_constrained_" => 
+      pop( iobj );
+      [-, -, constr_disc_list] := iobj;
+      push( test( present(constr_disc_list) ) );
+
+-- ['''', 't_constrained', type_expr]
+--
+-- type_expr evaluates to a record Itype
+--
+    when "t_constrained" => 
+      [-, -, type_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", ["'", "t_constrained_"]] ]);
+--
+    when "t_constrained_" => 
+      pop( itype );
+      [-, -, constr_disc_list] := itype;
+      push( test( present(constr_disc_list) ) );
+--
+-- ['''', 'count', entry_expr]
+--
+-- Entry_expr evaluates to an entryid.
+--
+    when "count" => 
+      [-, -, entry_expr] := attrib_expr;
+      exec( [["veval_", ["'", "count_"]] ]);
+      push_entryid(entry_expr);
+--
+     when "count_" => 
+       pop( index );
+       pop( entry );
+       entryid := [entry, index];
+       disable;
+       push( #(waiting_tasks(curtask)(entryid) ? {}) );
+       enable;
+
+--
+-- ['''', 'delta', type_expr]
+--
+    when "delta" => 
+      [-, -, type_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", ["'", "delta_"]] ]);
+
+-- the attribute yields a universal real. Convert it to the largest floating
+-- precision available.
+
+    when "delta_" => 
+      pop( itype );
+      [-, lbd, ubd, small, delta] := itype ;
+      push( float_fra(delta, long_float_digits));
+--
+-- ['''', 'digits', type_expr]
+--
+    when "digits" => 
+      [-, -, type_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", ["'", "digits_"]] ]);
+--
+    when "digits_" => 
+      pop( itype );
+      [-, -, -, digits, digits_declared] := itype ;
+      push( digits_declared );
+--
+-- ['''', 'emax', type_expr]
+--
+   when "emax" =>  
+     [-, -, type_expr] := attrib_expr;
+     exec( [["teval_", type_expr],
+            ["veval_", ["'", "emax_"]] ]);
+--
+   when "emax_" => 
+     pop( itype );
+     [-, lbd, ubd, digits, digits_declared] := itype;
+     push (4*mantissa_from_digits(digits_declared));
+--
+-- ['''', 'safe_emax', type_expr]
+--
+   when "safe_emax" =>  
+     [-, -, type_expr] := attrib_expr;
+     exec( [["teval_", type_expr],
+            ["veval_", ["'", "safe_emax_"]] ]);
+--
+   when "safe_emax_" => 
+     pop( itype );
+     [-, -, ubd, -, -] := itype;
+     push (ubd(3)); -- Exponent of upper bound value
+--
+--
+-- the attribute yields a universal real. Convert it to the largest floating
+-- precision available.
+--
+-- ['''', 'epsilon', type_expr]
+--
+   when "epsilon" =>  
+     [-, -, type_expr] := attrib_expr;
+     exec( [["teval_", type_expr],
+            ["veval_", ["'", "epsilon_"]] ]);
+--
+   when "epsilon_" => 
+     pop( itype );
+     [-, -, -, digits, digits_declared] := itype ;
+     push( float_fra(rat_exp(rat_2, 
+		 1-mantissa_from_digits(digits_declared)), 
+						long_float_digits) );
+-- ['''', 't_first', type_expr]
+--
+-- Type_expr evaluates to an ITYPE. For t'first where t is a scalar object
+-- the front end supplies the appropriate type expression. For t'first(i)
+-- where t is an array object or type, the front end supplies an
+-- expression for the appropriate index type.
+--
+    when "t_first" => 
+      [-, -, type_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", ["'", "t_first_"]] ]);
+--
+    when "t_first_" => 
+      pop( itype );
+      [-, lbd, ubd] := itype;
+      push( lbd );
+--
+-- ['''', 'o_first', object_expr, index_value]
+--
+-- Object_expr evaluates to either an array IOBJECT or an array IVALUE. 
+-- Index_value is an integer ordinal specifing an index. For simple names we 
+-- treat it just as evaluation of an object yielding an array IOBJECT, but for 
+-- all other cases object_expr is treated as evaluating an expression yielding
+-- an array_ivalue. This is because it can be an expression such as
+-- T'IMAGE(x)'FIRST. 
+--
+    when "o_first" => 
+      [-, -, object_expr, index_value] := attrib_expr;
+      if is_simple_name(object_expr) then
+         exec( [["oeval_", object_expr],
+                ["veval_", index_value],
+                ["veval_", ["'", "o_first_"]] ]);
+      else
+         exec( [["veval_", object_expr],
+                ["veval_", index_value],
+                ["veval_", ["'", "o_first_"]] ]);
+     end if;
+
+    when "o_first_" => 
+      pop( index_value );
+      pop( obj );
+      [tag, seq, lb, ub] := obj;
+       for i in [2..index_value] loop
+        if seq = [] then
+           system_error("o_first");
+           exit;
+        end if;
+        [-, seq, lb, ub] := seq(1);
+      end loop;
+      if is_array_iobject(obj) then
+	push(contents(lb));
+      else   -- object_expr is an array_ivalue
+	push(lb); 
+      end if;
+--
+-- ['''', 'first_bit', record_component]
+-- ['''', 'last_bit', record_component]
+-- ['''', 'position', record_component]
+--
+    when "first_bit","last_bit","position" => 
+      [-, attr, type_expr] := attrib_expr;
+      attr := lower_case_of(attr);
+      [-, record_type, component] := type_expr;
+      exec( [["teval_", record_type],
+             ["veval_", ["'", attr +"_", component]] ]);
+
+    when "first_bit_","last_bit_","position_" => 
+      [-, attr, component] := attrib_expr;
+      attr := lower_case_of(attr);
+      pop( itype );
+      repr_value := itype(#itype);
+      if cdebug5 >3 then
+	 print("In record rep" + str(itype) , str(component) );
+      end if;
+      [-, attribute_lists] := repr_value(4);
+      for [field, position, first_bit, last_bit] in attribute_lists loop 
+         if component = field then
+	    if attr = "position_" then
+	       push(position);
+	    elseif attr = "first_bit_" then
+	       push(first_bit);
+	    else
+	       push(last_bit);
+	    end if;
+-- *** WARNING: continue/quit statement has explicit loop reference (obsolete)
+	    exit;
+	 end if;
+      end loop;
+
+--
+-- ['''', 'fore', type_expr]
+--
+    when "fore" => 
+      [-, -, type_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", ["'", "fore_"]] ]);
+--
+    when "fore_" => 
+      pop( itype );
+      [-, lbd, ubd, small, delta] := itype ;
+
+-- Yields the minimum number of characters needed for the integer part of the
+-- decimal representation of any value of the subtype, assuming that the 
+-- representation does not include an exponent, but includes a one-character prefix
+-- that is either a minus sign or a space. (The minimum value is always 2).
+
+      max_val := (abs(fix_toi(lbd,itype.i_type_precision)) ) 
+            max (abs(fix_toi(ubd,itype.i_type_precision)) );
+      push( # str(max_val) + 1 );
+--
+-- ['''', 'image', type_expr, val_expr]
+--
+-- Type_expr evaluates to an ITYPE, and val_expr to a value of the same
+-- (scalar) type.
+--
+    when "image" => 
+      [-, -, type_expr, val_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", val_expr],
+             ["veval_", ["'", "image_"]] ]);
+--
+    when "image_" => 
+      pop( ivalue );
+      pop( itype );
+      case itype.type_mark 
+        when "integer" => 
+          s := str(ivalue) ;
+          if ivalue >= 0 then
+             s := " " + s;
+          end if;
+        when "enum" => 
+          [-, -, -, enum_map] := itype;
+          s := enum_lit_of(enum_map, ivalue);
+        otherwise =>
+          system_error("image");
+        end case;
+        push( ["array_ivalue", [abs(c) : c in s], 1, #s] );
+--
+-- ['''', 'large', type_expr]
+-- ['''', 'safe_large', type_expr]
+--
+   when "large" =>  
+     [-, -, type_expr] := attrib_expr;
+     exec( [["teval_", type_expr],
+            ["veval_", ["'", "large_"]] ]);
+--
+-- the attribute yields a universal real. Convert it to the largest floating
+-- precision available.
+--
+   when "large_" => 
+     pop( itype );
+     case itype.type_mark 
+     when "fixed" => 
+       [-, lbd, ubd, small, delta] := itype ;
+       push( float_fra(rat_mul(
+	     rat_sub(rat_exp(rat_2, fx_mantissa(itype)), rat_1),
+             fx_small(delta)), long_float_digits) );
+     when "float" => 
+       [-, ubd, lbd, digits, digits_declared] := itype;
+       mant := mantissa_from_digits(digits_declared) ;
+       push(float_fra(rat_mul (
+          rat_exp(rat_2, 4*mant),
+          rat_sub(rat_1, rat_exp(rat_2, -mant))), long_float_digits));
+     otherwise =>
+       system_error( "large_" );
+     end case;
+
+   when "safe_large" =>  
+     [-, -, type_expr] := attrib_expr;
+     exec( [["teval_", type_expr],
+            ["veval_", ["'", "safe_large_"]] ]);
+--
+-- the attribute yields a universal real. Convert it to the largest floating
+-- precision available.
+--
+   when "safe_large_" => 
+     pop( itype );
+     case itype.type_mark 
+     when "fixed" => 
+       [-, lbd, ubd, small, delta] := itype ;
+       push( float_fra(rat_mul(
+	    rat_sub(rat_exp(rat_2, fx_mantissa(itype)), rat_1),
+             fx_small(delta)), long_float_digits) );
+     when "float" => 
+       [-, ubd, lbd, digits, digits_declared] := itype;
+       mant := mantissa_from_digits(digits_declared) ;
+       push(float_fra(rat_mul (
+          rat_exp(rat_2, ubd(3)),
+          rat_sub(rat_1, rat_exp(rat_2, -mant))), long_float_digits));
+     otherwise =>
+       system_error( "safe_large_" );
+     end case;
+--
+-- ['''', 't_last', type_expr]
+--
+-- See comments above for 't_first'.
+--
+    when "t_last" => 
+      [-, -, type_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", ["'", "t_last_"]] ]);
+ 
+    when "t_last_" => 
+      pop( itype );
+      [-, lbd, ubd] := itype;
+      push( ubd );
+--
+--
+-- ['''', 'o_last', object_expr, index_value]
+--
+-- See comments above for 'o_first'.
+--
+    when "o_last" => 
+      [-, -, object_expr, index_value] := attrib_expr;
+      if is_simple_name(object_expr) then
+         exec( [["oeval_", object_expr],
+                ["veval_", index_value],
+                ["veval_", ["'", "o_last_"]] ]);
+      else
+         exec( [["veval_", object_expr],
+                ["veval_", index_value],
+                ["veval_", ["'", "o_last_"]] ]);
+     end if;
+-- 
+    when "o_last_" => 
+      pop( index_value );
+      pop( obj );
+      [tag, seq, lb, ub] := obj;
+       for i in [2..index_value] loop
+        if seq = [] then
+           system_error("o_last");
+           exit;
+        end if;
+        [-, seq, lb, ub] := seq(1);
+      end loop;
+      if is_array_iobject(obj) then
+	push(contents(ub));
+      else   -- object_expr is an array_ivalue
+	push(ub); 
+      end if;
+
+--
+-- ['''', 't_length', type_expr]
+--
+-- Type_expr evaluates to the ITYPE of an array index.
+--
+    when "t_length" => 
+      [-, -, type_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", ["'", "t_length_"]] ]);
+--
+    when "t_length_" => 
+      pop( itype );
+      [-, lbd, ubd] := itype ;
+      push(( ubd - lbd + 1) max 0 );
+--
+--
+-- ['''', 'o_length', object_expr, index_value]
+--
+-- Object_expr evaluates to either an array IOBJECT or an array IVALUE. 
+-- Index_value is the integer ordinal of an index. See comment by o_first
+--
+    when "o_length" => 
+      [-, -, object_expr, index_value] := attrib_expr;
+      if is_simple_name(object_expr) then
+         exec( [["oeval_", object_expr],
+                ["veval_", index_value],
+                ["veval_", ["'", "o_length_"]] ]);
+      else
+         exec( [["veval_", object_expr],
+                ["veval_", index_value],
+                ["veval_", ["'", "o_length_"]] ]);
+     end if;
+--
+    when "o_length_" => 
+      pop( index_value );
+      pop( obj );
+      [tag, seq, lb, ub] := obj;
+       for i in [2..index_value] loop
+        if seq = [] then
+           system_error("o_length");
+           exit;
+        end if;
+        [-, seq, lb, ub] := seq(1);
+      end loop;
+
+      if is_array_iobject(obj) then
+	push( (contents(ub) - contents(lb) + 1) max 0 );
+      else
+	push( (ub - lb + 1) max 0 );
+      end if;
+--
+-- ['''' 'machine_emax', type_mark]
+--
+     when "machine_emax" => 
+     [-, -, type_expr] := attrib_expr;
+     exec( [["teval_", type_expr],
+            ["veval_", ["'", "machine_emax_"]] ]);
+--
+   when "machine_emax_" => 
+     pop( itype );
+     [-, lbd, ubd, digits, digits_declared] := itype;
+     if digits = float_digits then
+        push (float_machine_emax);
+     else
+        push (long_float_machine_emax);
+     end if;
+--
+-- ['''' 'machine_emin', type_mark]
+--
+     when "machine_emin" => 
+     [-, -, type_expr] := attrib_expr;
+     exec( [["teval_", type_expr],
+            ["veval_", ["'", "machine_emin_"]] ]);
+--
+   when "machine_emin_" => 
+     pop( itype );
+     [-, lbd, ubd, digits, digits_declared] := itype;
+     if digits = float_digits then
+        push (-float_machine_emax);
+     else
+        push (long_float_machine_emax);
+     end if;
+--
+-- ['''' 'machine_mantissa', type_mark]
+--
+     when "machine_mantissa" => 
+     [-, -, type_expr] := attrib_expr;
+     exec( [["teval_", type_expr],
+            ["veval_", ["'", "machine_mantissa_"]] ]);
+--
+   when "machine_mantissa_" => 
+     pop( itype );
+     [-, lbd, ubd, digits, digits_declared] := itype;
+     if digits = float_digits then
+        push (float_machine_mantissa);
+     else
+        push (long_float_machine_mantissa);
+     end if;
+--
+-- ['''' 'machine_overflows', type_mark]
+--
+     when "machine_overflows" => 
+	push(test(true)) ;
+--
+-- ['''' 'machine_radix', type_mark]
+--
+     when "machine_radix" => 
+	push(2) ;
+--
+-- ['''' 'machine_rounds', type_mark]
+--
+     when "machine_rounds" => 
+	push(test(true)) ;
+--
+-- ['''', 'mantissa', type_expr]
+--
+   when "mantissa" =>  
+     [-, -, type_expr] := attrib_expr;
+     exec( [["teval_", type_expr],
+            ["veval_", ["'", "mantissa_"]] ]);
+--
+   when "mantissa_" => 
+     pop( itype );
+     case itype.type_mark 
+     when "fixed" => 
+         push(fx_mantissa(itype));
+     when "float" => 
+         [-, lbd, ubd, digits, digits_declared] := itype;
+         push( mantissa_from_digits(digits_declared));
+     end case;
+
+--
+-- ['''', 'pos', type_expr, val_expr]
+--
+-- Type_expr evaluates to a discrete ITYPE and val_expr to a value of 
+-- that type.
+--
+    when "pos" => 
+      [-, -, type_expr, val_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", val_expr],
+             ["veval_", ["'", "pos_"]] ]);
+--
+    when "pos_" => 
+      pop( ivalue );
+      pop( itype );
+      [-, lbd, ubd] := itype ;
+      if lbd <= ivalue and ivalue <= ubd then
+        case itype.type_mark 
+          when "enum" => 
+            push( ivalue - lbd );
+          when "integer" => 
+            push( ivalue );
+          otherwise =>
+            system_error("pos_");
+        end case;
+      else
+        exec( [["raise", "CONSTRAINT_ERROR", "out of range"] ]);
+      end if;
+
+--
+-- ['''', 'pred', type_expr, val_expr]
+--
+-- Type_expr evaluates to a discrete ITYPE and val_expr to a value
+-- of that type.
+--
+    when "pred" => 
+      [-, -, type_expr, val_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", val_expr],
+             ["veval_", ["'", "pred_"]] ]);
+--
+    when "pred_" => 
+      pop( ivalue );
+      pop( itype );
+      [-, lbd, ubd] := itype ;
+      if lbd < ivalue and ivalue <= ubd then
+        push( ivalue - 1 );
+      else
+        exec( [["raise", "CONSTRAINT_ERROR", "out of range"]] );
+      end if;
+--
+-- ['''', 't_range', type_expr]
+--
+-- Type_expr evaluates to the scalar ITYPE of an array index.
+--
+    when "t_range" => 
+      [-, -, type_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", ["'", "t_range_"]] ]);
+--
+    when "t_range_" => 
+      pop( itype );
+      [-, lbd, ubd] := itype ;
+      push( ["integer", lbd, ubd] );
+--
+-- ['''', 'o_range', object_expr, index_value]
+--
+-- Object_expr evaluates to an array object. Index_value is an integer
+-- ordinal of an array index.
+--
+    when "o_range" => 
+      [-, -, object_expr, index_value] := attrib_expr;
+      exec( [["oeval_", object_expr],
+             ["veval_", index_value],
+             ["veval_", ["'", "o_range_"]] ]);
+--
+    when "o_range_" => 
+      pop( index_value );
+      pop( obj );
+      int_trace("obj=", obj) ;
+      int_trace("index_value=", str(index_value)) ;
+      [tag, seq, lb, ub] := obj;
+       for i in [2..index_value] loop
+        if seq = [] then
+           system_error("o_range");
+           exit;
+        end if;
+        [-, seq, lb, ub] := seq(1);
+      end loop;
+      int_trace("pushing  ",str(contents(lb)) + ", " + str(contents(ub)));
+      --push( CONTENTS(lb) );
+      --push( CONTENTS(ub) );
+      push( ["integer", contents(lb), contents(ub)] );
+
+-- ['''', 'safe_small', type_expr]
+-- ['''', 'small', type_expr]
+--
+   when "small" =>  
+     [-, -, type_expr] := attrib_expr;
+     exec( [["teval_", type_expr],
+            ["veval_", ["'", "small_"]] ]);
+--
+-- the attribute yields a universal real. Convert it to the largest floating
+-- precision available.
+
+   when "small_" => 
+     pop( itype );
+     
+     case itype.type_mark 
+     when "fixed" => 
+        [-, lbd, ubd, small, delta] := itype ;
+	result := fx_small(delta);
+        push( float_fra(result, long_float_digits) );        
+
+     when "float" => 
+        [-, lbd, ubd, digits, digits_declared] := itype ;
+        push( float_fra(to_small(
+		-4*mantissa_from_digits(digits_declared) - 1), 
+						long_float_digits) ); 
+     end case;
+
+   when "safe_small" =>  
+     [-, -, type_expr] := attrib_expr;
+     exec( [["teval_", type_expr],
+            ["veval_", ["'", "safe_small_"]] ]);
+--
+-- the attribute yields a universal real. Convert it to the largest floating
+-- precision available.
+
+   when "safe_small_" => 
+     pop( itype );
+     
+     case itype.type_mark 
+     when "fixed" => 
+        [-, lbd, ubd, small, delta] := itype ;
+	result := fx_small(delta);
+        push( float_fra(result, long_float_digits) );        
+
+     when "float" => 
+        [-, lbd, ubd, digits, digits_declared] := itype ;
+        push( float_fra(to_small(-ubd(3)-1),long_float_digits) ); 
+     end case;
+--
+-- ['''', 't_size', type_expr]
+--
+    when "t_size" => 
+      [-, -, type_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", ["'", "t_size_"]] ]);
+
+    when "t_size_" => 
+      pop( itype );
+      repr_value := itype(#itype);
+      if cdebug5 >3 then
+	 print("In t_size_, itype= " +str(itype) );
+      end if;
+
+      if (not is_tuple(repr_value)) and (itype.type_mark /= "task") then
+         push(32);
+       
+      else case itype.type_mark 
+	when "integer" => 
+	    push(repr_value(1));
+	when "float" => 
+	    push(repr_value(1));
+	when "long_float" => 
+	    push(repr_value(1));
+	when "fixed" => 
+	    push(repr_value(1));
+	when "enum" => 
+	    push(repr_value(1));
+	when "access" => 
+	    push(repr_value(1));
+	when "array" => 
+	    [-,index_types, component_type , -, -] := itype;
+	    repr_value := itype(#itype);
+            -- Check if the array had dynamic bounds and if so
+            -- compute the size now (at run-time).
+	    if repr_value(1) = -1 then
+	       exec([["teval_", component_type],
+		    ["veval_", ["'", "t_size_"]],
+		    ["veval_",["'", "t_size_array_", index_types]]]);
+	    else
+	       push(repr_value(1));
+	    end if;
+	when "record" => 
+	    push(repr_value(1));
+	when "task" => 
+	    push(128);
+        otherwise =>				-- to be continued.
+	    push(32) ;
+      end case;
+      end if;
+
+   when "t_size_array_" => 
+      [-, -, index_types] := attrib_expr;
+      pop(size_of_component);
+      type_bounds := get_array_bounds(index_types);
+       if cdebug5 >3 then
+          print("In t_size_array_, index_types "+str(index_types) );
+          print("size_of_comp, type_bounds= "+
+	         str(size_of_component) + str(type_bounds) );
+      end if;
+      number_of_elements := 1;
+       for [lo, hi] in type_bounds loop
+         number_of_elements *:= (hi - lo + 1);
+      end loop;
+      push(number_of_elements * size_of_component);
+--
+--  ['''', 'o_size', object]
+--
+    when "o_size" => 
+      [-, -, object_expr] := attrib_expr ;
+
+        if cdebug5 > 3 then
+	   print("In o_size, object_expr= "+str(object_expr) ); 
+        end if;
+        if is_simple_name(object_expr) then
+           push(object_representation(object_expr)?32);
+
+	elseif is_tuple(object_expr) and object_expr(1) = "." then
+          [-, record_type, component] := object_expr;
+          exec( [["teval_", record_type],
+                ["veval_", ["'", "o_rec_obj_size", component]] ]);
+
+        else
+           -- evaluate prefix to obtain object. 
+	   type_expr := object_expr(#object_expr);
+      	    exec( [["oeval_", object_expr],
+		   ["pop_"],
+		   ["teval_", type_expr],
+		   ["veval_", ["'", "t_size_"]]]);
+	end if;
+
+--
+-- ['''', 'o_rec_obj_size', component]
+--
+    when "o_rec_obj_size" => 
+      [-, -, component] := attrib_expr;
+      pop( itype );
+      repr_value := itype(#itype);
+      if cdebug5 >3 then
+	 print("In o_rec_obj_size" + str(itype) , str(component) );
+      end if;
+      [-, attribute_lists] := repr_value(4);
+      field_size := 0;
+      for [field, -, first_bit, last_bit] in attribute_lists loop 
+         if component = field then
+	    field_size := last_bit - first_bit + 1 ;
+-- *** WARNING: continue/quit statement has explicit loop reference (obsolete)
+	    exit;
+	 end if;
+      end loop;
+      push(field_size);
+
+--
+-- ['''', 'storage_size', type_expr]
+--
+-- This attribute is relatively meaningless in this implementation,
+-- since the limit is effectively the size of the virtual name space.
+-- The largest ada integer is returned as its value.
+--
+    when "storage_size" => 
+      push( ada_max_integer );
+--
+-- ['''', 'terminated', task_expr]
+--
+-- ['''', 'succ', type_expr, val_expr]
+--
+-- Type_expr evaluates to a discrete ITYPE and val_expr to a value
+-- of that type.
+--
+    when "succ" => 
+      [-, -, type_expr, val_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", val_expr],
+             ["veval_", ["'", "succ_"]] ]);
+--
+    when "succ_" => 
+      pop( ivalue );
+      pop( itype );
+      [-, lbd, ubd] := itype ;
+      if lbd <= ivalue and ivalue < ubd then
+        push( ivalue + 1 );
+      else
+        exec( [["raise", "CONSTRAINT_ERROR", "out of range"]] );
+      end if;
+--
+-- ['''', 'terminated', task_expr]
+--
+-- Task_expr evaluates to a task_ivalue.
+--
+    when "terminated" => 
+      [-, -, task_expr] := attrib_expr;
+      exec( [["veval_", task_expr],
+             ["veval_", ["'", "terminated_"]] ]);
+--
+    when "terminated_" => 
+      pop( task );
+      [tag, taskid] := task;
+      push( test( taskid in  terminated_tasks ) );
+--
+-- ['''', 'val', type_expr, pos_expr]
+--
+-- Type_expr evaluates to a discrete ITYPE and pos_expr to a value of
+-- universal integer type.
+--
+    when "val" => 
+      [-, -, type_expr, pos_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", pos_expr],
+             ["veval_", ["'", "val_"]] ]);
+--
+    when "val_" => 
+      pop( ivalue );
+      pop( itype );
+      [-, lbd, ubd] := itype ;
+      if lbd <= ivalue and ivalue <= ubd then
+        case itype.type_mark 
+          when "enum" => 
+            push( ivalue + lbd );
+          when "integer" => 
+            push( ivalue );
+          otherwise =>
+            system_error("val_");
+        end case;
+      else
+        exec( [["raise", "CONSTRAINT_ERROR", "out of range"]] );
+      end if;
+--
+-- ['''', 'value', type_expr, string_expr]
+--
+-- Type_name is a scalar ITYPE, string_expr to a value of
+-- type string.
+--
+    when "value" => 
+      [-, -, type_name, string_expr] := attrib_expr;
+      exec( [["push_", type_name],
+             ["veval_", string_expr],
+             ["veval_", ["'", "value_"]] ]);
+--
+    when "value_" => 
+      pop( string_val );
+      pop( itype_name );
+      itype := get_itype(itype_name);
+      [-, seq, l_val, u_val] := string_val;
+      setl_string := +/[char(seq(i)) : i in [l_val..u_val]];
+      leading_blanks := span(setl_string, " ");
+      trailing_blanks := rspan(setl_string, " ");
+      case itype.type_mark 
+
+   -- For an integer type, if the sequence of characters has the syntax of
+   -- an integer literal, with an optional single leading character that is
+   -- a plus or minus sign, and if there is a corresponding value in the
+   -- base type of the prefix, the result is this value. In any other case
+   -- the exception CONSTRAINT_ERROR is raised. (LRM 3.5.5)
+
+        when "integer" => 
+	   if setl_string(1) = "+" then
+	      setl_string := setl_string(2..);
+	      sgn := "";
+	   elseif setl_string(1) = "-" then
+	      setl_string := setl_string(2..);
+	      sgn := "-";
+	   else
+	      sgn := "";
+	   end if;
+ 
+	   [num_string, remainder_of_string, scanning_errors]:=
+		scan_number (setl_string + " ", "integer");
+
+	   if (#scanning_errors > 0) or                     
+	      -- string was not in correct format for numeric literal
+	      (num_string = "")  or
+	      -- string was not in correct format for integer literal
+	      (remainder_of_string /=" ") then
+	      -- extra non-blank characters following integer literal
+              exec([["raise", "CONSTRAINT_ERROR", "invalid integer"]]);
+	   else
+              value := adaval("integer", sgn + num_string, 0);
+              if value = "OVERFLOW" then
+		 exec([["raise","CONSTRAINT_ERROR","invalid integer"]]);
+	      else
+                 exec([["veval_", ["qual_range", itype_name, value]]]);
+	      end if;
+	   end if;
+
+        when "enum" => 
+          [-, -, -, enum_map] := itype;
+          value := enum_ord_of(enum_map, setl_string);
+          if present(value) then
+            exec( [["veval_", ["qual_range", itype_name, value]] ]);
+          else
+            exec( [["raise", "CONSTRAINT_ERROR", "invalid enum.id"] ]); 
+          end if;          
+        otherwise =>
+          system_error("value_");
+        end case;
+--
+-- ['''', 'width', type_expr]
+--
+    when "width" => 
+      [-, -, type_expr] := attrib_expr;
+      exec( [["teval_", type_expr],
+             ["veval_", ["'", "width_"]] ]);
+
+--
+     when "width_" => 
+        pop( itype );
+	if itype.type_mark = "integer" then
+                [-, lbd, ubd, -] := itype;
+		if lbd > ubd then -- Null range
+			push (0) ;
+		else
+			max_val := abs(lbd) max abs(ubd) ;
+			push( # str(max_val) + 1 );
+		end if;
+	else
+                [-, lbd, ubd, enum_map] := itype;
+		if lbd > ubd then -- Null range
+			push (0) ;
+		else
+			-- Must find longest name in enumeration type.
+			-- But, we only consider that part of the
+			-- enum_map in the range lbd .. ubd.
+			actual_enum_map := range {[x,y] in enum_map | 
+						x in [lbd..ubd]} ;
+			push( max/[ #lit: lit in actual_enum_map] );
+		end if;
+	end if; 
+
+-- ['''', 'clock', task_expr]
+--
+-- This is an implementation defined attribute. Task_expr evaluates to
+-- a task_ivalue. The value returned is the integer number of milliseconds
+-- the named task has been executing.
+--
+    when "clock" => 
+      [-, -, task_expr] := attrib_expr;
+      exec( [["veval_", task_expr],
+             ["veval_", ["'", "clock_"]] ]);
+--
+    when "clock_" => 
+      pop( [tag, taskid] );
+      push( task_clocks(taskid)(1) );
+--
+--
+--
+    otherwise =>
+       system_error("unknown attribute " + attrib_expr(2));
+  end case;
+--
+end attribute_eval;
+
+procedure  fx_mantissa(itype) ;
+[-, lbd, ubd, small, delta] := itype;
+fx_max := if fix_geq(fix_abs(ubd), fix_abs(lbd)) then fix_abs(ubd)
+      else fix_abs(lbd) end if;
+return 
+	if (fix_gtr(lbd,ubd)) or ((fix_tra(fx_max, small))(1) = 0) then 0
+  	else 1 max
+  		(ceil(log(rat_tor(rat_div(fix_tra(fx_max, small), 
+  			fx_small(delta)) ,
+  			long_float_digits)) /log(2.0))) 
+	end if;
+end fx_mantissa;
+
+procedure fx_small(delta);
+-- Calculate the small of the given delta.
+-- The number small is chosen as the largest power of two that is not greater
+-- than the delta of the fixed point accuracy definition. (LRM 3.5.9)
+
+power_of_2 := rat_1 ; 
+if rat_geq(delta, rat_1) then
+   -- Multiply by powers of two
+    until rat_gtr(power_of_2, delta) loop
+     small := power_of_2;
+     power_of_2 :=  rat_mul(power_of_2, [2,1]);
+   end loop;
+else
+   -- Multiply by powers of one-half.
+    until rat_leq(power_of_2, delta) loop
+     power_of_2 :=  rat_mul(power_of_2, [1,2]) ;
+     small := power_of_2;
+   end loop;
+end if;
+return small;
+end fx_small;
+
+--S+ Enum_lit_of
+procedure enum_lit_of(enum_map, pos);  
+  return enum_map(pos) ? "";
+end enum_lit_of;
+
+--S+ Enum_ord_of
+procedure enum_ord_of(enum_map, val_ex);
+    v := if val_ex(1) = "'" then val_ex
+         else upper_case_of(val_ex) end if;
+    if exists y = enum_map(i) | y = v then
+      return i;
+    else
+      return om;
+    end if;
+end enum_ord_of;
+
+procedure mantissa_from_digits(d) ;
+return (ceil((float(d)*(log(10.0) ))/(log(2.0) ) + 1.0));
+end mantissa_from_digits;
+
+end int_attributes;

@@ -1,0 +1,65 @@
+
+  This is GNAT version 3.01 compiled as ELF binaries under linux.  If
+your system is not ELF, this is not for you.  It was compiled with gcc
+2.7.2, binutils 2.6.0.2, and libc-5.2.16. You definately need at least
+libc-5.2.16 to use this release.  It is publically available, so you
+should have no problems getting a copy.  The gcc 2.7.2 binary is not
+included in this release (except for the GNAT specific part) but is
+required to use GNAT. You must get the gcc-2.7.2 binaries from somewhere
+like sunsite.unc.edu or tsx-11.mit.edu.  Note that everything included was
+compiled from publically available packages.  This means that anyone can
+recompile GNAT 3.01 for themselves, but I strongly discourage it since
+there are some problems that are still being addressed (see 3&5 below).
+
+There are a few items that need to be mentioned:
+
+  1) The pthread library is 1.60 beta 2, but it is the
+     version that has been incorporated into the libc library.
+     It is not included in the binary release of libc-5.2.16, but
+     you can compile it from the sources if you want.  I have included
+     it in the GNAT binary archive.
+
+  2) The release includes usr/bin/gcc.  This is because important
+     information required by gcc to recognize other languages has been
+     removed from the base source code and is instead compiled in
+     separately.
+
+  3) These are the steps required to compile GNAT:
+
+      # first, setup the gcc source as instructed by the GNAT README,
+      # apply the gcc-272.dif to gcc-2.7.2 and apply the linux.dif from
+      # the linux binary archive to the GNAT source.
+      # mv the gnat-3.01-src/src/ada directory into the gcc-2.7.2 directory.
+      # cd to the gcc-2.7.2 directory.
+      ./configure --target=i486-linux --with-gnu-as --with-gnu-ld --prefix=/usr
+      make CFLAGS="-O3 -fomit-frame-pointer"
+      make CFLAGS="-O3 -fomit-frame-pointer" gnattools
+      make CFLAGS="-g -fPIC -D_MIT_POSIX_THREADS" gnatlib
+      su
+      make install
+
+     Some tweaking is necessary to make a shared library and the steps are
+     not well-defined at this time, so I am not going to get into it.
+
+  4) This release includes a shared library version of libgnat.  I have
+     placed it in /usr/lib so that you do not need to add another entry
+     in /etc/ld.so.conf.
+
+  5) I have been requested to omit a patch to gcc that is required to get
+     around a problem I encountered when compiling the RTS.  My patch does
+     not fix the true bug in GNAT, but sorta covers it up.  A proper solution
+     is being investigated by the folks at ACT.  If you have a serious need
+     to compile GNAT yourself, think twice :-), then if you still need to
+     do it, I can provide you with my patch.
+
+  6) All example programs compile and run with the exception of diners.
+     The problem has already been reported and is on ACT's list.  I have
+     also minimally tested tasking and it appears to work.
+
+  Please report any and all ommisions or oversights on my part in the
+contents of this binary release.
+
+Enjoy,
+
+Sean McNeil
+sean@mcneil.com

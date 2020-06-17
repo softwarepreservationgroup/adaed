@@ -1,0 +1,3145 @@
+*** Adaed-1.11.0a/Makefile	Fri Feb  7 20:17:51 1992
+--- Adaed1.11.0a-l/Makefile	Thu Jun 25 22:35:12 1992
+***************
+*** 1,7 ****
+  # $Header: /griffin.a/ada/porter/all/RCS/Makefile,v 1.9 1992/02/04 19:19:56 porter Exp $
+  
+  CC= gcc
+! CFLAGS=-g
+  
+  #CC= g++
+  #CFLAGS=-g
+--- 1,7 ----
+  # $Header: /griffin.a/ada/porter/all/RCS/Makefile,v 1.9 1992/02/04 19:19:56 porter Exp $
+  
+  CC= gcc
+! CFLAGS=
+  
+  #CC= g++
+  #CFLAGS=-g
+***************
+*** 12,22 ****
+  LINKER= $(CC)
+  LFLAGS=-lg
+  
+! INSTALL = install
+  
+! BINDIR = /usr/local
+  LIBDIR = /usr/local/lib
+! MANDIR = /usr/local/man
+  
+  .SUFFIXES:
+  .SUFFIXES: .o .c .h .ch .s .vbs
+--- 12,22 ----
+  LINKER= $(CC)
+  LFLAGS=-lg
+  
+! INSTALL = cp
+  
+! BINDIR = /usr/local/bin
+  LIBDIR = /usr/local/lib
+! MANDIR = /usr/man
+  
+  .SUFFIXES:
+  .SUFFIXES: .o .c .h .ch .s .vbs
+***************
+*** 70,83 ****
+  install : all predef
+  	-mkdir $(BINDIR)
+  	-mkdir $(LIBDIR)
+! 	install adacomp adabind adaexec adalib $(BINDIR)
+! 	install adaprs adasem adagen $(LIBDIR)
+! 	install predefdir/0.axq $(LIBDIR)/predef.axq
+! 	install predefdir/0.trc $(LIBDIR)/predef.trc
+! 	install predefdir/lib $(LIBDIR)/predef.lib
+  	-rm $(LIBDIR)/adabind
+  	ln -s $(BINDIR)/adabind $(LIBDIR)/adabind
+! 	install adabind.l adacomp.l adaed.l adaexec.l adalib.l $(MANDIR)/manl
+  
+  # remove all targets
+  MADE_HDRS =	vars.h gvars.h ivars.h hdr.h libhdr.h ghdr.h
+--- 70,83 ----
+  install : all predef
+  	-mkdir $(BINDIR)
+  	-mkdir $(LIBDIR)
+! 	$(INSTALL) adacomp adabind adaexec adalib $(BINDIR)
+! 	$(INSTALL) adaprs adasem adagen $(LIBDIR)
+! 	$(INSTALL) predefdir/0.axq $(LIBDIR)/predef.axq
+! 	$(INSTALL) predefdir/0.trc $(LIBDIR)/predef.trc
+! 	$(INSTALL) predefdir/lib $(LIBDIR)/predef.lib
+  	-rm $(LIBDIR)/adabind
+  	ln -s $(BINDIR)/adabind $(LIBDIR)/adabind
+! 	$(INSTALL) adabind.l adacomp.l adaed.l adaexec.l adalib.l $(MANDIR)/manl
+  
+  # remove all targets
+  MADE_HDRS =	vars.h gvars.h ivars.h hdr.h libhdr.h ghdr.h
+***************
+*** 94,100 ****
+  LIB_OBJS = adalib.o misc.o libf.o
+  
+  adalib: $(LIB_OBJS)
+! 	$(LINKER) -o adalib -g $(LIB_OBJS) -lm >lib.lm
+  
+  #---------------------------#
+  # adacomp FILES AND ACTIONS #
+--- 94,100 ----
+  LIB_OBJS = adalib.o misc.o libf.o
+  
+  adalib: $(LIB_OBJS)
+! 	$(LINKER) -static -o adalib -g $(LIB_OBJS) -lm >lib.lm
+  
+  #---------------------------#
+  # adacomp FILES AND ACTIONS #
+***************
+*** 114,120 ****
+  			prserr.o prsinit.o prsutil.o pspans.o recover.o reduce.o shift.o
+  
+  adaprs: $(PRS_OBJS) 	
+! 	$(LINKER) -o adaprs -g $(PRS_OBJS) -lm >prs.lm
+  
+  #--------------------------#
+  # adasem FILES and ACTIONS #
+--- 114,120 ----
+  			prserr.o prsinit.o prsutil.o pspans.o recover.o reduce.o shift.o
+  
+  adaprs: $(PRS_OBJS) 	
+! 	$(LINKER) -o adaprs $(PRS_OBJS) -lm >prs.lm
+  
+  #--------------------------#
+  # adasem FILES and ACTIONS #
+diff -C 3 Adaed-1.11.0a/adacomp.c Adaed1.11.0a-l/adacomp.c
+*** Adaed-1.11.0a/adacomp.c	Fri Feb  7 20:18:23 1992
+--- Adaed1.11.0a-l/adacomp.c	Fri Jun  5 22:53:55 1992
+***************
+*** 56,65 ****
+  static int run_prog(char *, char **);
+  static void delete_file(char *);
+  #ifdef SYSTEM_V
+  static  int mkdir(char *, int);
+  #endif
+  #ifdef vms
+! static void fold_upper(char *s)								/*;fold_upper*/
+  #endif
+  
+  char   *argname;
+--- 56,67 ----
+  static int run_prog(char *, char **);
+  static void delete_file(char *);
+  #ifdef SYSTEM_V
++ #ifndef linux
+  static  int mkdir(char *, int);
+  #endif
++ #endif
+  #ifdef vms
+! static void fold_upper(char *s)							/*;fold_upper*/
+  #endif
+  
+  char   *argname;
+***************
+*** 864,869 ****
+--- 866,872 ----
+  }
+  
+  #ifdef SYSTEM_V
++ #ifndef linux
+  #include <sys/stat.h>
+  /* no mkdir available, mknod doesn't work, so use system */
+  char syscommand[100];		/* argument for system() call */
+***************
+*** 883,888 ****
+--- 886,892 ----
+  	}
+  	else return (-1);
+  }
++ #endif
+  #endif
+  
+  #ifdef vms
+diff -C 3 Adaed-1.11.0a/appendf.doc Adaed1.11.0a-l/appendf.doc
+*** Adaed-1.11.0a/appendf.doc	Fri Feb  7 20:17:52 1992
+--- Adaed1.11.0a-l/appendf.doc	Thu Jun 25 22:39:42 1992
+***************
+*** 29,37 ****
+                  end record;
+  
+     		type NAME    is (ELXSI_BSD, ELXSI_ENIX, PC_DOS, 
+! 		     		 SUN_UNIX, VAX_UNIX, VAX_VMS) ; 
+  
+!    		SYSTEM_NAME  : constant NAME := SUN_UNIX;
+  
+                  STORAGE_UNIT    : constant  :=  8;
+                  MEMORY_SIZE     : constant  :=  2**16 - 1;
+--- 29,37 ----
+                  end record;
+  
+     		type NAME    is (ELXSI_BSD, ELXSI_ENIX, PC_DOS, 
+! 		     		 SUN_UNIX, VAX_UNIX, VAX_VMS, LINUX) ; 
+  
+!    		SYSTEM_NAME  : constant NAME := LINUX;
+  
+                  STORAGE_UNIT    : constant  :=  8;
+                  MEMORY_SIZE     : constant  :=  2**16 - 1;
+diff -C 3 Adaed-1.11.0a/config.h Adaed1.11.0a-l/config.h
+*** Adaed-1.11.0a/config.h	Fri Feb  7 20:20:04 1992
+--- Adaed1.11.0a-l/config.h	Wed Jun  3 23:07:48 1992
+***************
+*** 28,33 ****
+--- 28,42 ----
+   * 4 byte boundaries. (e.g. SPARC).
+   */
+  
++ #ifdef linux
++ #define WORDSIZE32
++ #ifndef SYSTEM_V
++ #define SYSTEM_V
++ #endif
++ #define ALIGN2
++ #define OP_SYS "Linux 0.96"
++ #endif
++ 
+  #ifdef sun
+  #define WORDSIZE32
+  #ifndef BSD
+diff -C 3 Adaed-1.11.0a/farith.c Adaed1.11.0a-l/farith.c
+*** Adaed-1.11.0a/farith.c	Fri Feb  7 20:18:54 1992
+--- Adaed1.11.0a-l/farith.c	Mon Jun  8 22:24:52 1992
+***************
+*** 459,465 ****
+  	printf("int *v,p;\n{\nint i,*u;\n");
+  	printf("\tif (p < 0 || p > %d) {\n",NUMBER);
+  	printf("\t\tv[0] = v[1] = 1;\n");
+! 	printf("\t\traise(SYSTEM_ERROR,\"power of 5 too large\");\n\t}\n");
+  	printf("\tu = pow5[p];\n");
+  	printf("\tfor (i=0;i<=u[0];i++) v[i] = u[i];\n}\n");
+  }
+--- 459,465 ----
+  	printf("int *v,p;\n{\nint i,*u;\n");
+  	printf("\tif (p < 0 || p > %d) {\n",NUMBER);
+  	printf("\t\tv[0] = v[1] = 1;\n");
+! 	printf("\t\tRaise(SYSTEM_ERROR,\"power of 5 too large\");\n\t}\n");
+  	printf("\tu = pow5[p];\n");
+  	printf("\tfor (i=0;i<=u[0];i++) v[i] = u[i];\n}\n");
+  }
+***************
+*** 501,507 ****
+  	int i,*u;
+  	if (p < 0 || p > 20) {
+  		v[0] = v[1] = 1;
+! 		raise(SYSTEM_ERROR,"power of 5 too large");
+  	}
+  	u = pow5[p];
+  	for (i=0;i<=u[0];i++) v[i] = u[i];
+--- 501,507 ----
+  	int i,*u;
+  	if (p < 0 || p > 20) {
+  		v[0] = v[1] = 1;
+! 		Raise(SYSTEM_ERROR,"power of 5 too large");
+  	}
+  	u = pow5[p];
+  	for (i=0;i<=u[0];i++) v[i] = u[i];
+diff -C 3 Adaed-1.11.0a/ginter.c Adaed1.11.0a-l/ginter.c
+*** Adaed-1.11.0a/ginter.c	Fri Feb  7 20:18:58 1992
+--- Adaed1.11.0a-l/ginter.c	Mon Jun  8 22:25:25 1992
+***************
+*** 59,65 ****
+  		}
+  	}
+  	sprintf(dummy_array,
+! 	  "\tdefault: raise(%d, \"Interface\");\n}\n}\n", 6);
+  	code = strjoin(code, dummy_array);
+  #ifdef SUPPORT_PRAGMA_INTERFACE
+  	file = efopenl("interface.c", "", "w", "t");
+--- 59,65 ----
+  		}
+  	}
+  	sprintf(dummy_array,
+! 	  "\tdefault: Raise(%d, \"Interface\");\n}\n}\n", 6);
+  	code = strjoin(code, dummy_array);
+  #ifdef SUPPORT_PRAGMA_INTERFACE
+  	file = efopenl("interface.c", "", "w", "t");
+diff -C 3 Adaed-1.11.0a/inta.c Adaed1.11.0a-l/inta.c
+*** Adaed-1.11.0a/inta.c	Fri Feb  7 20:19:08 1992
+--- Adaed1.11.0a-l/inta.c	Mon Jun  8 22:28:10 1992
+***************
+*** 501,507 ****
+  		case I_DEREF_W:
+  			POP_ADDR(bse, off);
+  			if (bse == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				value = *ADDR(bse, off);
+  				PUSH(value);
+--- 501,507 ----
+  		case I_DEREF_W:
+  			POP_ADDR(bse, off);
+  			if (bse == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				value = *ADDR(bse, off);
+  				PUSH(value);
+***************
+*** 511,517 ****
+  		case I_DEREF_L:
+  			POP_ADDR(bse, off);
+  			if (bse == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				lvalue = *ADDRL(bse, off);
+  				PUSHL(lvalue);
+--- 511,517 ----
+  		case I_DEREF_L:
+  			POP_ADDR(bse, off);
+  			if (bse == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				lvalue = *ADDRL(bse, off);
+  				PUSHL(lvalue);
+***************
+*** 521,527 ****
+  		case I_DEREF_A:
+  			POP_ADDR(bse, off);
+  			if (bse == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				value = *ADDR(bse, off);
+  				PUSH(value);
+--- 521,527 ----
+  		case I_DEREF_A:
+  			POP_ADDR(bse, off);
+  			if (bse == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				value = *ADDR(bse, off);
+  				PUSH(value);
+***************
+*** 533,539 ****
+  		case I_DEREF_D:
+  			POP_ADDR(bse, off);
+  			if (bse == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				value = *ADDR(bse, off);
+  				PUSH(value);
+--- 533,539 ----
+  		case I_DEREF_D:
+  			POP_ADDR(bse, off);
+  			if (bse == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				value = *ADDR(bse, off);
+  				PUSH(value);
+***************
+*** 584,590 ****
+  			POP_ADDR(bas1, off1);
+  			POP_ADDR(bas2, off2);
+  			if (bas1 == 255 || bas2 == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else
+  				*ADDR(bas2, off2) = *ADDR(bas1, off1);
+  			break;
+--- 584,590 ----
+  			POP_ADDR(bas1, off1);
+  			POP_ADDR(bas2, off2);
+  			if (bas1 == 255 || bas2 == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else
+  				*ADDR(bas2, off2) = *ADDR(bas1, off1);
+  			break;
+***************
+*** 593,599 ****
+  			POP_ADDR(bas1, off1);
+  			POP_ADDR(bas2, off2);
+  			if (bas1 == 255 || bas2 == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else
+  				*ADDRL(bas2, off2) = *ADDRL(bas1, off1);
+  			break;
+--- 593,599 ----
+  			POP_ADDR(bas1, off1);
+  			POP_ADDR(bas2, off2);
+  			if (bas1 == 255 || bas2 == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else
+  				*ADDRL(bas2, off2) = *ADDRL(bas1, off1);
+  			break;
+***************
+*** 602,608 ****
+  			POP_ADDR(bas1, off1);
+  			POP_ADDR(bas2, off2);
+  			if (bas1 == 255 || bas2 == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				*ADDR(bas2, off2) = *ADDR(bas1, off1);
+  				*ADDR(bas2, off2 + 1) = *ADDR(bas1, off1 + 1);
+--- 602,608 ----
+  			POP_ADDR(bas1, off1);
+  			POP_ADDR(bas2, off2);
+  			if (bas1 == 255 || bas2 == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				*ADDR(bas2, off2) = *ADDR(bas1, off1);
+  				*ADDR(bas2, off2 + 1) = *ADDR(bas1, off1 + 1);
+***************
+*** 614,620 ****
+  			GET_GAD(bse, off);
+  			POP_ADDR(bas1, off1);
+  			if (bas1 == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else
+  				*ADDR(bse, off) = *ADDR(bas1, off1);
+  			break;
+--- 614,620 ----
+  			GET_GAD(bse, off);
+  			POP_ADDR(bas1, off1);
+  			if (bas1 == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else
+  				*ADDR(bse, off) = *ADDR(bas1, off1);
+  			break;
+***************
+*** 623,629 ****
+  			GET_GAD(bse, off);
+  			POP_ADDR(bas1, off1);
+  			if (bas1 == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else
+  				*ADDRL(bse, off) = *ADDRL(bas1, off1);
+  			break;
+--- 623,629 ----
+  			GET_GAD(bse, off);
+  			POP_ADDR(bas1, off1);
+  			if (bas1 == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else
+  				*ADDRL(bse, off) = *ADDRL(bas1, off1);
+  			break;
+***************
+*** 632,638 ****
+  			GET_GAD(bse, off);
+  			POP_ADDR(bas1, off1);
+  			if (bas1 == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				*ADDR(bse, off) = *ADDR(bas1, off1);
+  				*ADDR(bse, off + 1) = *ADDR(bas1, off1 + 1);
+--- 632,638 ----
+  			GET_GAD(bse, off);
+  			POP_ADDR(bas1, off1);
+  			if (bas1 == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				*ADDR(bse, off) = *ADDR(bas1, off1);
+  				*ADDR(bse, off + 1) = *ADDR(bas1, off1 + 1);
+***************
+*** 644,650 ****
+  			GET_LAD(bse, off);
+  			POP_ADDR(bas1, off1);
+  			if (bas1 == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else
+  				*ADDR(bse, off) = *ADDR(bas1, off1);
+  			break;
+--- 644,650 ----
+  			GET_LAD(bse, off);
+  			POP_ADDR(bas1, off1);
+  			if (bas1 == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else
+  				*ADDR(bse, off) = *ADDR(bas1, off1);
+  			break;
+***************
+*** 653,659 ****
+  			GET_LAD(bse, off);
+  			POP_ADDR(bas1, off1);
+  			if (bas1 == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else
+  				*ADDRL(bse, off) = *ADDRL(bas1, off1);
+  			break;
+--- 653,659 ----
+  			GET_LAD(bse, off);
+  			POP_ADDR(bas1, off1);
+  			if (bas1 == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else
+  				*ADDRL(bse, off) = *ADDRL(bas1, off1);
+  			break;
+***************
+*** 662,668 ****
+  			GET_LAD(bse, off);
+  			POP_ADDR(bas1, off1);
+  			if (bas1 == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				*ADDR(bse, off) = *ADDR(bas1, off1);
+  				*ADDR(bse, off + 1) = *ADDR(bas1, off1 + 1);
+--- 662,668 ----
+  			GET_LAD(bse, off);
+  			POP_ADDR(bas1, off1);
+  			if (bas1 == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else {
+  				*ADDR(bse, off) = *ADDR(bas1, off1);
+  				*ADDR(bse, off + 1) = *ADDR(bas1, off1 + 1);
+***************
+*** 674,680 ****
+  			POP(value);
+  			POP_ADDR(bse, off);
+  			if (bse == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else 
+  				*ADDR(bse, off) = value;
+  			break;
+--- 674,680 ----
+  			POP(value);
+  			POP_ADDR(bse, off);
+  			if (bse == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else 
+  				*ADDR(bse, off) = value;
+  			break;
+***************
+*** 683,689 ****
+  			POPL(lvalue);
+  			POP_ADDR(bse, off);
+  			if (bse == 255)
+! 				raise(CONSTRAINT_ERROR, "Null access value");
+  			else 
+  				*ADDRL(bse, off) = lvalue;
+  			break;
+--- 683,689 ----
+  			POPL(lvalue);
+  			POP_ADDR(bse, off);
+  			if (bse == 255)
+! 				Raise(CONSTRAINT_ERROR, "Null access value");
+  			else 
+  				*ADDRL(bse, off) = lvalue;
+  			break;
+***************
+*** 830,836 ****
+  			POPF(rval1);
+  			rvalue = rval1 + rval2;
+  			if (ABS(rvalue) > ADA_MAX_REAL)
+! 				raise(NUMERIC_ERROR, "Floating point addition overflow");
+  			PUSHF(rvalue);
+  			break;
+  
+--- 830,836 ----
+  			POPF(rval1);
+  			rvalue = rval1 + rval2;
+  			if (ABS(rvalue) > ADA_MAX_REAL)
+! 				Raise(NUMERIC_ERROR, "Floating point addition overflow");
+  			PUSHF(rvalue);
+  			break;
+  
+***************
+*** 839,845 ****
+  			POPF(rval1);
+  			rvalue = rval1 - rval2;
+  			if (ABS(rvalue) > ADA_MAX_REAL)
+! 				raise(NUMERIC_ERROR, "Floating point subtraction overflow");
+  			PUSHF(rvalue);
+  			break;
+  
+--- 839,845 ----
+  			POPF(rval1);
+  			rvalue = rval1 - rval2;
+  			if (ABS(rvalue) > ADA_MAX_REAL)
+! 				Raise(NUMERIC_ERROR, "Floating point subtraction overflow");
+  			PUSHF(rvalue);
+  			break;
+  
+***************
+*** 848,854 ****
+  			POPF(rval1);
+  			rvalue = rval1 * rval2;
+  			if (ABS(rvalue) > ADA_MAX_REAL)
+! 				raise(NUMERIC_ERROR, "Floating point multiplication overflow");
+  			PUSHF(rvalue);
+  			break;
+  
+--- 848,854 ----
+  			POPF(rval1);
+  			rvalue = rval1 * rval2;
+  			if (ABS(rvalue) > ADA_MAX_REAL)
+! 				Raise(NUMERIC_ERROR, "Floating point multiplication overflow");
+  			PUSHF(rvalue);
+  			break;
+  
+***************
+*** 856,866 ****
+  			POPF(rval2);
+  			POPF(rval1);
+  			if (rval2 == 0.0)
+! 				raise(NUMERIC_ERROR, "Floating point division by zero");
+  			else {
+  				rvalue = rval1 / rval2;
+  				if (ABS(rvalue) > ADA_MAX_REAL)
+! 					raise(NUMERIC_ERROR, "Floating point division overflow");
+  			}
+  			PUSHF(rvalue);
+  			break;
+--- 856,866 ----
+  			POPF(rval2);
+  			POPF(rval1);
+  			if (rval2 == 0.0)
+! 				Raise(NUMERIC_ERROR, "Floating point division by zero");
+  			else {
+  				rvalue = rval1 / rval2;
+  				if (ABS(rvalue) > ADA_MAX_REAL)
+! 					Raise(NUMERIC_ERROR, "Floating point division overflow");
+  			}
+  			PUSHF(rvalue);
+  			break;
+***************
+*** 880,886 ****
+  				rvalue = 1.0;				/* x ** 0 = 0.0 */
+  			else if (rval1 == 0.0) {
+  				if (val2 < 0)				/* 0 ** -x = error */
+! 					raise(NUMERIC_ERROR, "Negative power of zero");
+  				else
+  					rvalue = 0.0;/* 0 ** +x = 0.0 */
+  			}
+--- 880,886 ----
+  				rvalue = 1.0;				/* x ** 0 = 0.0 */
+  			else if (rval1 == 0.0) {
+  				if (val2 < 0)				/* 0 ** -x = error */
+! 					Raise(NUMERIC_ERROR, "Negative power of zero");
+  				else
+  					rvalue = 0.0;/* 0 ** +x = 0.0 */
+  			}
+***************
+*** 894,900 ****
+  							 * exponent is positive. If it is negative, the
+  							 * result will converge towards 0
+  							 */
+! 							raise(NUMERIC_ERROR, "Exponentiation");
+  							break;
+  						}
+  						else { 
+--- 894,900 ----
+  							 * exponent is positive. If it is negative, the
+  							 * result will converge towards 0
+  							 */
+! 							Raise(NUMERIC_ERROR, "Exponentiation");
+  							break;
+  						}
+  						else { 
+***************
+*** 929,935 ****
+  			POP(val1);
+  			value = val1 + val2;
+  			if (value < -128 || value > 127)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSH(value);
+  			break;
+--- 929,935 ----
+  			POP(val1);
+  			value = val1 + val2;
+  			if (value < -128 || value > 127)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSH(value);
+  			break;
+***************
+*** 939,945 ****
+  			POP(val1);
+  			value = word_add(val1, val2, &overflow);
+  			if (overflow)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSH(value);
+  			break;
+--- 939,945 ----
+  			POP(val1);
+  			value = word_add(val1, val2, &overflow);
+  			if (overflow)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSH(value);
+  			break;
+***************
+*** 949,955 ****
+  			POPL(lval1);
+  			lvalue = long_add(lval1, lval2, &overflow);
+  			if (overflow)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSHL(lvalue);
+  			break;
+--- 949,955 ----
+  			POPL(lval1);
+  			lvalue = long_add(lval1, lval2, &overflow);
+  			if (overflow)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSHL(lvalue);
+  			break;
+***************
+*** 959,965 ****
+  			val2 = GET_WORD;
+  			value = val1 + val2;
+  			if (value < -128 || value > 127)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSH(value);
+  			break;
+--- 959,965 ----
+  			val2 = GET_WORD;
+  			value = val1 + val2;
+  			if (value < -128 || value > 127)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSH(value);
+  			break;
+***************
+*** 969,975 ****
+  			val2 = GET_WORD;
+  			value = word_add(val1, val2, &overflow);
+  			if (overflow)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			PUSH(value);
+  			break;
+  
+--- 969,975 ----
+  			val2 = GET_WORD;
+  			value = word_add(val1, val2, &overflow);
+  			if (overflow)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			PUSH(value);
+  			break;
+  
+***************
+*** 983,989 ****
+  			ip += WORDS_LONG;
+  			lvalue = long_add(lval1, lval2, &overflow);
+  			if (overflow)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			PUSHL(lvalue);
+  			break;
+  
+--- 983,989 ----
+  			ip += WORDS_LONG;
+  			lvalue = long_add(lval1, lval2, &overflow);
+  			if (overflow)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			PUSHL(lvalue);
+  			break;
+  
+***************
+*** 991,999 ****
+  			POP(val2);
+  			POP(val1);
+  			if (val2 == 0)
+! 				raise(NUMERIC_ERROR, "Division by zero");
+  			else if (val1 == -128 && val2 == -1)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else {
+  				value = val1 / val2;
+  				PUSH(value);
+--- 991,999 ----
+  			POP(val2);
+  			POP(val1);
+  			if (val2 == 0)
+! 				Raise(NUMERIC_ERROR, "Division by zero");
+  			else if (val1 == -128 && val2 == -1)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else {
+  				value = val1 / val2;
+  				PUSH(value);
+***************
+*** 1004,1012 ****
+  			POP(val2);
+  			POP(val1);
+  			if (val2 == 0)
+! 				raise(NUMERIC_ERROR, "Division by zero");
+  			else if (val1 == MIN_INTEGER && val2 == -1)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else {
+  				value = val1 / val2;
+  				PUSH(value);
+--- 1004,1012 ----
+  			POP(val2);
+  			POP(val1);
+  			if (val2 == 0)
+! 				Raise(NUMERIC_ERROR, "Division by zero");
+  			else if (val1 == MIN_INTEGER && val2 == -1)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else {
+  				value = val1 / val2;
+  				PUSH(value);
+***************
+*** 1017,1025 ****
+  			POPL(lval2);
+  			POPL(lval1);
+  			if (lval2 == 0)
+! 				raise(NUMERIC_ERROR, "Division by zero");
+  			else if (lval1 == MIN_LONG && lval2 == -1)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else {
+  				lvalue = lval1 / lval2;
+  				PUSHL(lvalue);
+--- 1017,1025 ----
+  			POPL(lval2);
+  			POPL(lval1);
+  			if (lval2 == 0)
+! 				Raise(NUMERIC_ERROR, "Division by zero");
+  			else if (lval1 == MIN_LONG && lval2 == -1)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else {
+  				lvalue = lval1 / lval2;
+  				PUSHL(lvalue);
+***************
+*** 1045,1051 ****
+  			POP(val2);
+  			POP(val1);
+  			if (val2 == 0)
+! 				raise(NUMERIC_ERROR, "Division by zero");
+  			else {
+  				value = val1 % val2;
+  				PUSH(value);
+--- 1045,1051 ----
+  			POP(val2);
+  			POP(val1);
+  			if (val2 == 0)
+! 				Raise(NUMERIC_ERROR, "Division by zero");
+  			else {
+  				value = val1 % val2;
+  				PUSH(value);
+***************
+*** 1056,1062 ****
+  			POPL(lval2);
+  			POPL(lval1);
+  			if (lval2 == 0)
+! 				raise(NUMERIC_ERROR, "Division by zero");
+  			else {
+  				lvalue = lval1 % lval2;
+  				PUSHL(lvalue);
+--- 1056,1062 ----
+  			POPL(lval2);
+  			POPL(lval1);
+  			if (lval2 == 0)
+! 				Raise(NUMERIC_ERROR, "Division by zero");
+  			else {
+  				lvalue = lval1 % lval2;
+  				PUSHL(lvalue);
+***************
+*** 1080,1086 ****
+  			POP(val2);
+  			POP(val1);
+  			if (val2 == 0)
+! 				raise(NUMERIC_ERROR, "Division by zero");
+  			else {
+  				/* the idea is to transform val1 in a positive value.
+  				 * a mod b = (a + k*b) mod b
+--- 1080,1086 ----
+  			POP(val2);
+  			POP(val1);
+  			if (val2 == 0)
+! 				Raise(NUMERIC_ERROR, "Division by zero");
+  			else {
+  				/* the idea is to transform val1 in a positive value.
+  				 * a mod b = (a + k*b) mod b
+***************
+*** 1105,1111 ****
+  			POPL(lval2);
+  			POPL(lval1);
+  			if (lval2 == 0)
+! 				raise(NUMERIC_ERROR, "Division by zero");
+  			else {
+  				/* the idea is to transform lval1 in a positive value.
+  				 * a mod b = (a + k*b) mod b
+--- 1105,1111 ----
+  			POPL(lval2);
+  			POPL(lval1);
+  			if (lval2 == 0)
+! 				Raise(NUMERIC_ERROR, "Division by zero");
+  			else {
+  				/* the idea is to transform lval1 in a positive value.
+  				 * a mod b = (a + k*b) mod b
+***************
+*** 1131,1137 ****
+  			POP(val1);
+  			value = val1 * val2;
+  			if (value < -128 || value > 127)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSH(value);
+  			break;
+--- 1131,1137 ----
+  			POP(val1);
+  			value = val1 * val2;
+  			if (value < -128 || value > 127)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSH(value);
+  			break;
+***************
+*** 1141,1147 ****
+  			POP(val1);
+  			value = word_mul(val1, val2, &overflow);
+  			if (overflow)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			PUSH(value);
+  			break;
+  
+--- 1141,1147 ----
+  			POP(val1);
+  			value = word_mul(val1, val2, &overflow);
+  			if (overflow)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			PUSH(value);
+  			break;
+  
+***************
+*** 1150,1156 ****
+  			POPL(lval1);
+  			lvalue = long_mul(lval1, lval2, &overflow);
+  			if (overflow)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			PUSHL(lvalue);
+  			break;
+  
+--- 1150,1156 ----
+  			POPL(lval1);
+  			lvalue = long_mul(lval1, lval2, &overflow);
+  			if (overflow)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			PUSHL(lvalue);
+  			break;
+  
+***************
+*** 1158,1164 ****
+  			POP(val2);
+  			POP(val1);
+  			if (val2 < 0)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else if (val2 == 0)
+  				value = 1;
+  			else {
+--- 1158,1164 ----
+  			POP(val2);
+  			POP(val1);
+  			if (val2 < 0)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else if (val2 == 0)
+  				value = 1;
+  			else {
+***************
+*** 1166,1172 ****
+  				for (i = 1; i < val2; i++) {
+  					value = value * val1;
+  					if (value > 127)
+! 						raise(NUMERIC_ERROR, "Overflow");
+  				}
+  			}
+  			PUSH(value);
+--- 1166,1172 ----
+  				for (i = 1; i < val2; i++) {
+  					value = value * val1;
+  					if (value > 127)
+! 						Raise(NUMERIC_ERROR, "Overflow");
+  				}
+  			}
+  			PUSH(value);
+***************
+*** 1176,1182 ****
+  			POP(val2);
+  			POP(val1);
+  			if (val2 < 0)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else if (val2 == 0)
+  				value = 1;
+  			else
+--- 1176,1182 ----
+  			POP(val2);
+  			POP(val1);
+  			if (val2 < 0)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else if (val2 == 0)
+  				value = 1;
+  			else
+***************
+*** 1184,1190 ****
+  			for (i = 1; i < val2; i++) {
+  				value = word_mul(value, val1, &overflow);
+  				if (overflow)
+! 					raise(NUMERIC_ERROR, "Overflow");
+  			}
+  			PUSH(value);
+  			break;
+--- 1184,1190 ----
+  			for (i = 1; i < val2; i++) {
+  				value = word_mul(value, val1, &overflow);
+  				if (overflow)
+! 					Raise(NUMERIC_ERROR, "Overflow");
+  			}
+  			PUSH(value);
+  			break;
+***************
+*** 1193,1199 ****
+  			POPL(lval2);
+  			POPL(lval1);
+  			if (lval2 < 0)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else if (lval2 == 0)
+  				lvalue = 1;
+  			else {
+--- 1193,1199 ----
+  			POPL(lval2);
+  			POPL(lval1);
+  			if (lval2 < 0)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else if (lval2 == 0)
+  				lvalue = 1;
+  			else {
+***************
+*** 1201,1207 ****
+  				for (i = 1; i < lval2; i++) {
+  					lvalue = long_mul(lvalue, lval1, &overflow);
+  					if (overflow)
+! 						raise(NUMERIC_ERROR, "Overflow");
+  				}
+  			}
+  			PUSHL(lvalue);
+--- 1201,1207 ----
+  				for (i = 1; i < lval2; i++) {
+  					lvalue = long_mul(lvalue, lval1, &overflow);
+  					if (overflow)
+! 						Raise(NUMERIC_ERROR, "Overflow");
+  				}
+  			}
+  			PUSHL(lvalue);
+***************
+*** 1243,1257 ****
+  					fix_convert(fix_resu, temp_template, FX_RANGE(ptr));
+  					fvalue = int_tol(fix_resu);
+  					if (arith_overflow)
+! 						raise(NUMERIC_ERROR,
+  						  "Fixed point multiplication overflow");
+  					if (fix_out_of_bounds(fvalue, ptr))
+! 						raise(CONSTRAINT_ERROR,
+  						  "Fixed point value out of bounds");
+  					PUSHL(sgn*fvalue);
+  				}
+  				else
+! 					raise(SYSTEM_ERROR, "Conversion to invalid type");
+  			}
+  			break;
+  
+--- 1243,1257 ----
+  					fix_convert(fix_resu, temp_template, FX_RANGE(ptr));
+  					fvalue = int_tol(fix_resu);
+  					if (arith_overflow)
+! 						Raise(NUMERIC_ERROR,
+  						  "Fixed point multiplication overflow");
+  					if (fix_out_of_bounds(fvalue, ptr))
+! 						Raise(CONSTRAINT_ERROR,
+  						  "Fixed point value out of bounds");
+  					PUSHL(sgn*fvalue);
+  				}
+  				else
+! 					Raise(SYSTEM_ERROR, "Conversion to invalid type");
+  			}
+  			break;
+  
+***************
+*** 1268,1274 ****
+  			ptr = ADDR(bas1, off1);
+  
+  			if (fval2 == 0) {
+! 				raise(NUMERIC_ERROR, "Fixed point division by zero");
+  				fvalue = 0;
+  				PUSHL(fvalue);
+  			}
+--- 1268,1274 ----
+  			ptr = ADDR(bas1, off1);
+  
+  			if (fval2 == 0) {
+! 				Raise(NUMERIC_ERROR, "Fixed point division by zero");
+  				fvalue = 0;
+  				PUSHL(fvalue);
+  			}
+***************
+*** 1292,1305 ****
+  					int_div(fix_val1, fix_val2, fix_resu);
+  					fvalue = int_tol(fix_resu);
+  					if (arith_overflow)
+! 						raise(NUMERIC_ERROR, "Fixed point division overflow");
+  					if (fix_out_of_bounds(fvalue, ptr))
+! 						raise(CONSTRAINT_ERROR,
+  						  "Fixed point value out of bounds");
+  					PUSHL(sgn*fvalue);
+  				}
+  				else
+! 					raise(SYSTEM_ERROR, "Conversion to invalid type");
+  			}
+  			break;
+  
+--- 1292,1305 ----
+  					int_div(fix_val1, fix_val2, fix_resu);
+  					fvalue = int_tol(fix_resu);
+  					if (arith_overflow)
+! 						Raise(NUMERIC_ERROR, "Fixed point division overflow");
+  					if (fix_out_of_bounds(fvalue, ptr))
+! 						Raise(CONSTRAINT_ERROR,
+  						  "Fixed point value out of bounds");
+  					PUSHL(sgn*fvalue);
+  				}
+  				else
+! 					Raise(SYSTEM_ERROR, "Conversion to invalid type");
+  			}
+  			break;
+  
+***************
+*** 1315,1321 ****
+  
+  		case I_NEG_B:
+  			if (TOS == -128)
+! 				raise(NUMERIC_ERROR,"Byte overflow");
+  			else
+  				TOS = -TOS;
+  			break;
+--- 1315,1321 ----
+  
+  		case I_NEG_B:
+  			if (TOS == -128)
+! 				Raise(NUMERIC_ERROR,"Byte overflow");
+  			else
+  				TOS = -TOS;
+  			break;
+***************
+*** 1322,1328 ****
+  
+  		case I_NEG_W:
+  			if (TOS == MIN_INTEGER)
+! 				raise(NUMERIC_ERROR,"Overflow");
+  			else
+  				TOS = -TOS;
+  			break;
+--- 1322,1328 ----
+  
+  		case I_NEG_W:
+  			if (TOS == MIN_INTEGER)
+! 				Raise(NUMERIC_ERROR,"Overflow");
+  			else
+  				TOS = -TOS;
+  			break;
+***************
+*** 1329,1335 ****
+  
+  		case I_NEG_L:
+  			if (TOS == MIN_LONG)
+! 				raise(NUMERIC_ERROR,"Overflow");
+  			else
+  				TOSL = -TOSL;
+  			break;
+--- 1329,1335 ----
+  
+  		case I_NEG_L:
+  			if (TOS == MIN_LONG)
+! 				Raise(NUMERIC_ERROR,"Overflow");
+  			else
+  				TOSL = -TOSL;
+  			break;
+***************
+*** 1336,1342 ****
+  
+  		case I_ABS_B:
+  			if (TOS == -128)
+! 				raise(NUMERIC_ERROR,"Byte overflow");
+  			else
+  				TOS = ABS(TOS);
+  			break;
+--- 1336,1342 ----
+  
+  		case I_ABS_B:
+  			if (TOS == -128)
+! 				Raise(NUMERIC_ERROR,"Byte overflow");
+  			else
+  				TOS = ABS(TOS);
+  			break;
+***************
+*** 1343,1349 ****
+  
+  		case I_ABS_W:
+  			if (TOS == MIN_INTEGER)
+! 				raise(NUMERIC_ERROR,"Overflow");
+  			else
+  				TOS = ABS(TOS);
+  			break;
+--- 1343,1349 ----
+  
+  		case I_ABS_W:
+  			if (TOS == MIN_INTEGER)
+! 				Raise(NUMERIC_ERROR,"Overflow");
+  			else
+  				TOS = ABS(TOS);
+  			break;
+***************
+*** 1350,1356 ****
+  
+  		case I_ABS_L:
+  			if (TOS == MIN_LONG)
+! 				raise(NUMERIC_ERROR,"Overflow");
+  			else
+  				TOSL = ABS(TOSL);
+  			break;
+--- 1350,1356 ----
+  
+  		case I_ABS_L:
+  			if (TOS == MIN_LONG)
+! 				Raise(NUMERIC_ERROR,"Overflow");
+  			else
+  				TOSL = ABS(TOSL);
+  			break;
+***************
+*** 1409,1421 ****
+  			ptr1 = ADDR(bse, off);
+  			if (TYPE(ptr1) == TT_FX_RANGE) {
+  				if (fix_out_of_bounds(TOSL, ptr1))
+! 					raise(CONSTRAINT_ERROR, "Fixed point value out of bounds");
+  			}
+  			else if (TYPE(ptr1) == TT_FL_RANGE) {
+  				rval1 = FL_RANGE(ptr1)->fllow;
+  				rval2 = FL_RANGE(ptr1)->flhigh;
+  				if (TOSF < rval1 || TOSF > rval2)
+! 					raise(CONSTRAINT_ERROR,
+  					  "Floating point value out of bounds");
+  			}
+  			else if ((TYPE(ptr1) == TT_I_RANGE) ||
+--- 1409,1421 ----
+  			ptr1 = ADDR(bse, off);
+  			if (TYPE(ptr1) == TT_FX_RANGE) {
+  				if (fix_out_of_bounds(TOSL, ptr1))
+! 					Raise(CONSTRAINT_ERROR, "Fixed point value out of bounds");
+  			}
+  			else if (TYPE(ptr1) == TT_FL_RANGE) {
+  				rval1 = FL_RANGE(ptr1)->fllow;
+  				rval2 = FL_RANGE(ptr1)->flhigh;
+  				if (TOSF < rval1 || TOSF > rval2)
+! 					Raise(CONSTRAINT_ERROR,
+  					  "Floating point value out of bounds");
+  			}
+  			else if ((TYPE(ptr1) == TT_I_RANGE) ||
+***************
+*** 1424,1430 ****
+  				val_low = I_RANGE(ptr1)->ilow;
+  				val_high = I_RANGE(ptr1)->ihigh;
+  				if (TOS < val_low || TOS > val_high)
+! 					raise(CONSTRAINT_ERROR, "Out of bounds");
+  			}
+  #ifdef LONG_INT
+  			else if (TYPE(ptr1) == TT_L_RANGE) {
+--- 1424,1430 ----
+  				val_low = I_RANGE(ptr1)->ilow;
+  				val_high = I_RANGE(ptr1)->ihigh;
+  				if (TOS < val_low || TOS > val_high)
+! 					Raise(CONSTRAINT_ERROR, "Out of bounds");
+  			}
+  #ifdef LONG_INT
+  			else if (TYPE(ptr1) == TT_L_RANGE) {
+***************
+*** 1432,1438 ****
+  				lval_low = L_RANGE(ptr1)->llow;
+  				lval_high = L_RANGE(ptr1)->lhigh;
+  				if (lvalue < lval_low || lvalue > lval_high)
+! 					raise (CONSTRAINT_ERROR, "Out of bounds");
+  			}
+  #endif
+  			else	/* error here */
+--- 1432,1438 ----
+  				lval_low = L_RANGE(ptr1)->llow;
+  				lval_high = L_RANGE(ptr1)->lhigh;
+  				if (lvalue < lval_low || lvalue > lval_high)
+! 					Raise (CONSTRAINT_ERROR, "Out of bounds");
+  			}
+  #endif
+  			else	/* error here */
+***************
+*** 1445,1451 ****
+  			if (TYPE(ptr1) == TT_FX_RANGE) {
+  				fval1 = TOSL;
+  				if (fix_out_of_bounds(fval1, ptr1))
+! 					raise(CONSTRAINT_ERROR, "Fixed point value out of bounds");
+  			}
+  			else if (TYPE(ptr1) == TT_FL_RANGE) {
+  				rvalue = TOSF;
+--- 1445,1451 ----
+  			if (TYPE(ptr1) == TT_FX_RANGE) {
+  				fval1 = TOSL;
+  				if (fix_out_of_bounds(fval1, ptr1))
+! 					Raise(CONSTRAINT_ERROR, "Fixed point value out of bounds");
+  			}
+  			else if (TYPE(ptr1) == TT_FL_RANGE) {
+  				rvalue = TOSF;
+***************
+*** 1452,1458 ****
+  				rval1 = FL_RANGE(ptr1)->fllow;
+  				rval2 = FL_RANGE(ptr1)->flhigh;
+  				if (rvalue < rval1 || rvalue > rval2)
+! 					raise(CONSTRAINT_ERROR,
+  					  "Floating point value out of bounds");
+  			}
+  			else if ((TYPE(ptr1) == TT_I_RANGE) ||
+--- 1452,1458 ----
+  				rval1 = FL_RANGE(ptr1)->fllow;
+  				rval2 = FL_RANGE(ptr1)->flhigh;
+  				if (rvalue < rval1 || rvalue > rval2)
+! 					Raise(CONSTRAINT_ERROR,
+  					  "Floating point value out of bounds");
+  			}
+  			else if ((TYPE(ptr1) == TT_I_RANGE) ||
+***************
+*** 1461,1467 ****
+  				val_low = I_RANGE(ptr1)->ilow;
+  				val_high = I_RANGE(ptr1)->ihigh;
+  				if (TOS < val_low || TOS > val_high)
+! 					raise(CONSTRAINT_ERROR, "Out of bounds");
+  			}
+  #ifdef LONG_INT
+  			else if (TYPE(ptr1) == TT_L_RANGE) {
+--- 1461,1467 ----
+  				val_low = I_RANGE(ptr1)->ilow;
+  				val_high = I_RANGE(ptr1)->ihigh;
+  				if (TOS < val_low || TOS > val_high)
+! 					Raise(CONSTRAINT_ERROR, "Out of bounds");
+  			}
+  #ifdef LONG_INT
+  			else if (TYPE(ptr1) == TT_L_RANGE) {
+***************
+*** 1469,1475 ****
+  				lval_low = L_RANGE(ptr1)->llow;
+  				lval_high = L_RANGE(ptr1)->lhigh;
+  				if (lvalue < lval_low || lvalue > lval_high)
+! 					raise (CONSTRAINT_ERROR, "Out of bounds");
+  			}
+  #endif
+  			else	/* error here */
+--- 1469,1475 ----
+  				lval_low = L_RANGE(ptr1)->llow;
+  				lval_high = L_RANGE(ptr1)->lhigh;
+  				if (lvalue < lval_low || lvalue > lval_high)
+! 					Raise (CONSTRAINT_ERROR, "Out of bounds");
+  			}
+  #endif
+  			else	/* error here */
+***************
+*** 1493,1499 ****
+  			PUSH_ADDR(bse, off);
+  			ptr1 = ADDR(bse, off);
+  			if (!qual_index(ptr, ptr1))
+! 				raise(CONSTRAINT_ERROR, "Wrong bounds");
+  			break;
+  
+  		case I_QUAL_INDEX_L:
+--- 1493,1499 ----
+  			PUSH_ADDR(bse, off);
+  			ptr1 = ADDR(bse, off);
+  			if (!qual_index(ptr, ptr1))
+! 				Raise(CONSTRAINT_ERROR, "Wrong bounds");
+  			break;
+  
+  		case I_QUAL_INDEX_L:
+***************
+*** 1503,1509 ****
+  			PUSH_ADDR(bse, off);
+  			ptr1 = ADDR(bse, off);
+  			if (!qual_index(ptr, ptr1))
+! 				raise(CONSTRAINT_ERROR, "Wrong bounds");
+  			break;
+  
+  		case I_QUAL_SUB_G:
+--- 1503,1509 ----
+  			PUSH_ADDR(bse, off);
+  			ptr1 = ADDR(bse, off);
+  			if (!qual_index(ptr, ptr1))
+! 				Raise(CONSTRAINT_ERROR, "Wrong bounds");
+  			break;
+  
+  		case I_QUAL_SUB_G:
+***************
+*** 1513,1519 ****
+  			PUSH_ADDR(bse, off);
+  			ptr1 = ADDR(bse, off);
+  			if (!qual_sub(ptr, ptr1))
+! 				raise(CONSTRAINT_ERROR, "Wrong bounds");
+  			break;
+  
+  		case I_QUAL_SUB_L:
+--- 1513,1519 ----
+  			PUSH_ADDR(bse, off);
+  			ptr1 = ADDR(bse, off);
+  			if (!qual_sub(ptr, ptr1))
+! 				Raise(CONSTRAINT_ERROR, "Wrong bounds");
+  			break;
+  
+  		case I_QUAL_SUB_L:
+***************
+*** 1523,1529 ****
+  			PUSH_ADDR(bse, off);
+  			ptr1 = ADDR(bse, off);
+  			if (!qual_sub(ptr, ptr1))
+! 				raise(CONSTRAINT_ERROR, "Wrong bounds");
+  			break;
+  
+  		case I_SUB_B:
+--- 1523,1529 ----
+  			PUSH_ADDR(bse, off);
+  			ptr1 = ADDR(bse, off);
+  			if (!qual_sub(ptr, ptr1))
+! 				Raise(CONSTRAINT_ERROR, "Wrong bounds");
+  			break;
+  
+  		case I_SUB_B:
+***************
+*** 1531,1537 ****
+  			POP(val1);
+  			value = val1 - val2;
+  			if (value < -128 || value > 127)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSH(value);
+  			break;
+--- 1531,1537 ----
+  			POP(val1);
+  			value = val1 - val2;
+  			if (value < -128 || value > 127)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSH(value);
+  			break;
+***************
+*** 1541,1547 ****
+  			POP(val1);
+  			value = word_sub(val1, val2, &overflow);
+  			if (overflow)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSH(value);
+  			break;
+--- 1541,1547 ----
+  			POP(val1);
+  			value = word_sub(val1, val2, &overflow);
+  			if (overflow)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSH(value);
+  			break;
+***************
+*** 1551,1557 ****
+  			POPL(lval1);
+  			lvalue = long_sub(lval1, lval2, &overflow);
+  			if (overflow)
+! 				raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSHL(lvalue);
+  			break;
+--- 1551,1557 ----
+  			POPL(lval1);
+  			lvalue = long_sub(lval1, lval2, &overflow);
+  			if (overflow)
+! 				Raise(NUMERIC_ERROR, "Overflow");
+  			else
+  				PUSHL(lvalue);
+  			break;
+***************
+*** 1576,1582 ****
+  			POP_ADDR(bse, off);/* left type */
+  			value = SIZE(ADDR(bse, off));
+  			if (SIZE(ADDR(bas1, off1)) != value)
+! 				raise(CONSTRAINT_ERROR, "Arrays not same size for AND");
+  			else {
+  				POP_ADDR(bas1, off1);/* left object */
+  				ptr1 = ADDR(bas1, off1);
+--- 1576,1582 ----
+  			POP_ADDR(bse, off);/* left type */
+  			value = SIZE(ADDR(bse, off));
+  			if (SIZE(ADDR(bas1, off1)) != value)
+! 				Raise(CONSTRAINT_ERROR, "Arrays not same size for AND");
+  			else {
+  				POP_ADDR(bas1, off1);/* left object */
+  				ptr1 = ADDR(bas1, off1);
+***************
+*** 1595,1601 ****
+  			POP_ADDR(bse, off);/* left type */
+  			value = SIZE(ADDR(bse, off));
+  			if (SIZE(ADDR(bas1, off1)) != value)
+! 				raise(CONSTRAINT_ERROR, "Arrays not same size for OR");
+  			else {
+  				POP_ADDR(bas1, off1);/* left object */
+  				ptr1 = ADDR(bas1, off1);
+--- 1595,1601 ----
+  			POP_ADDR(bse, off);/* left type */
+  			value = SIZE(ADDR(bse, off));
+  			if (SIZE(ADDR(bas1, off1)) != value)
+! 				Raise(CONSTRAINT_ERROR, "Arrays not same size for OR");
+  			else {
+  				POP_ADDR(bas1, off1);/* left object */
+  				ptr1 = ADDR(bas1, off1);
+***************
+*** 1614,1620 ****
+  			POP_ADDR(bse, off);/* left type */
+  			value = SIZE(ADDR(bse, off));
+  			if (SIZE(ADDR(bas1, off1)) != value)
+! 				raise(CONSTRAINT_ERROR, "Arrays not same size for XOR");
+  			else {
+  				POP_ADDR(bas1, off1);/* left object */
+  				ptr1 = ADDR(bas1, off1);
+--- 1614,1620 ----
+  			POP_ADDR(bse, off);/* left type */
+  			value = SIZE(ADDR(bse, off));
+  			if (SIZE(ADDR(bas1, off1)) != value)
+! 				Raise(CONSTRAINT_ERROR, "Arrays not same size for XOR");
+  			else {
+  				POP_ADDR(bas1, off1);/* left object */
+  				ptr1 = ADDR(bas1, off1);
+***************
+*** 1815,1824 ****
+  			ptr = ADDR(bse, off);
+  			value = *ptr;
+  			if (value < 0)
+! 				raise(PROGRAM_ERROR, "Access before elaboration");
+  			else {
+  				if (cur_stackptr+SECURITY_LEVEL>new_task_size)
+! 					raise(STORAGE_ERROR, "Stack overflow");
+  				else {
+  					old_cs = cs;
+  					cs = value;
+--- 1815,1824 ----
+  			ptr = ADDR(bse, off);
+  			value = *ptr;
+  			if (value < 0)
+! 				Raise(PROGRAM_ERROR, "Access before elaboration");
+  			else {
+  				if (cur_stackptr+SECURITY_LEVEL>new_task_size)
+! 					Raise(STORAGE_ERROR, "Stack overflow");
+  				else {
+  					old_cs = cs;
+  					cs = value;
+***************
+*** 1841,1847 ****
+  #endif
+  					/* reserve space for locals */
+  					if (val1 < 0)
+! 						raise(SYSTEM_ERROR, "Negative size of locals");
+  					else
+  						cur_stackptr += val1;
+  					PUSH(sfp);
+--- 1841,1847 ----
+  #endif
+  					/* reserve space for locals */
+  					if (val1 < 0)
+! 						Raise(SYSTEM_ERROR, "Negative size of locals");
+  					else
+  						cur_stackptr += val1;
+  					PUSH(sfp);
+***************
+*** 1866,1875 ****
+  			ptr = ADDR(bse, off);
+  			value = *ptr;
+  			if (value < 0)
+! 				raise(PROGRAM_ERROR, "Access before elaboration");
+  			else {
+  				if (cur_stackptr+SECURITY_LEVEL>new_task_size)
+! 					raise(STORAGE_ERROR, "Stack overflow");
+  				else {
+  					old_cs = cs;
+  					cs = value;
+--- 1866,1875 ----
+  			ptr = ADDR(bse, off);
+  			value = *ptr;
+  			if (value < 0)
+! 				Raise(PROGRAM_ERROR, "Access before elaboration");
+  			else {
+  				if (cur_stackptr+SECURITY_LEVEL>new_task_size)
+! 					Raise(STORAGE_ERROR, "Stack overflow");
+  				else {
+  					old_cs = cs;
+  					cs = value;
+***************
+*** 1893,1899 ****
+  #endif
+  					/* reserve space for locals */
+  					if (val1 < 0)
+! 						raise(SYSTEM_ERROR, "Negative size of locals");
+  					else
+  						cur_stackptr += val1;
+  					PUSH(sfp);
+--- 1893,1899 ----
+  #endif
+  					/* reserve space for locals */
+  					if (val1 < 0)
+! 						Raise(SYSTEM_ERROR, "Negative size of locals");
+  					else
+  						cur_stackptr += val1;
+  					PUSH(sfp);
+***************
+*** 2098,2104 ****
+  			break;
+  
+  		case I_RAISE:
+! 			raise(exr, "");
+  			break;
+  
+  		case I_RESTORE_STACK_POINTER:
+--- 2098,2104 ----
+  			break;
+  
+  		case I_RAISE:
+! 			Raise(exr, "");
+  			break;
+  
+  		case I_RESTORE_STACK_POINTER:
+***************
+*** 2154,2160 ****
+  			break;
+  
+  		default:
+! 			raise(SYSTEM_ERROR, "Bad opcode");
+  
+  		}			/* end switch on operation code */
+  	}				/* end loop through instructions */
+--- 2154,2160 ----
+  			break;
+  
+  		default:
+! 			Raise(SYSTEM_ERROR, "Bad opcode");
+  
+  		}			/* end switch on operation code */
+  	}				/* end loop through instructions */
+diff -C 3 Adaed-1.11.0a/intb.c Adaed1.11.0a-l/intb.c
+*** Adaed-1.11.0a/intb.c	Fri Feb  7 20:19:09 1992
+--- Adaed1.11.0a-l/intb.c	Mon Jun  8 22:29:27 1992
+***************
+*** 95,101 ****
+  		}
+  #endif
+  		else	/* error */
+! 			raise(SYSTEM_ERROR,"Unknown type for attribute FIRST or LAST");
+  		break;
+  
+  	case ATTR_O_FIRST:
+--- 95,101 ----
+  		}
+  #endif
+  		else	/* error */
+! 			Raise(SYSTEM_ERROR,"Unknown type for attribute FIRST or LAST");
+  		break;
+  
+  	case ATTR_O_FIRST:
+***************
+*** 143,149 ****
+  			if (*ptr == 0)
+  				PUSH(*(ptr + 1));
+  			else
+! 				raise(SYSTEM_ERROR, "Attribute on discriminant bound");
+  		}
+  		break;
+  
+--- 143,149 ----
+  			if (*ptr == 0)
+  				PUSH(*(ptr + 1));
+  			else
+! 				Raise(SYSTEM_ERROR, "Attribute on discriminant bound");
+  		}
+  		break;
+  
+***************
+*** 264,270 ****
+  		  ||(TYPE(ptr) == TT_ENUM)) {
+  			POP(value);
+  			if (value <= I_RANGE(ptr)->ilow)
+! 				raise(CONSTRAINT_ERROR, "Out of range (PRED)");
+  			value--;
+  			PUSH(value);
+  		}
+--- 264,270 ----
+  		  ||(TYPE(ptr) == TT_ENUM)) {
+  			POP(value);
+  			if (value <= I_RANGE(ptr)->ilow)
+! 				Raise(CONSTRAINT_ERROR, "Out of range (PRED)");
+  			value--;
+  			PUSH(value);
+  		}
+***************
+*** 272,284 ****
+  		else if (TYPE(ptr) == TT_L_RANGE) {
+  			POPL(lvalue);
+  			if (lvalue <= L_RANGE(ptr)->llow)
+! 				raise (CONSTRAINT_ERROR, "Out of range (PRED)");
+  			lvalue--;
+  			PUSHL(lvalue);
+  		}
+  #endif
+  		else	/* error */
+! 			raise(SYSTEM_ERROR,"Unknown type for attribute PRED");
+  		break;
+  
+  	case ATTR_SUCC:
+--- 272,284 ----
+  		else if (TYPE(ptr) == TT_L_RANGE) {
+  			POPL(lvalue);
+  			if (lvalue <= L_RANGE(ptr)->llow)
+! 				Raise (CONSTRAINT_ERROR, "Out of range (PRED)");
+  			lvalue--;
+  			PUSHL(lvalue);
+  		}
+  #endif
+  		else	/* error */
+! 			Raise(SYSTEM_ERROR,"Unknown type for attribute PRED");
+  		break;
+  
+  	case ATTR_SUCC:
+***************
+*** 289,295 ****
+  		  ||(TYPE(ptr) == TT_ENUM)) {
+  			POP(value);
+  			if (value >= I_RANGE(ptr)->ihigh)
+! 				raise(CONSTRAINT_ERROR, "Out of range (SUCC)");
+  			value++;
+  			PUSH(value);
+  		}
+--- 289,295 ----
+  		  ||(TYPE(ptr) == TT_ENUM)) {
+  			POP(value);
+  			if (value >= I_RANGE(ptr)->ihigh)
+! 				Raise(CONSTRAINT_ERROR, "Out of range (SUCC)");
+  			value++;
+  			PUSH(value);
+  		}
+***************
+*** 297,309 ****
+  		else if (TYPE(ptr) == TT_L_RANGE) {
+  			POPL(lvalue);
+  			if (lvalue >= L_RANGE(ptr)->lhigh)
+! 				raise (CONSTRAINT_ERROR, "Out of range (SUCC)");
+  			lvalue++;
+  			PUSHL(lvalue);
+  		}
+  #endif
+  		else	/* error */
+! 			raise(SYSTEM_ERROR,"Unknown type for attribute SUCC");
+  		break;
+  
+  	case ATTR_SIZE:
+--- 297,309 ----
+  		else if (TYPE(ptr) == TT_L_RANGE) {
+  			POPL(lvalue);
+  			if (lvalue >= L_RANGE(ptr)->lhigh)
+! 				Raise (CONSTRAINT_ERROR, "Out of range (SUCC)");
+  			lvalue++;
+  			PUSHL(lvalue);
+  		}
+  #endif
+  		else	/* error */
+! 			Raise(SYSTEM_ERROR,"Unknown type for attribute SUCC");
+  		break;
+  
+  	case ATTR_SIZE:
+***************
+*** 436,442 ****
+  		break;
+  
+  	default:
+! 		raise(SYSTEM_ERROR, "Unknown attribute");
+  	}
+  }
+  
+--- 436,442 ----
+  		break;
+  
+  	default:
+! 		Raise(SYSTEM_ERROR, "Unknown attribute");
+  	}
+  }
+  
+***************
+*** 458,464 ****
+  		if (TYPE(ptr_from) == TT_FL_RANGE) {
+  			POPF(rvalue);
+  			if (ABS(rvalue) >(float)(MAX_LONG))
+! 				raise(NUMERIC_ERROR, "Integer out of bounds");
+  			else {
+  				value = (rvalue + (rvalue > 0.0? 0.5 : -0.5));
+  				PUSH(value);
+--- 458,464 ----
+  		if (TYPE(ptr_from) == TT_FL_RANGE) {
+  			POPF(rvalue);
+  			if (ABS(rvalue) >(float)(MAX_LONG))
+! 				Raise(NUMERIC_ERROR, "Integer out of bounds");
+  			else {
+  				value = (rvalue + (rvalue > 0.0? 0.5 : -0.5));
+  				PUSH(value);
+***************
+*** 470,476 ****
+  			value = lvalue;
+  			PUSH(value);
+  			if ((long) value != lvalue)					/* if overflow */
+! 				raise(NUMERIC_ERROR, "fixed_point conversion");
+  		}
+  		/* Note: nothing to do if *ptr_from == TT_I_RANGE */
+  	}
+--- 470,476 ----
+  			value = lvalue;
+  			PUSH(value);
+  			if ((long) value != lvalue)					/* if overflow */
+! 				Raise(NUMERIC_ERROR, "fixed_point conversion");
+  		}
+  		/* Note: nothing to do if *ptr_from == TT_I_RANGE */
+  	}
+***************
+*** 531,537 ****
+  				}
+  				/* 	 watch out: we introduced a bias in the exponent */
+  				if (exp2 >(84 - 21))
+! 					raise(NUMERIC_ERROR, "Floating point value overflow");
+  				else if (exp2 <(-84 - 21))
+  					PUSHF(0.0);	/* underflow */
+  				else {
+--- 531,537 ----
+  				}
+  				/* 	 watch out: we introduced a bias in the exponent */
+  				if (exp2 >(84 - 21))
+! 					Raise(NUMERIC_ERROR, "Floating point value overflow");
+  				else if (exp2 <(-84 - 21))
+  					PUSHF(0.0);	/* underflow */
+  				else {
+***************
+*** 597,603 ****
+  				}
+  				lvalue *= res_sign;
+  				if (lvalue < MIN_LONG || lvalue > MAX_LONG) {
+! 					raise (NUMERIC_ERROR, "Fixed point overflow");
+  					lvalue = 0;
+  				}
+  			}
+--- 597,603 ----
+  				}
+  				lvalue *= res_sign;
+  				if (lvalue < MIN_LONG || lvalue > MAX_LONG) {
+! 					Raise (NUMERIC_ERROR, "Fixed point overflow");
+  					lvalue = 0;
+  				}
+  			}
+***************
+*** 612,622 ****
+  			fix_convert(fix_val1, FX_RANGE(ptr_from), FX_RANGE(ptr_to));
+  			lvalue = int_tol(fix_val1);
+  			if(arith_overflow)
+! 				raise(NUMERIC_ERROR,"Fixed point conversion overflow");
+  			PUSHL(res_sign*lvalue);
+  		}
+  		else
+! 			raise(SYSTEM_ERROR,"Conversion from an unknown type");
+  	}
+  	else if (TYPE(ptr_to) == TT_U_ARRAY || TYPE(ptr_to) == TT_C_ARRAY) {
+  		if (TYPE(ptr_from) == TT_U_ARRAY || TYPE(ptr_from) == TT_C_ARRAY) {
+--- 612,622 ----
+  			fix_convert(fix_val1, FX_RANGE(ptr_from), FX_RANGE(ptr_to));
+  			lvalue = int_tol(fix_val1);
+  			if(arith_overflow)
+! 				Raise(NUMERIC_ERROR,"Fixed point conversion overflow");
+  			PUSHL(res_sign*lvalue);
+  		}
+  		else
+! 			Raise(SYSTEM_ERROR,"Conversion from an unknown type");
+  	}
+  	else if (TYPE(ptr_to) == TT_U_ARRAY || TYPE(ptr_to) == TT_C_ARRAY) {
+  		if (TYPE(ptr_from) == TT_U_ARRAY || TYPE(ptr_from) == TT_C_ARRAY) {
+***************
+*** 644,650 ****
+  			}
+  			if (from_is_empty || to_is_empty) {
+  				/* one is empty, the other is not */
+! 				raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  
+--- 644,650 ----
+  			}
+  			if (from_is_empty || to_is_empty) {
+  				/* one is empty, the other is not */
+! 				Raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  
+***************
+*** 660,666 ****
+  				ptr2 = ADDR(bas2, off2);
+  				if (I_RANGE(ptr1)->ihigh - I_RANGE(ptr1)->ilow
+  				  !=I_RANGE(ptr2)->ihigh - I_RANGE(ptr2)->ilow) {
+! 					raise(CONSTRAINT_ERROR, "Array conversion");
+  					return;
+  				}
+  			}
+--- 660,666 ----
+  				ptr2 = ADDR(bas2, off2);
+  				if (I_RANGE(ptr1)->ihigh - I_RANGE(ptr1)->ilow
+  				  !=I_RANGE(ptr2)->ihigh - I_RANGE(ptr2)->ilow) {
+! 					Raise(CONSTRAINT_ERROR, "Array conversion");
+  					return;
+  				}
+  			}
+***************
+*** 679,691 ****
+  			}
+  			if (from_is_empty || to_is_empty) {
+  				/* one is empty, the other is not */
+! 				raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  			/* both have components: do the conversion */
+  			if (S_ARRAY(ptr_from)->sahigh - S_ARRAY(ptr_from)->salow !=
+  			    I_RANGE(ptr2)->ihigh - I_RANGE(ptr2)->ilow) {
+! 				raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  		}
+--- 679,691 ----
+  			}
+  			if (from_is_empty || to_is_empty) {
+  				/* one is empty, the other is not */
+! 				Raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  			/* both have components: do the conversion */
+  			if (S_ARRAY(ptr_from)->sahigh - S_ARRAY(ptr_from)->salow !=
+  			    I_RANGE(ptr2)->ihigh - I_RANGE(ptr2)->ilow) {
+! 				Raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  		}
+***************
+*** 705,717 ****
+  			}
+  			if (from_is_empty || to_is_empty) {
+  				/* one is empty, the other is not */
+! 				raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  			/* both have components: do the conversion */
+  			if (I_RANGE(ptr1)->ihigh - I_RANGE(ptr1)->ilow !=
+  			    S_ARRAY(ptr_to)->sahigh - S_ARRAY(ptr_to)->salow) {
+! 				raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  		}
+--- 705,717 ----
+  			}
+  			if (from_is_empty || to_is_empty) {
+  				/* one is empty, the other is not */
+! 				Raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  			/* both have components: do the conversion */
+  			if (I_RANGE(ptr1)->ihigh - I_RANGE(ptr1)->ilow !=
+  			    S_ARRAY(ptr_to)->sahigh - S_ARRAY(ptr_to)->salow) {
+! 				Raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  		}
+***************
+*** 726,738 ****
+  			}
+  			if (from_is_empty || to_is_empty) {
+  				/* one is empty, the other is not */
+! 				raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  			/* both have components: do the conversion */
+  			if (S_ARRAY(ptr_from)->sahigh - S_ARRAY(ptr_from)->salow !=
+  			    S_ARRAY(ptr_to)->sahigh - S_ARRAY(ptr_to)->salow) {
+! 				raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  		}
+--- 726,738 ----
+  			}
+  			if (from_is_empty || to_is_empty) {
+  				/* one is empty, the other is not */
+! 				Raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  			/* both have components: do the conversion */
+  			if (S_ARRAY(ptr_from)->sahigh - S_ARRAY(ptr_from)->salow !=
+  			    S_ARRAY(ptr_to)->sahigh - S_ARRAY(ptr_to)->salow) {
+! 				Raise(CONSTRAINT_ERROR, "Array conversion");
+  				return;
+  			}
+  		}
+***************
+*** 912,918 ****
+  			}
+  		}
+  		if (overflow)
+! 			raise(NUMERIC_ERROR,"Type size overflow");
+  		I_RANGE(ptr)->object_size = component_size;
+  		break;
+  
+--- 912,918 ----
+  			}
+  		}
+  		if (overflow)
+! 			Raise(NUMERIC_ERROR,"Type size overflow");
+  		I_RANGE(ptr)->object_size = component_size;
+  		break;
+  
+***************
+*** 1020,1026 ****
+  
+  
+  	default:
+! 		raise (SYSTEM_ERROR, "Elaborate unknown type");
+  	}
+  
+  	if (flag == 1)
+--- 1020,1026 ----
+  
+  
+  	default:
+! 		Raise (SYSTEM_ERROR, "Elaborate unknown type");
+  	}
+  
+  	if (flag == 1)
+***************
+*** 1109,1115 ****
+  	}
+  }
+  
+! void raise(int exception_value, char *reason)					/*;raise*/
+  {
+  	if (exception_trace && cs > 2) {
+  		printf("raising exception %s in %s",
+--- 1109,1115 ----
+  	}
+  }
+  
+! void Raise(int exception_value, char *reason)					/*;Raise*/
+  {
+  	if (exception_trace && cs > 2) {
+  		printf("raising exception %s in %s",
+***************
+*** 1254,1260 ****
+  	    ) { /* second argument is dummy */
+  		lvalue = scan_integer_string(ptr,&i);
+  		if ((i+1) != slen)			/* If not all scanned */
+! 			raise(CONSTRAINT_ERROR, "Number not integer literal for VALUE");
+  	}
+  	if (val1 == TT_I_RANGE) {
+  		value = (int) lvalue;
+--- 1254,1260 ----
+  	    ) { /* second argument is dummy */
+  		lvalue = scan_integer_string(ptr,&i);
+  		if ((i+1) != slen)			/* If not all scanned */
+! 			Raise(CONSTRAINT_ERROR, "Number not integer literal for VALUE");
+  	}
+  	if (val1 == TT_I_RANGE) {
+  		value = (int) lvalue;
+***************
+*** 1261,1267 ****
+  		if (value == lvalue)
+  			PUSH(value);
+  		else
+! 			raise(CONSTRAINT_ERROR, "Number out of range for VALUE");
+  	}
+  	else
+  		PUSH(value);
+--- 1261,1267 ----
+  		if (value == lvalue)
+  			PUSH(value);
+  		else
+! 			Raise(CONSTRAINT_ERROR, "Number out of range for VALUE");
+  	}
+  	else
+  		PUSH(value);
+***************
+*** 1339,1345 ****
+  		break;
+  
+  	default:
+! 		raise(SYSTEM_ERROR, "Creating object of unknown type");
+  	}
+  }
+  
+--- 1339,1345 ----
+  		break;
+  
+  	default:
+! 		Raise(SYSTEM_ERROR, "Creating object of unknown type");
+  	}
+  }
+  
+***************
+*** 1546,1552 ****
+  	if (val_high < val_low)				/* make null slice if null */
+  		length = 0;
+  	else if (val_high > high_bound || val_low < low_bound) {
+! 		raise(CONSTRAINT_ERROR, "Slice index out of bounds");
+  		return;
+  	}
+  	else
+--- 1546,1552 ----
+  	if (val_high < val_low)				/* make null slice if null */
+  		length = 0;
+  	else if (val_high > high_bound || val_low < low_bound) {
+! 		Raise(CONSTRAINT_ERROR, "Slice index out of bounds");
+  		return;
+  	}
+  	else
+***************
+*** 1637,1643 ****
+  	/* check bounds */
+  
+  	if (val_low < rlow || val_high > rhigh) {
+! 		raise(CONSTRAINT_ERROR, "Array catenate");
+  		return;
+  	}
+  
+--- 1637,1643 ----
+  	/* check bounds */
+  
+  	if (val_low < rlow || val_high > rhigh) {
+! 		Raise(CONSTRAINT_ERROR, "Array catenate");
+  		return;
+  	}
+  
+***************
+*** 1674,1680 ****
+  		val_low = S_ARRAY(ptr1)->salow;
+  		val_high = S_ARRAY(ptr1)->sahigh;
+  		if (value < val_low || value > val_high)
+! 			raise(CONSTRAINT_ERROR, "Index out of bounds");
+  		result = (value - val_low) * val2;
+  	}
+  
+--- 1674,1680 ----
+  		val_low = S_ARRAY(ptr1)->salow;
+  		val_high = S_ARRAY(ptr1)->sahigh;
+  		if (value < val_low || value > val_high)
+! 			Raise(CONSTRAINT_ERROR, "Index out of bounds");
+  		result = (value - val_low) * val2;
+  	}
+  
+***************
+*** 1694,1700 ****
+  			val_low = I_RANGE(ptr2)->ilow;
+  			val_high = I_RANGE(ptr2)->ihigh;
+  			if (value < val_low || value > val_high) {
+! 				raise(CONSTRAINT_ERROR, "Index out of bounds");
+  			}
+  			value = value - val_low;
+  			result = (value * delta) + result;
+--- 1694,1700 ----
+  			val_low = I_RANGE(ptr2)->ilow;
+  			val_high = I_RANGE(ptr2)->ihigh;
+  			if (value < val_low || value > val_high) {
+! 				Raise(CONSTRAINT_ERROR, "Index out of bounds");
+  			}
+  			value = value - val_low;
+  			result = (value * delta) + result;
+***************
+*** 1703,1709 ****
+  		result = result * val1;
+  	}
+  	else
+! 		raise(SYSTEM_ERROR, "Illegal array type");
+  	off += result;
+  	PUSH_ADDR(bse, off);
+  }
+--- 1703,1709 ----
+  		result = result * val1;
+  	}
+  	else
+! 		Raise(SYSTEM_ERROR, "Illegal array type");
+  	off += result;
+  	PUSH_ADDR(bse, off);
+  }
+***************
+*** 1726,1732 ****
+  	 * "a := b" will be valid if a is a null array and b a non null one
+  	 */
+  	if (length1 != length2)
+! 		raise(CONSTRAINT_ERROR, "Arrays not same length");
+  	else if (length1 == 0) return; /* null array */
+  	else {
+  		if (ptr4 < ptr2) {
+--- 1726,1732 ----
+  	 * "a := b" will be valid if a is a null array and b a non null one
+  	 */
+  	if (length1 != length2)
+! 		Raise(CONSTRAINT_ERROR, "Arrays not same length");
+  	else if (length1 == 0) return; /* null array */
+  	else {
+  		if (ptr4 < ptr2) {
+diff -C 3 Adaed-1.11.0a/intbprots.h Adaed1.11.0a-l/intbprots.h
+*** Adaed-1.11.0a/intbprots.h	Fri Feb  7 20:20:22 1992
+--- Adaed1.11.0a-l/intbprots.h	Mon Jun  8 22:20:42 1992
+***************
+*** 12,18 ****
+  void type_elaborate(int, int, int);
+  void subprogram(int, int);
+  int compute_offset(int, int, int, int, int *, int *);
+! void raise(int, char *);
+  void create_structure();
+  void create_copy_struc();
+  void compare_struc();
+--- 12,18 ----
+  void type_elaborate(int, int, int);
+  void subprogram(int, int);
+  int compute_offset(int, int, int, int, int *, int *);
+! void Raise(int, char *); /* raise is already defined in libc.a on linux */
+  void create_structure();
+  void create_copy_struc();
+  void compare_struc();
+diff -C 3 Adaed-1.11.0a/intc.c Adaed1.11.0a-l/intc.c
+*** Adaed-1.11.0a/intc.c	Fri Feb  7 20:19:10 1992
+--- Adaed1.11.0a-l/intc.c	Mon Jun  8 22:30:23 1992
+***************
+*** 108,114 ****
+  			else if (field < first_field  
+  			  ||(field > last_field && next_case == -1)) {
+  
+! 				raise(CONSTRAINT_ERROR, "Record component not present");
+  				return;
+  			}
+  
+--- 108,114 ----
+  			else if (field < first_field  
+  			  ||(field > last_field && next_case == -1)) {
+  
+! 				Raise(CONSTRAINT_ERROR, "Record component not present");
+  				return;
+  			}
+  
+***************
+*** 245,251 ****
+  		}
+  		else if (field < first_field 
+  		    ||(field > last_field && next_case == -1)) {
+! 			raise(CONSTRAINT_ERROR, "Record component not present");
+  			return;
+  		}
+  
+--- 245,251 ----
+  		}
+  		else if (field < first_field 
+  		    ||(field > last_field && next_case == -1)) {
+! 			Raise(CONSTRAINT_ERROR, "Record component not present");
+  			return;
+  		}
+  
+***************
+*** 428,434 ****
+  		i = nb_discr;
+  		while (i-- > 0) {
+  			if (*ptr_a++ != *ptr_v++) {
+! 				raise(CONSTRAINT_ERROR, "Discriminant");
+  				return;
+  			}
+  		}
+--- 428,434 ----
+  		i = nb_discr;
+  		while (i-- > 0) {
+  			if (*ptr_a++ != *ptr_v++) {
+! 				Raise(CONSTRAINT_ERROR, "Discriminant");
+  				return;
+  			}
+  		}
+***************
+*** 462,468 ****
+  			i = nb_discr;
+  			while(i-- > 0) {
+  				if (*ptr_a++ != *ptr_v++) {
+! 					raise(CONSTRAINT_ERROR, "Discriminant");
+  					return;
+  				}
+  			}
+--- 462,468 ----
+  			i = nb_discr;
+  			while(i-- > 0) {
+  				if (*ptr_a++ != *ptr_v++) {
+! 					Raise(CONSTRAINT_ERROR, "Discriminant");
+  					return;
+  				}
+  			}
+***************
+*** 485,491 ****
+  				discr = *ptr_a++;
+  		    	discr_list[i] = discr;
+  		    	if (discr != *ptr_v++) 
+! 				raise(CONSTRAINT_ERROR, "Discriminant");
+  				return;
+  				*/
+  				discr_list [i] = *ptr_v;
+--- 485,491 ----
+  				discr = *ptr_a++;
+  		    	discr_list[i] = discr;
+  		    	if (discr != *ptr_v++) 
+! 				Raise(CONSTRAINT_ERROR, "Discriminant");
+  				return;
+  				*/
+  				discr_list [i] = *ptr_v;
+***************
+*** 508,514 ****
+  				discr = *ptr_a++;
+  				discr_list[i] = discr;
+  				if (discr != *ptr_v++) {
+! 					raise(CONSTRAINT_ERROR, "Discriminant");
+  					return;
+  				}
+  			}
+--- 508,514 ----
+  				discr = *ptr_a++;
+  				discr_list[i] = discr;
+  				if (discr != *ptr_v++) {
+! 					Raise(CONSTRAINT_ERROR, "Discriminant");
+  					return;
+  				}
+  			}
+***************
+*** 647,653 ****
+  			return qual_index(type_ptr2, type_ptr1);
+  
+  		else if (TYPE(type_ptr2) == TT_D_ARRAY) {
+! 			raise(SYSTEM_ERROR, "qual index on TT_D_ARRAY");
+  			return FALSE;
+  #ifdef TBSN
+  			return qual_index(type_ptr2, type_ptr1);
+--- 647,653 ----
+  			return qual_index(type_ptr2, type_ptr1);
+  
+  		else if (TYPE(type_ptr2) == TT_D_ARRAY) {
+! 			Raise(SYSTEM_ERROR, "qual index on TT_D_ARRAY");
+  			return FALSE;
+  #ifdef TBSN
+  			return qual_index(type_ptr2, type_ptr1);
+***************
+*** 677,683 ****
+  			return qual_index(type_ptr2, type_ptr1);
+  	}
+  	else if (TYPE(type_ptr1) == TT_D_ARRAY) {
+! 		raise(SYSTEM_ERROR, "qual index on TT_D_ARRAY");
+  		return FALSE;
+  #ifdef TBSN
+  		if (TYPE(type_ptr2) == TT_U_ARRAY || TYPE(type_ptr2) == TT_C_ARRAY) {
+--- 677,683 ----
+  			return qual_index(type_ptr2, type_ptr1);
+  	}
+  	else if (TYPE(type_ptr1) == TT_D_ARRAY) {
+! 		Raise(SYSTEM_ERROR, "qual index on TT_D_ARRAY");
+  		return FALSE;
+  #ifdef TBSN
+  		if (TYPE(type_ptr2) == TT_U_ARRAY || TYPE(type_ptr2) == TT_C_ARRAY) {
+***************
+*** 816,822 ****
+  	off = TOS;
+  	bse = TOSM(1);
+  	if (TYPE(ptr) == TT_RECORD)
+! 		raise(SYSTEM_ERROR, "Qual discr on simple record");
+  	else if (TYPE(ptr) == TT_U_RECORD)
+  		return;			/* no constraint applied */
+  	else if (TYPE(ptr) == TT_C_RECORD) {
+--- 816,822 ----
+  	off = TOS;
+  	bse = TOSM(1);
+  	if (TYPE(ptr) == TT_RECORD)
+! 		Raise(SYSTEM_ERROR, "Qual discr on simple record");
+  	else if (TYPE(ptr) == TT_U_RECORD)
+  		return;			/* no constraint applied */
+  	else if (TYPE(ptr) == TT_C_RECORD) {
+***************
+*** 825,831 ****
+  		ptr += WORDS_C_RECORD + 1;
+  		while (nb_discr > 0) {
+  			if (*ptr++ != *ptr1++) {
+! 				raise(CONSTRAINT_ERROR, "Discriminant");
+  				return;
+  			}
+  			nb_discr--;
+--- 825,831 ----
+  		ptr += WORDS_C_RECORD + 1;
+  		while (nb_discr > 0) {
+  			if (*ptr++ != *ptr1++) {
+! 				Raise(CONSTRAINT_ERROR, "Discriminant");
+  				return;
+  			}
+  			nb_discr--;
+***************
+*** 832,838 ****
+  		}
+  	}
+  	else if (TYPE(ptr) == TT_D_RECORD) {
+! 		raise(SYSTEM_ERROR, "Qual discr on TT_D_RECORD");
+  		return;
+  #ifdef TBSN
+  		nb_discr = C_RECORD(ptr)->nb_discr_c - 1;
+--- 832,838 ----
+  		}
+  	}
+  	else if (TYPE(ptr) == TT_D_RECORD) {
+! 		Raise(SYSTEM_ERROR, "Qual discr on TT_D_RECORD");
+  		return;
+  #ifdef TBSN
+  		nb_discr = C_RECORD(ptr)->nb_discr_c - 1;
+***************
+*** 840,846 ****
+  		ptr += WORDS_C_RECORD + 3;
+  		while (nb_discr > 0) {
+  			if (*ptr++ != *ptr1++) {
+! 				raise(CONSTRAINT_ERROR, "Discriminant");
+  				return;
+  			}
+  			ptr++;
+--- 840,846 ----
+  		ptr += WORDS_C_RECORD + 3;
+  		while (nb_discr > 0) {
+  			if (*ptr++ != *ptr1++) {
+! 				Raise(CONSTRAINT_ERROR, "Discriminant");
+  				return;
+  			}
+  			ptr++;
+***************
+*** 849,855 ****
+  #endif
+  	}
+  	else
+! 		raise(SYSTEM_ERROR, "Unknown record type in qual discr");
+  }
+  
+  void allocate_new()											/*;allocate_new*/
+--- 849,855 ----
+  #endif
+  	}
+  	else
+! 		Raise(SYSTEM_ERROR, "Unknown record type in qual discr");
+  }
+  
+  void allocate_new()											/*;allocate_new*/
+***************
+*** 864,870 ****
+         ACCESS(ptr1)->collection_avail = ACCESS(ptr1)->collection_avail - value;
+  	} 
+  	else {
+! 		raise(STORAGE_ERROR, "collection exhausted");
+  	    return;
+  	}
+  	allocate(value, &bas2, &off2, &ptr2);
+--- 864,870 ----
+         ACCESS(ptr1)->collection_avail = ACCESS(ptr1)->collection_avail - value;
+  	} 
+  	else {
+! 		Raise(STORAGE_ERROR, "collection exhausted");
+  	    return;
+  	}
+  	allocate(value, &bas2, &off2, &ptr2);
+***************
+*** 907,913 ****
+  
+  	case TT_U_RECORD:
+  	case TT_V_RECORD:
+! 		raise(SYSTEM_ERROR, "Allocate unconstrained record");
+  		break;
+  
+  	default:
+--- 907,913 ----
+  
+  	case TT_U_RECORD:
+  	case TT_V_RECORD:
+! 		Raise(SYSTEM_ERROR, "Allocate unconstrained record");
+  		break;
+  
+  	default:
+***************
+*** 927,933 ****
+         ACCESS(ptr4)->collection_avail = ACCESS(ptr4)->collection_avail - value;
+  	} 
+  	else {
+! 		raise(STORAGE_ERROR, "collection exhausted");
+  	    return;
+  	}
+  	allocate(value, &bas1, &off1, &ptr1);
+--- 927,933 ----
+         ACCESS(ptr4)->collection_avail = ACCESS(ptr4)->collection_avail - value;
+  	} 
+  	else {
+! 		Raise(STORAGE_ERROR, "collection exhausted");
+  	    return;
+  	}
+  	allocate(value, &bas1, &off1, &ptr1);
+***************
+*** 1043,1049 ****
+  	int *p;
+  
+  	if (size < 0 || size >max_mem) {
+! 		raise(SYSTEM_ERROR, "Ridiculous size for object creation");
+  		*ptr = heap_addr + WORDS_PTR + 1;
+  		*off = *ptr - heap_addr;
+  		*bse = heap_base;
+--- 1043,1049 ----
+  	int *p;
+  
+  	if (size < 0 || size >max_mem) {
+! 		Raise(SYSTEM_ERROR, "Ridiculous size for object creation");
+  		*ptr = heap_addr + WORDS_PTR + 1;
+  		*off = *ptr - heap_addr;
+  		*bse = heap_base;
+***************
+*** 1052,1058 ****
+  	size += 1 + WORDS_PTR;
+  	if (heap_next > heap_addr + max_mem - size) {
+  		if(!allocate_new_heap()) {
+! 			raise(STORAGE_ERROR, "Object creation");
+  			*ptr = heap_addr + WORDS_PTR + 1;
+  			*off = *ptr - heap_addr;
+  			*bse = heap_base;
+--- 1052,1058 ----
+  	size += 1 + WORDS_PTR;
+  	if (heap_next > heap_addr + max_mem - size) {
+  		if(!allocate_new_heap()) {
+! 			Raise(STORAGE_ERROR, "Object creation");
+  			*ptr = heap_addr + WORDS_PTR + 1;
+  			*off = *ptr - heap_addr;
+  			*bse = heap_base;
+***************
+*** 1114,1120 ****
+  	int *p;
+  
+  	if (size < 0) {
+! 		raise(SYSTEM_ERROR, "Ridiculous size for object allocation");
+  		*ptr = heap_addr + WORDS_PTR + 1;
+  		*off = *ptr - heap_addr;
+  		*bse = heap_base;
+--- 1114,1120 ----
+  	int *p;
+  
+  	if (size < 0) {
+! 		Raise(SYSTEM_ERROR, "Ridiculous size for object allocation");
+  		*ptr = heap_addr + WORDS_PTR + 1;
+  		*off = *ptr - heap_addr;
+  		*bse = heap_base;
+***************
+*** 1123,1129 ****
+  	size += 1 + WORDS_PTR;
+  	if (heap_next > heap_addr + max_mem - size) {
+  		if(!allocate_new_heap()) {
+! 			raise(STORAGE_ERROR, "Allocator");
+  			*ptr = heap_addr + WORDS_PTR + 1;
+  			*off = *ptr - heap_addr;
+  			*bse = heap_base;
+--- 1123,1129 ----
+  	size += 1 + WORDS_PTR;
+  	if (heap_next > heap_addr + max_mem - size) {
+  		if(!allocate_new_heap()) {
+! 			Raise(STORAGE_ERROR, "Allocator");
+  			*ptr = heap_addr + WORDS_PTR + 1;
+  			*off = *ptr - heap_addr;
+  			*bse = heap_base;
+***************
+*** 1178,1184 ****
+  void push_task_frame(int first)							/*;push_task_frame*/
+  {
+  	if (heap_next > heap_addr + max_mem - 4 - 2*WORDS_PTR)
+! 		raise(STORAGE_ERROR, "Tasking");
+  	else {
+  		*heap_next++ = 4 + WORDS_PTR;
+  		*(int **)(heap_next) = BLOCK_FRAME->bf_tasks_declared;
+--- 1178,1184 ----
+  void push_task_frame(int first)							/*;push_task_frame*/
+  {
+  	if (heap_next > heap_addr + max_mem - 4 - 2*WORDS_PTR)
+! 		Raise(STORAGE_ERROR, "Tasking");
+  	else {
+  		*heap_next++ = 4 + WORDS_PTR;
+  		*(int **)(heap_next) = BLOCK_FRAME->bf_tasks_declared;
+***************
+*** 1265,1271 ****
+  			type_discr = ADDR (*(field_ptr+1), *(field_ptr+2));
+  			if ( I_RANGE(type_discr)->ilow > new_discr_list [i]
+  			  || I_RANGE(type_discr)->ihigh < new_discr_list [i]) {
+! 				raise (CONSTRAINT_ERROR, "Discr. does not hold in bounds");
+  			}
+  			field_ptr += 3;
+  			discr_ptr += 2;
+--- 1265,1271 ----
+  			type_discr = ADDR (*(field_ptr+1), *(field_ptr+2));
+  			if ( I_RANGE(type_discr)->ilow > new_discr_list [i]
+  			  || I_RANGE(type_discr)->ihigh < new_discr_list [i]) {
+! 				Raise (CONSTRAINT_ERROR, "Discr. does not hold in bounds");
+  			}
+  			field_ptr += 3;
+  			discr_ptr += 2;
+***************
+*** 1305,1311 ****
+  			ptr1 = ADDR(bas1, off1);
+  			if ((low <= high) && (I_RANGE(ptr1)->ilow > low
+  			  || I_RANGE(ptr1)->ihigh < high)) {
+! 				raise (CONSTRAINT_ERROR,
+  				  "Array with discr. does not hold in bounds");
+  			}
+  		}
+--- 1305,1311 ----
+  			ptr1 = ADDR(bas1, off1);
+  			if ((low <= high) && (I_RANGE(ptr1)->ilow > low
+  			  || I_RANGE(ptr1)->ihigh < high)) {
+! 				Raise (CONSTRAINT_ERROR,
+  				  "Array with discr. does not hold in bounds");
+  			}
+  		}
+***************
+*** 1320,1326 ****
+  			type_discr = ADDR (*(field_ptr+1), *(field_ptr+2));
+  			if ( I_RANGE(type_discr)->ilow > new_discr_list [i]
+  			  || I_RANGE(type_discr)->ihigh < new_discr_list [i]) {
+! 				raise (CONSTRAINT_ERROR, "Discr. does not hold in bounds");
+  			}
+  			field_ptr += 3;
+  		}
+--- 1320,1326 ----
+  			type_discr = ADDR (*(field_ptr+1), *(field_ptr+2));
+  			if ( I_RANGE(type_discr)->ilow > new_discr_list [i]
+  			  || I_RANGE(type_discr)->ihigh < new_discr_list [i]) {
+! 				Raise (CONSTRAINT_ERROR, "Discr. does not hold in bounds");
+  			}
+  			field_ptr += 3;
+  		}
+diff -C 3 Adaed-1.11.0a/predef.ada Adaed1.11.0a-l/predef.ada
+*** Adaed-1.11.0a/predef.ada	Fri Feb  7 20:17:50 1992
+--- Adaed1.11.0a-l/predef.ada	Thu Jun 25 22:31:05 1992
+***************
+*** 47,55 ****
+  package SYSTEM is
+  
+     type NAME    is (ELXSI_BSD, ELXSI_ENIX, PC_DOS, 
+! 		     SUN_UNIX, VAX_UNIX, VAX_VMS) ; 
+  
+!    SYSTEM_NAME  : constant NAME := SUN_UNIX;
+     STORAGE_UNIT : constant      := 32;
+     MEMORY_SIZE  : constant      := 2**16 - 1;
+  
+--- 47,55 ----
+  package SYSTEM is
+  
+     type NAME    is (ELXSI_BSD, ELXSI_ENIX, PC_DOS, 
+! 		     SUN_UNIX, VAX_UNIX, VAX_VMS, LINUX) ; 
+  
+!    SYSTEM_NAME  : constant NAME := LINUX;
+     STORAGE_UNIT : constant      := 32;
+     MEMORY_SIZE  : constant      := 2**16 - 1;
+  
+diff -C 3 Adaed-1.11.0a/predef1.c Adaed1.11.0a-l/predef1.c
+*** Adaed-1.11.0a/predef1.c	Fri Feb  7 20:19:28 1992
+--- Adaed1.11.0a-l/predef1.c	Mon Jun  8 22:31:44 1992
+***************
+*** 1788,1794 ****
+  
+  void predef_raise(int exception, char *msg)            /*;predef_raise*/
+  {
+! 	raise(exception, msg);
+  	longjmp(raise_env, 1);
+  }
+  
+--- 1788,1794 ----
+  
+  void predef_raise(int exception, char *msg)            /*;predef_raise*/
+  {
+! 	Raise(exception, msg);
+  	longjmp(raise_env, 1);
+  }
+  
+diff -C 3 Adaed-1.11.0a/predef2.c Adaed1.11.0a-l/predef2.c
+*** Adaed-1.11.0a/predef2.c	Fri Feb  7 20:19:28 1992
+--- Adaed1.11.0a-l/predef2.c	Mon Jun  8 22:32:25 1992
+***************
+*** 176,187 ****
+  
+  			if ((year % 4) == 0 && month == 2) {
+  				if (day > 29) { /* check leap year */
+! 					raise(TIME_ERROR, "Day too large");
+  					return;
+  				}
+  			}
+  			else if (day > days_in_month[month]) {
+! 				raise(TIME_ERROR, "Day too large");
+  				return;
+  			}
+  			if (secs >= ONE_DAY) {
+--- 176,187 ----
+  
+  			if ((year % 4) == 0 && month == 2) {
+  				if (day > 29) { /* check leap year */
+! 					Raise(TIME_ERROR, "Day too large");
+  					return;
+  				}
+  			}
+  			else if (day > days_in_month[month]) {
+! 				Raise(TIME_ERROR, "Day too large");
+  				return;
+  			}
+  			if (secs >= ONE_DAY) {
+***************
+*** 189,195 ****
+  				days = days_in(year, month, day + 1);
+  				ymd_of(days, &year, &month, &day);
+  				if (year < 1901 || year > 2099) {
+! 					raise(TIME_ERROR, "Year out of range");
+  					return;
+  				}
+  			}
+--- 189,195 ----
+  				days = days_in(year, month, day + 1);
+  				ymd_of(days, &year, &month, &day);
+  				if (year < 1901 || year > 2099) {
+! 					Raise(TIME_ERROR, "Year out of range");
+  					return;
+  				}
+  			}
+***************
+*** 248,259 ****
+  
+  			days = days_in(year, month, day);
+  			if (days <= 0) {
+! 				raise(TIME_ERROR, "Year out of range");
+  				return;
+  			}
+  			ymd_of(days, &year, &month, &day);
+  			if (year < 1901 || year > 2099) {
+! 				raise(TIME_ERROR, "Year out of range");
+  				return;
+  			}
+  			create(WORDS_TIME_RECORD, &bse, &off,(int **)(&time_ptr));
+--- 248,259 ----
+  
+  			days = days_in(year, month, day);
+  			if (days <= 0) {
+! 				Raise(TIME_ERROR, "Year out of range");
+  				return;
+  			}
+  			ymd_of(days, &year, &month, &day);
+  			if (year < 1901 || year > 2099) {
+! 				Raise(TIME_ERROR, "Year out of range");
+  				return;
+  			}
+  			create(WORDS_TIME_RECORD, &bse, &off,(int **)(&time_ptr));
+***************
+*** 303,309 ****
+  			dur = ONE_DAY * days + secs;
+  
+  			if (fix_out_of_bounds(dur, (int *)FX_RANGE(dur_tt_ptr)))
+! 				raise(TIME_ERROR, "Out of range");
+  			else {
+  				/* direct code needed since TOSML macro wrong */
+  				/* pop arguments, store long and restore args */
+--- 303,309 ----
+  			dur = ONE_DAY * days + secs;
+  
+  			if (fix_out_of_bounds(dur, (int *)FX_RANGE(dur_tt_ptr)))
+! 				Raise(TIME_ERROR, "Out of range");
+  			else {
+  				/* direct code needed since TOSML macro wrong */
+  				/* pop arguments, store long and restore args */
+diff -C 3 Adaed-1.11.0a/tasking.c Adaed1.11.0a-l/tasking.c
+*** Adaed-1.11.0a/tasking.c	Fri Feb  7 20:19:49 1992
+--- Adaed1.11.0a-l/tasking.c	Mon Jun  8 22:34:03 1992
+***************
+*** 279,290 ****
+  
+  	rts = (struct rts_item *) malloc(sizeof(struct rts_item));
+  	if (rts == (struct rts_item *)0) {
+! 		raise(STORAGE_ERROR, "Allocating space for task");
+  		return;
+  	}
+  	rts->tcbs = (int *) malloc((unsigned) sizeof(int)*mult);
+  	if (rts->tcbs == (int *)0) {
+! 		raise(STORAGE_ERROR, "Allocating space for task");
+  		return;
+  	}
+  	RTS_TYPE(rts) = CREATE;
+--- 279,290 ----
+  
+  	rts = (struct rts_item *) malloc(sizeof(struct rts_item));
+  	if (rts == (struct rts_item *)0) {
+! 		Raise(STORAGE_ERROR, "Allocating space for task");
+  		return;
+  	}
+  	rts->tcbs = (int *) malloc((unsigned) sizeof(int)*mult);
+  	if (rts->tcbs == (int *)0) {
+! 		Raise(STORAGE_ERROR, "Allocating space for task");
+  		return;
+  	}
+  	RTS_TYPE(rts) = CREATE;
+***************
+*** 310,316 ****
+  static void done_creation()									/*;done_creation*/
+  {
+  	if (MY_EXCEPTION == STORAGE_ERROR) {
+! 		raise(STORAGE_ERROR, "Not enough space for new tasks");
+  		MY_EXCEPTION = 0;
+  	}
+  	if (MY_WHAT != NULL_TASK) 		/* MY_WHAT is leader of RTS */
+--- 310,316 ----
+  static void done_creation()									/*;done_creation*/
+  {
+  	if (MY_EXCEPTION == STORAGE_ERROR) {
+! 		Raise(STORAGE_ERROR, "Not enough space for new tasks");
+  		MY_EXCEPTION = 0;
+  	}
+  	if (MY_WHAT != NULL_TASK) 		/* MY_WHAT is leader of RTS */
+***************
+*** 480,490 ****
+  		return;
+  	}
+  	if (MY_EVENT == TASKERR_EVENT) {
+! 		raise(TASKING_ERROR, "Tasking error in activation");
+  		MY_EXCEPTION = 0;
+  	}
+  	else if (MY_EVENT == PROGERR_EVENT) {
+! 		raise(PROGRAM_ERROR, "Activating an unelaborated task");
+  		MY_EXCEPTION = 0;
+  	}
+  	MY_ACTION = NO_ACTION;
+--- 480,490 ----
+  		return;
+  	}
+  	if (MY_EVENT == TASKERR_EVENT) {
+! 		Raise(TASKING_ERROR, "Tasking error in activation");
+  		MY_EXCEPTION = 0;
+  	}
+  	else if (MY_EVENT == PROGERR_EVENT) {
+! 		Raise(PROGRAM_ERROR, "Activating an unelaborated task");
+  		MY_EXCEPTION = 0;
+  	}
+  	MY_ACTION = NO_ACTION;
+***************
+*** 711,717 ****
+  			make_ready(task, ABORT_EVENT);            
+  		break;
+  	default: 
+! 		raise(SYSTEM_ERROR, "Aborting task in unknown state");
+  		break;
+  	}
+  }
+--- 711,717 ----
+  			make_ready(task, ABORT_EVENT);            
+  		break;
+  	default: 
+! 		Raise(SYSTEM_ERROR, "Aborting task in unknown state");
+  		break;
+  	}
+  }
+***************
+*** 934,940 ****
+  	}
+  }
+  
+! /* Procedure to raise TASKING_ERROR in all tasks waiting for or engaged   */
+  /* in a rendezvous with the currently active task                         */
+  
+  void purge_rdv(int curr)										/*;purge_rdv */
+--- 934,940 ----
+  	}
+  }
+  
+! /* Procedure to Raise TASKING_ERROR in all tasks waiting for or engaged   */
+  /* in a rendezvous with the currently active task                         */
+  
+  void purge_rdv(int curr)										/*;purge_rdv */
+***************
+*** 1122,1128 ****
+  	if (TCB_IO_ITEM(task) == NULL) {
+  		new_item=(struct io_item_type *)malloc(sizeof(struct io_item_type));
+  		if (new_item == (struct io_item_type *)0) {
+! 			raise(STORAGE_ERROR, "Allocating space for timer chain");
+  			return(NULL);
+  		}
+  	}
+--- 1122,1128 ----
+  	if (TCB_IO_ITEM(task) == NULL) {
+  		new_item=(struct io_item_type *)malloc(sizeof(struct io_item_type));
+  		if (new_item == (struct io_item_type *)0) {
+! 			Raise(STORAGE_ERROR, "Allocating space for timer chain");
+  			return(NULL);
+  		}
+  	}
+***************
+*** 1214,1220 ****
+  		wake = -1; 
+  		break;       /* innner remove*/
+  	default :             
+! 		raise(SYSTEM_ERROR, "Unexpected event");
+  		break;
+  	}
+  	II_FLAG(item) = 0;
+--- 1214,1220 ----
+  		wake = -1; 
+  		break;       /* innner remove*/
+  	default :             
+! 		Raise(SYSTEM_ERROR, "Unexpected event");
+  		break;
+  	}
+  	II_FLAG(item) = 0;
+***************
+*** 1320,1326 ****
+  					    RTS_TEMPL_OFF(item),item,i); 
+  					break;
+  				default :
+! 					raise(SYSTEM_ERROR, "Unexpected type"); 
+  					break;
+  				}
+  				break;   /* out of for loop */
+--- 1320,1326 ----
+  					    RTS_TEMPL_OFF(item),item,i); 
+  					break;
+  				default :
+! 					Raise(SYSTEM_ERROR, "Unexpected type"); 
+  					break;
+  				}
+  				break;   /* out of for loop */
+***************
+*** 1332,1338 ****
+  	if (item == (struct rts_item *)0)
+  	{ /* No active task was found, error condition */
+  		MY_STATUS = ACTIVE;
+! 		raise(SYSTEM_ERROR, "No activatable task");
+  		MY_EXCEPTION = 0;
+  		return;
+  	}
+--- 1332,1338 ----
+  	if (item == (struct rts_item *)0)
+  	{ /* No active task was found, error condition */
+  		MY_STATUS = ACTIVE;
+! 		Raise(SYSTEM_ERROR, "No activatable task");
+  		MY_EXCEPTION = 0;
+  		return;
+  	}
+***************
+*** 1387,1393 ****
+  	case NO_ACTION   	: 				
+  		break;
+  	default : 
+! 		raise(SYSTEM_ERROR, "Tasks awakened in an unknown state");
+  		MY_EXCEPTION = 0; 				
+  		break;
+  	}
+--- 1387,1393 ----
+  	case NO_ACTION   	: 				
+  		break;
+  	default : 
+! 		Raise(SYSTEM_ERROR, "Tasks awakened in an unknown state");
+  		MY_EXCEPTION = 0; 				
+  		break;
+  	}
+***************
+*** 1402,1408 ****
+  				sleep((unsigned)sleep_time);
+  		}
+  		else if ((MY_ACTION != DONE_CREATION) && (MY_ACTION != DONE_ACTIVATION))
+! 			raise(PROGRAM_ERROR, "System inactive(deadlock)");
+  	}
+  	MY_ACTION = NO_ACTION;
+  }
+--- 1402,1408 ----
+  				sleep((unsigned)sleep_time);
+  		}
+  		else if ((MY_ACTION != DONE_CREATION) && (MY_ACTION != DONE_ACTIVATION))
+! 			Raise(PROGRAM_ERROR, "System inactive(deadlock)");
+  	}
+  	MY_ACTION = NO_ACTION;
+  }
+***************
+*** 1532,1538 ****
+  			if (guard == 1)
+  				term_index = accept_index;
+  		}
+! 		else raise(SYSTEM_ERROR,
+  		    "Unknown alternative in select statement");
+  	}
+  
+--- 1532,1538 ----
+  			if (guard == 1)
+  				term_index = accept_index;
+  		}
+! 		else Raise(SYSTEM_ERROR,
+  		    "Unknown alternative in select statement");
+  	}
+  
+***************
+*** 1584,1590 ****
+  	 */
+  
+  	if ((num_open_alts == 0) && (delay_index == -1) && (term_index == -1)){
+! 		raise(PROGRAM_ERROR, "No open alternatives in select");
+  		return;
+  	}
+  
+--- 1584,1590 ----
+  	 */
+  
+  	if ((num_open_alts == 0) && (delay_index == -1) && (term_index == -1)){
+! 		Raise(PROGRAM_ERROR, "No open alternatives in select");
+  		return;
+  	}
+  
+***************
+*** 1707,1713 ****
+  	}
+  
+  	if ((num_alts != 0) && (accept_index == -1)) {
+! 		raise(SYSTEM_ERROR, "Nonexistant alternative selected");
+  		return;
+  	}
+  	close_guards(open_en, num_alts);
+--- 1707,1713 ----
+  	}
+  
+  	if ((num_alts != 0) && (accept_index == -1)) {
+! 		Raise(SYSTEM_ERROR, "Nonexistant alternative selected");
+  		return;
+  	}
+  	close_guards(open_en, num_alts);
+***************
+*** 1725,1731 ****
+  		accept_rdv(MY_WHO,accept_index,num_alts); 
+  		break;
+  	default	      : 
+! 		raise(SYSTEM_ERROR, 
+  		    "Unexpected event in select/accept"); 
+  		break;
+  	}
+--- 1725,1731 ----
+  		accept_rdv(MY_WHO,accept_index,num_alts); 
+  		break;
+  	default	      : 
+! 		Raise(SYSTEM_ERROR, 
+  		    "Unexpected event in select/accept"); 
+  		break;
+  	}
+***************
+*** 1798,1804 ****
+  	family = TOSM(num_param + 1);
+  	owner  = TOSM(num_param + 2);
+  	if (owner != ORIG(owner) || STACK(owner) == (int *)0) {
+! 		raise(TASKING_ERROR, "Call to an entry in a terminated task");
+  		return;
+  	}
+  	entry_num = entry_number(owner, family, member);
+--- 1798,1804 ----
+  	family = TOSM(num_param + 1);
+  	owner  = TOSM(num_param + 2);
+  	if (owner != ORIG(owner) || STACK(owner) == (int *)0) {
+! 		Raise(TASKING_ERROR, "Call to an entry in a terminated task");
+  		return;
+  	}
+  	entry_num = entry_number(owner, family, member);
+***************
+*** 1812,1822 ****
+  	/* STEP 2: Perform some error detection */
+  
+  	if (entry_num > TCB_NUM_ENTRIES(owner)) {
+! 		raise(SYSTEM_ERROR, "Nonexistant entry called");
+  		return;
+  	}
+  	if (TCB_STATUS(owner) == TERMINATED || TCB_ABNORMAL(owner)) {
+! 		raise(TASKING_ERROR, "Call to an entry of a terminated task");
+  		return;
+  	}
+  
+--- 1812,1822 ----
+  	/* STEP 2: Perform some error detection */
+  
+  	if (entry_num > TCB_NUM_ENTRIES(owner)) {
+! 		Raise(SYSTEM_ERROR, "Nonexistant entry called");
+  		return;
+  	}
+  	if (TCB_STATUS(owner) == TERMINATED || TCB_ABNORMAL(owner)) {
+! 		Raise(TASKING_ERROR, "Call to an entry of a terminated task");
+  		return;
+  	}
+  
+***************
+*** 1900,1906 ****
+  	case ENDRDV_EVENT: 
+  		disable_io(&MY_IO_ITEM);
+  		if (MY_EXCEPTION)
+! 			raise(MY_EXCEPTION, "Exception propagated from called task");
+  		MY_EXCEPTION = 0;
+  		for (i = cur_stackptr - num_param - 3 + 1; i <= cur_stackptr; i++)
+  			cur_stack[i] = cur_stack[i+3];
+--- 1900,1906 ----
+  	case ENDRDV_EVENT: 
+  		disable_io(&MY_IO_ITEM);
+  		if (MY_EXCEPTION)
+! 			Raise(MY_EXCEPTION, "Exception propagated from called task");
+  		MY_EXCEPTION = 0;
+  		for (i = cur_stackptr - num_param - 3 + 1; i <= cur_stackptr; i++)
+  			cur_stack[i] = cur_stack[i+3];
+***************
+*** 1909,1919 ****
+  			PUSH(1); 
+  		break;
+  	case TASKERR_EVENT :
+! 		raise(TASKING_ERROR, "Entry call failed: called task terminated");
+  		MY_EXCEPTION = 0; 			
+  		break;
+  	default	: 
+! 		raise(SYSTEM_ERROR, "Unexpected event in entry call"); 	
+  		break;
+  	}
+  	MY_STATUS = ACTIVE;
+--- 1909,1919 ----
+  			PUSH(1); 
+  		break;
+  	case TASKERR_EVENT :
+! 		Raise(TASKING_ERROR, "Entry call failed: called task terminated");
+  		MY_EXCEPTION = 0; 			
+  		break;
+  	default	: 
+! 		Raise(SYSTEM_ERROR, "Unexpected event in entry call"); 	
+  		break;
+  	}
+  	MY_STATUS = ACTIVE;
+***************
+*** 1966,1972 ****
+  
+  	item = (struct q_item*) malloc(sizeof(struct q_item));
+  	if (item == (struct q_item*)0) {
+! 		raise(STORAGE_ERROR, "Allocating space for entry queue");
+  		return;
+  	}
+  	ITEM_FLAG(item) = 1;
+--- 1966,1972 ----
+  
+  	item = (struct q_item*) malloc(sizeof(struct q_item));
+  	if (item == (struct q_item*)0) {
+! 		Raise(STORAGE_ERROR, "Allocating space for entry queue");
+  		return;
+  	}
+  	ITEM_FLAG(item) = 1;
+***************
+*** 2170,2181 ****
+  
+  	item = (struct rts_item *) malloc(sizeof(struct rts_item));
+  	if (item == (struct rts_item *)0){
+! 		raise(STORAGE_ERROR, "Allocating space for ready queue");
+  		return;
+  	}
+  	item->tcbs = (int *) malloc(sizeof(int));
+  	if (item->tcbs == (int *)0){
+! 		raise(STORAGE_ERROR, "Allocating space for ready queue");
+  		return;
+  	}
+  	RTS_TYPE(item) = READY;
+--- 2170,2181 ----
+  
+  	item = (struct rts_item *) malloc(sizeof(struct rts_item));
+  	if (item == (struct rts_item *)0){
+! 		Raise(STORAGE_ERROR, "Allocating space for ready queue");
+  		return;
+  	}
+  	item->tcbs = (int *) malloc(sizeof(int));
+  	if (item->tcbs == (int *)0){
+! 		Raise(STORAGE_ERROR, "Allocating space for ready queue");
+  		return;
+  	}
+  	RTS_TYPE(item) = READY;

@@ -1,0 +1,138 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem11.stl,v 1.1 90/12/05 16:15:53 ada Exp $
+--
+--
+--T+ 11.     Exceptions 
+
+package body adasem11;
+
+use globals;
+use adasem1;
+use adasem2;
+use adasem3;
+use adasem4;
+use adasem5;
+use adasem6;
+use adasem7;
+use adasem8;
+use adasem9;
+use adasem10;
+use adasem12;
+use adasem13;
+use evalstat;
+use adaio;
+use adalib;
+
+--S+ except_decl
+procedure except_decl(id_list) ;
+sem_trace_proc_entry(3, "Except_Decl");
+
+nam_list := [] ;
+for id in id_list loop 
+    name := find_new(id) ;
+    ST(name) := ["exception", "exception", [], {}, current_scope, om] ;
+    nam_list with:= name ;
+end loop;
+sem_trace_proc_exit(3, "Except_Decl");
+return [["exception_decl", nam_list]] ;
+ 
+end except_decl;
+--S+ exception_part
+
+procedure exception_part(node) ;
+sem_trace_proc_entry(3, "Exception_Part");
+
+-- A scope is established for the exception handlers. This scope
+-- or  a block nested within it, are the only valid scopes for the
+-- occurence of a non-specific RAISE statement.
+
+handler := find_new(newat_str());
+newscope(handler) ;
+ST(handler) := ["block", "handler", [], [], {}, curent_scope, om] ;
+
+-- Process individual handlers.
+[-, handler_list] := ast(node) ;
+handlers := [adasem(h) : h in handler_list] ;
+ex_names := ST(current_scope).signature ;
+popscope() ;
+
+if "others" in ex_names and top(ex_names) /= "others" then
+    errmsg("OTHERS must appear last", " in handler", "11.2") ;
+end if;
+sem_trace_proc_exit(3, "Exception_Part");
+return [["exception", handlers]] ;
+
+end exception_part;
+--S+ exception_handler
+
+procedure exception_handler(node) ;
+sem_trace_proc_entry(3, "Exception_Handler");
+
+[-, exception_list, statements_node] := ast(node) ;
+
+ex_list := {} ;
+for id_node in exception_list loop 
+    current_node := id_node ;
+    id := adasem(id_node) ;
+
+    if id /= "others" then
+
+	except := find_old(id) ;
+	if ST(except).nature /= "exception" then
+	    errmsg(original_name(except), " is not an exception", "11.1") ;
+        elseif except in ST(current_scope).signature then
+	    errmsg("duplicate exception name in handler","","11.2") ;
+	else
+	    ex_list with:= except ;
+	    ST(current_scope).signature with:= except ;
+	end if;
+    else
+
+        if "others" in ST(current_scope).signature then
+	    errmsg("Duplicate OTHERS in exception part","","11.2") ;
+        elseif # exception_list /= 1 then
+	    errmsg("OTHERS must appear alone in exception list", "", "11.2");
+	else
+	    ex_list with:= "others" ;
+	    ST(current_scope).signature with:= "others" ;
+	end if;
+
+    end if;	
+
+end loop;
+
+stmts := adasem(statements_node) ;
+sem_trace_proc_exit(3, "Exception_Handler");
+return  [ex_list, stmts] ;
+
+end exception_handler;
+--S+ raise_statement
+
+procedure raise_statement(opt_id) ;
+sem_trace_proc_entry(3, "Raise_Statement");
+
+if is_empty(opt_id) then
+    -- Non-specific raise. This statement form can appear only within
+    -- an exception handler.
+
+    assert exists scope in open_scopes | ST(scope).nature /= "block" or
+					ST(scope).type_of = "handler" ;
+    if ST(scope).type_of /= "handler" then
+	errmsg("RAISE statement not directly in exception handler", "", "11.3");
+    end if;
+
+    sem_trace_proc_exit(3, "Raise_Statement");
+    return ["raise"] ;
+
+else
+    except := find_old(opt_id) ;
+    if ST(except).nature /= "exception" and ST(except).type_of /= "any" then
+	errmsg(opt_id, " is not an exception", "11.1") ;
+    end if;
+    sem_trace_proc_exit(3, "Raise_Statement");
+    return ["raise", except] ;
+end if;
+
+end raise_statement;
+
+end adasem11;

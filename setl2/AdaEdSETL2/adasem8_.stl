@@ -1,0 +1,43 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem8_.stl,v 1.1 90/12/05 16:17:09 ada Exp $
+--
+package adasem8;
+   procedure use_clause(id_list) ;
+   procedure find_old(id) ;
+   procedure name_error(id) ;
+   procedure check_old(name) ;
+   procedure find_simple_name(name) ;
+   procedure collect_imported_names(name) ;
+   procedure array_or_call(name) ;
+   procedure parameterless_callable(f) ;
+   procedure index_or_slice(obj_name, arg_list) ;
+   procedure find_selected_component(name) ;
+   procedure is_appropriate_for_record(t) ;
+   procedure is_appropriate_for_task(t) ;
+   procedure find_expanded_name(prefix, selector, prefix_id) ;
+   procedure all_declarations(entity, prefix, selector) ;
+   procedure has_implicit_operator(selector, declarations);
+   procedure find_new(name) ;
+   procedure check_void(id) ;
+   procedure new_aggregate_or_access(marker, type_mark) ;
+   procedure maybe_private_dependent(type_mark) ;
+   procedure original_name(unique_nam) ;
+   procedure rename_exception(new_id, old_obj) ; 
+   procedure rename_package(new_id, old_obj) ;
+   procedure rename_procedure(new_specs, old_obj) ;
+   procedure rename_function(new_specs, old_obj) ;
+   procedure rename_object(new_id, type_mark, old_obj) ; 
+   procedure illegal_discriminant_dependence ( expn ) ;
+   procedure linearize ( expn );
+   procedure renamed(subprogs, formals, ret) ;
+   procedure check_modes(formals, sig) ;
+   procedure op_matches_spec(op_nam, f_types, ret) ;
+   procedure valid_function_attribute(attr, typ, ret, t);
+   procedure renamed_attribute(new_fun, formals, attr_exp) ;
+   procedure renamed_entry(entry_expr, formals) ; 
+   procedure entry_as_procedure(proc_name, formals, entry_expr) ;
+   procedure check_nat_type(expn) ;
+   procedure newscope(new_name) ;
+   procedure popscope() ;
+   procedure show_scope_info(scop);
+end adasem8;

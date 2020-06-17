@@ -1,0 +1,3965 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adapredef.stl,v 1.2 91/01/09 16:53:39 banner Exp $
+--
+package body predefs;
+ 
+   ---------------------------------------
+   --                                    -
+   --        A D A - P R E D E F S       -
+   --                                    -
+   --                                    -
+   --            written by              -
+   --                                    -
+   --            ADA Project             -
+   --         Courant Institute          -
+   --        New York University         -
+   --         251 Mercer Street,         -
+   --         New York, NY 10012         -
+   --                                    -
+   ---------------------------------------
+
+use globals;
+use int_globals;
+use int_util;
+use int_attributes;
+use adaarith;
+use adautil;
+use callout_package;
+
+--T+ DOCUMENTATION OF THE MODULE
+-- This module contains routines for the implementation of some of
+-- the predefined Ada packages and routines, namely SEQUENTIAL_IO,
+-- DIRECT_IO, TEXT_IO, and CALENDAR.  
+--
+--S+ SEQUENTIAL_IO
+--
+-- LINKAGE MECHANISM
+-- -----------------
+--
+-- Access to the SEQUENTIAL_IO routines is provided through the
+-- generic package specification and body which is bound to any
+-- program using the SEQUENTIAL_IO package.  SEQUENTIAL_IO must 
+-- be instantiated on each type upon which its operations are to 
+-- be performed.  The package body and specification may be found 
+-- in the file PREDEF.ADA (source).
+--
+-- For a further description of the linkage mechanism, refer to
+-- the comments on TEXT_IO.
+--
+--
+-- FILE MODEL
+-- ----------
+--
+-- When a file is opened, the associated file variable is assigned
+-- an integer (the file designator) which is uniquely associated with the
+-- file.  On closing the file, that file designator is dis-associated 
+-- with the file and the value of the file variable is set to 
+-- 0 (not the designator of any file).
+--
+-- The data structures maintained for the files consist of maps from 
+-- a domain of file variables onto the relevant information.  The 
+-- following data structures are maintained for files:
+--
+--       SIOFORM
+--               Map from file designators onto the form strings of
+--               the associated files.
+--
+--	SIOMODE
+--		Map from file designators onto one of the enumerations
+--		in_file, out_file.
+--	
+--	SIO_BUFFER
+--		Map from file designators onto the current buffer
+--		contents of the files.
+--
+--
+--S+ DIRECT_IO
+--
+-- LINKAGE MECHANISM
+-- -----------------
+--
+-- Access to the DIRECT_IO routines is provided through the
+-- generic package specification and body which is bound to any
+-- program using the DIRECT_IO package.  DIRECT_IO must be
+-- instantiated on each type upon which its operations are to 
+-- be performed.  The package body and specification may be found 
+-- in the file PREDEF.ADA (source).
+--
+-- For a further description of the linkage mechanism, refer to
+-- the comments on TEXT_IO.
+--
+--
+-- FILE MODEL
+-- ----------
+--
+-- When a file is opened, the associated file variable is assigned
+-- an integer (the file designator) which is uniquely associated with the
+-- file.  On closing the file, that file designator is dis-associated 
+-- with the file and the value of the file variable is set to 
+-- 0 (not the designator of any file).
+--
+-- The data structures maintained for the files consist of maps from 
+-- a domain of file variables onto the relevant information.  The 
+-- following data structures are maintained for files:
+--
+--      DIOFORM
+--               Map from file designators onto the form strings of
+--               the associated files.
+--
+--	DIOMODE
+--		 Map from file designators onto one of the enumerations
+--		 in_file, out_file, inout_file.
+--
+--      DFILE  
+--               Map from file designators onto a tuple of the file
+--               contents. The SETL tuple corresponds closely to the
+--               ADA direct file since it is unbounded and some of 
+--               its elements may be undefined.
+--
+--	DPOS
+--		 Map from file designators onto current file positions.
+--
+--      DSIZE
+--               Map from file designators onto the number of elements
+--               in the files.
+--
+
+--S+ TEXT_IO
+--
+-- LINKAGE MECHANISM
+-- -----------------
+--
+-- Access to the TEXT_IO routines is provided through a package 
+-- specification and body which is bound to any program using the
+-- TEXT_IO package. The package body and specification may be
+-- found in the file PREDEF.ADA (source) .
+--
+--
+-- The body of each procedure or function consists of a 'predef_' 
+-- instruction which has the form:
+--
+--	['predef_', marker, [formal, formal, ... ]]
+--
+-- The marker is the name of the TEXT_IO function to be performed. The
+-- body of the procedure is processed during compiler initialization
+-- to produce an entry of the form: [routine_name,['tio_op',marker]]
+-- in EMAP.
+--
+-- When a TEXT_IO procedure or function call is made, the interpreter
+-- transforms call into a 'tio' statement. The actual parameters become 
+-- a tuple of arguments to 'tio', which are evaluated onto the stack. 
+-- TEXT_IO is then called with the marker as argument.
+--
+-- After completion of the TEXT_IO processing, the normal return 
+-- mechanism is invoked to unbind the parameters. 
+--
+-- If an exception such as DATA_ERROR is raised during a call to 
+-- GET, the file pointer will be left pointing at the first delimiter 
+-- following the bad object.
+--
+--
+-- FILE MODEL
+-- ----------
+--
+-- When a file is opened, the associated file variable is assigned an
+-- integer (the file designator) which is uniquely associated with the 
+-- file.  On closing the file, the file designator is dis-associated 
+-- with the file and the value of the file variable is set to 
+-- 0 (not the designator of any file).
+--
+-- TEXT_IO supports I/O to disk and terminal devices, which are accessed
+-- sequentially on a single line basis directly from the physical file or
+-- terminal.  Data is read from or written to the physical file as it is
+-- requested or generated.  The file must be read or written in a sequen-
+-- tial manner from the beginning; changing the line position is not 
+-- allowed.
+--
+-- The following data structures are maintained for files: 
+--
+--   OPENFILES      
+--               A set of the integers which are associated with
+--               currently open files. 
+--
+-- The following maps maintain the status of each  file. The domain of
+-- each map is the same as the set OPENFILES since the data for a file
+-- is retained only if the file is currently open. 
+--
+--   IOFNAME
+--               A map from file designators (integers) onto external 
+--               names of the files (strings). 
+--
+--   IOHANDLE
+--               A map from file designators (integers) onto file handles
+--               of the files needed for the SETL2 I/O routines (returned 
+--		 by the SETL2 open statement). 
+--
+--   TIOFORM    
+--               A map from file designators onto the form strings of
+--               the associated files.
+--
+--   PAGE_NUMBER
+--               A map from file designators (integers) onto the number
+--               of pages read or written thus far.
+--
+--   LINE_NUMBER  
+--		A map from file designators (integers) onto the number
+--		of lines read or written thus far.
+--
+--   COLUMN_NUMBER 
+--               A map from file designators (integers) onto current
+--               column numbers (integers) for each file.  
+--
+--   NEW_LINE
+--		A map from file designators (integers) onto a boolean
+--		indicating whether a new line should be read in for each
+--		file.
+--
+--   TEXT 
+--		A map from file designators (integers) onto the current
+--		text line.
+--
+--   LINE_LENGTH
+--               A map from file designators (integers) onto the fixed
+--               line length (integer) for each file.  If the line length
+--               is unbounded (no call to SET_LINE_LENGTH has been done),
+--               the value in the line_length map is 0.  
+--
+--   PAGE_LENGTH
+--               A map from file designators (integers) onto the fixed
+--               page length (integer) for each file.  If the page length
+--               is unbounded (no call to SET_PAGE_LENGTH has been done),
+--               the value in the page_length map is 0.  
+--
+--   TIOMODE
+--               A map from file designators (integers) onto one of the
+--               enumerations in_file, out_file.
+--
+-- The following variables are also used for TEXT_IO processing. 
+--
+--   STANDARD_IN_FILE 
+--               The index of the standard input file.  
+--
+--   STANDARD_OUT_FILE 
+--               The index of the standard output file.  
+--
+--   CURRENT_IN_FILE
+--		The index of the current default input file.
+--
+--   CURRENT_OUT_FILE
+--		The index of the current default output file.
+--
+--
+
+var -- SEQUENTIAL_IO
+
+    sioform, siomode, sio_buffer, siotemps;
+
+var -- DIRECT_IO
+
+    dioform, diomode, dfile, dpos, dsize, diotemps;
+
+var -- TEXT_IO
+
+    openfiles, iofname, iohandle, tioform, tiomode, tiotemps,
+    page_number, line_number, column_number, new_line, 
+    text, nextline, line_length, page_length, 
+    open_status, current_in_file, current_out_file,
+    current_in_file_name, current_out_file_name,
+    standard_in_file, standard_out_file,
+    nextline2, file_not_read_yet;
+
+var
+    filenum,
+    file_no,
+    count_last,
+    temp_count;
+
+var
+    datafile;
+-- Standard non-printing characters. 
+--
+var cr, lf, ff;
+var bs, ht;
+var blanks;
+var page_mark;
+
+-- Used as return from utility procedures:
+--
+var exception, successfully;
+
+--
+const 	
+  fix_0 	  := [0,[0]],
+  delay_small	  := [1, 100],
+  max_line_length := 133,	 -- Maximum line length for text files. 
+  max_open_files  := 25,	 -- Maximum number of files that can be open
+  opsys_unix      := 1, 	 -- for UNIX 
+  opsys_vms	  := 2,   	 -- for VMS
+  boolean_true	  := 1,
+  boolean_false	  := 0,
+  in_file         := 0,
+  inout_file      := 1,
+  sio_out_file    := 1,
+  dio_out_file    := 2,
+  tio_out_file    := 1, 
+  lower_case      := 0;
+
+-- Constants for CALENDAR:
+const
+
+   one_day :=  86400,		-- 24 * 60 * 60
+   reg_month  :=  [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334],
+   leap_month :=  [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335],
+   days_in_month := [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31],
+   digits := {["1", 1], ["2", 2], ["3", 3], ["4", 4], ["5", 5],["6", 6], 
+   	      ["7", 7], ["8", 8], ["9", 9], ["0", 0], [" ", 0]},
+   month_no := 
+	{["JAN", 1], ["FEB", 2],  ["MAR", 3],  ["APR", 4],
+	["MAY", 5], ["JUN", 6],  ["JUL", 7],  ["AUG", 8],
+	["SEP", 9], ["OCT", 10], ["NOV", 11], ["DEC", 12],
+	["jan", 1], ["feb", 2],  ["mar", 3],  ["apr", 4],
+	["may", 5], ["jun", 6],  ["jul", 7],  ["aug", 8],
+	["sep", 9], ["oct", 10], ["nov", 11], ["dec", 12]};
+
+procedure  exception_raised(numval); 
+   return (numval = exception);
+end exception_raised;
+
+procedure is_fixed_ivalue(t);
+  return 
+   (is_tuple(t) and #(t) = 2 and 
+   is_integer ((t)(1)) and is_tuple((t)(2)));
+end is_fixed_ivalue;
+
+procedure is_float_ivalue(t);
+  return
+  (is_tuple(t) and #(t) = 3 and 
+   is_integer ((t)(1)) and is_tuple((t)(2)) and 
+   is_integer ((t)(3)));
+end is_float_ivalue;
+
+--T+ UTILITY MACROS FOR ADAPREDEF MODULE
+-- procedure due to the fact that FILE_TYPE is now an array type
+--
+procedure convert_filenum(fnum);
+  return fnum(2)(1);
+end convert_filenum;
+--
+procedure mk_file_rec(file_val); 
+   return ["array_ivalue", [file_val], 1, 1 ];
+end mk_file_rec;
+--
+procedure year_val(date_val);    return date_val(2)(1); end year_val;
+procedure month_val(date_val);   return date_val(2)(2); end month_val;
+procedure day_val(date_val);     return date_val(2)(3); end day_val;
+procedure seconds_val(date_val); return date_val(2)(4); end seconds_val;
+  
+procedure bounded_line_length; 
+   return line_length(file_no) > 0; 
+end bounded_line_length;
+
+procedure bounded_page_length; 
+   return page_length(file_no) > 0; 
+end bounded_page_length;
+
+procedure unbounded_line_length; 
+   return line_length(file_no) = 0;
+end unbounded_line_length;
+
+procedure unbounded_page_length; 
+   return page_length(file_no) = 0;
+end unbounded_page_length;
+
+-- Line Return Mechanism for TEXT_IO:
+--
+--   The current text line of all input files has an extra blank 
+--     appended to the end for convenience of scanning.
+--   When end-of-line is reached (i.e. the column number becomes
+--     equal to the length of the line), nothing happens yet.  It
+--     is not until the next get operation that the line number is
+--     incremented, the column number is reset to 1, and the next
+--     line of text is read in.  
+--   Note also that the flag NEW_LINE is used to determine whether a
+--     new line should be read in; this flag is set true whenever the
+--     line is incremented (when line_return is called), and set false
+--     once the new line is actually read.  
+--
+--
+procedure check_new_line;
+  if end_of_line() then
+    line_return;
+  end if;
+  if new_line(file_no) then
+     until text(file_no) /= page_mark loop 
+       if get_line() = exception then
+          raise ("END_ERROR","");
+          return exception;
+       end if;
+     end loop;
+  end if;
+end check_new_line;
+
+procedure incr_col (n);
+  if n > 0 then
+    column_number(file_no):= column_number(file_no) + n;
+  end if;
+end incr_col; 
+
+procedure delete(file_name);    
+if opsys = opsys_unix then
+    system("rm " + file_name);
+else  -- OPSYS_VMS
+    system("delete "+ file_name +";*");
+end if;
+end delete;
+
+-- Exceptions:
+--
+procedure raise (exc,cause);
+  exec([["raise", except_unames(exc),cause]]);
+  return;
+end raise;
+
+-- procedures for File Status:
+--
+procedure internal_file_not_closed(file_addr);
+  file_val := i_value (file_addr);
+  if file_val(2)(1) /= uninitialized then
+     raise("STATUS_ERROR","not closed");
+     return true;
+  else
+     return false;
+  end if;
+end internal_file_not_closed;
+
+--
+-- Check that the same external file cannot be opened by more than one file.
+-- Since this implementation does not support multiple access of external files.
+-- the exception USE_ERROR is raised since this is an operation is attempted 
+-- that is not possible for reasons that depend on characteristics of the 
+-- external file.
+-- 
+procedure external_file_not_closed(fname);
+  if fname in range iofname then
+    raise("USE_ERROR","not closed");
+    return true;
+  else
+    return false;
+  end if; 
+end external_file_not_closed;
+
+--
+-- Raise the exception STATUS_ERROR if the given file is not open.
+-- 
+procedure file_not_open;
+  if file_no = uninitialized then
+    raise("STATUS_ERROR","not open");
+    return true;
+  else
+    return false;
+  end if;
+end file_not_open;
+
+procedure full_file_name(name);
+if opsys = opsys_unix then 
+   if name(1) /= "/" then
+      return getdirname() + "/" + name;
+   else
+      return name;
+   end if;
+else
+   return name;
+end if;
+end full_file_name;
+--
+-- Raise the exception NAME_ERROR if the given file name is invalid.
+--
+procedure invalid_file_name(file_name);    
+if opsys = opsys_unix then 
+   simple_file_name := rbreak(file_name, "/");
+   if #simple_file_name > 64 then
+	raise("NAME_ERROR","invalid file name") ;
+	return true;
+   else
+	return false;
+   end if;
+elseif opsys = opsys_vms then
+-- 39 character filename + 39 character extension + '.'
+	if #file_name > 79 then
+		raise("NAME_ERROR","invalid file name") ;
+		return true;
+	else
+		return false;
+	end if;
+end if;
+end invalid_file_name;
+--
+-- Mode status:
+--
+-- Raise the exception MODE_ERROR if the mode of the given file 
+-- (file_mode) is not the desired mode for the operation (mode).
+--
+procedure incorrect_mode (file_mode, mode);
+  if file_mode /= mode then
+    raise ("MODE_ERROR","");
+    return true;
+  else
+    return false;
+  end if;
+end incorrect_mode;
+--
+--
+procedure page_terminated; 
+  return text(file_no) = "" and 
+	 column_number(file_no) = 1 and 
+	 line_number(file_no) = 1 and 
+	 page_number(file_no) /= 1;
+end page_terminated;
+--
+--S+ procedures for Argument Retrieval:
+--
+procedure get_argument_addr (WR arg);
+  arg frome valstack;
+end get_argument_addr;
+-- 
+procedure get_argument_value (WR arg_val);
+  arg frome valstack;
+  arg_val := i_value(arg);
+end get_argument_value;
+--
+procedure get_file_argument_or_default(operation,default_condition,in_or_out);
+  if operation = default_condition then
+     filenum := if in_or_out = "in" then current_in_file
+    	        else current_out_file end if;
+  else
+     get_argument_value (filenum);
+  end if;
+  file_no := convert_filenum(filenum);
+end get_file_argument_or_default;
+
+procedure make_string (item);
+  return (+ / [char (item(2)(i)) : i in [1..(item(4) - item(3) + 1)]] ? "");
+end make_string;
+  
+procedure ada_string (s);
+  return (["array_ivalue", [abs(s(i)) : i in [1..#s]], 1, #s] );
+end ada_string;
+  
+procedure span_chars (charset);
+   if exists s in [column_number(file_no)..#text(file_no)] 
+		  | text(file_no)(s) notin charset then
+     return s;
+   else
+     return 0;
+   end if;
+end span_chars;
+--
+procedure break_on_chars (charset);
+   if exists s in [column_number(file_no)..#text(file_no)] 
+		  | text(file_no)(s) in charset then
+     return s;
+   else
+     return 0;
+   end if;
+end break_on_chars;
+
+-- Given integer arguments (such as 1981, 2, 28), days_in computes an
+-- arbitrary representation of the given date as a single integer.  Since
+-- Ada does not allow dates before 1901 or after 2099, there is no need
+-- to consider century years (such as 1900) that are not leap years.
+
+procedure days_in(y, m, d);
+  return 
+  ((y)-1) * 365 + ((y)-1) / 4 +
+    if y mod 4 = 0 then leap_month(m) else reg_month(m) end if +
+    d;
+end days_in;
+
+-- The inverse of days_in.
+
+procedure ymd_of(days);
+    y := 1 + (((days) * 4) - 1) / (4 * 365 + 1);
+    d := (days) - ((y-1) * 365 + (y-1) / 4);
+    start := if y mod 4 = 0 then leap_month else reg_month end if;
+    assert exists m in [12, 11 .. 1] | d > start(m);
+    d -:= start(m);
+    return [y, m, d];
+end ymd_of;
+
+-- Adjust_ds normalizes its arguments, days and seconds, so that the
+-- number of seconds returned lies the the range 0.0 <= secs < 86400.0 .
+
+procedure adjust_ds(days, secs);
+    dd := fix_toi(secs, delay_small) / one_day;
+    d := days + dd;
+    s := fix_sub(secs, fix_fri(dd * one_day, delay_small));
+    return if fix_geq(s, fix_0) then [d, s]
+	   else [d - 1, fix_add(s, fix_fri(one_day, delay_small))] end if;
+end adjust_ds;
+
+-- Computes integer value of string s (blanks are considered zeros).
+
+procedure intval(s);
+   valu := 0;
+   for dig in s loop  valu := valu * 10 + digits(dig); end loop;
+   return valu;
+end intval;
+
+--T+ proc INITIALIZE_PREDEF : initialization of predefined units
+procedure initialize_predef();
+--
+-- This routine initializes the data structures for TEXT_IO,
+-- SEQUENTIAL_IO, and DIRECT_IO.
+--
+-- These data structures initially represent the default current
+-- input and output files.  These files are the DATAFILE (for input)
+-- and LISTFILE (for output) and may never be closed.  The LISFILE is 
+-- assumed to be open on the system level at the time this routine is 
+-- called.  The DATAFILE is opened in this routine and if the open fails
+-- then the exception PROGRAM_ERROR is raised.
+--
+
+  -- SEQUENTIAL_IO:
+
+  sio_buffer	:= {};
+  sioform	:= {};
+  siomode	:= {};
+  siotemps      := {};
+
+
+  -- DIRECT_IO:
+
+  dioform      := {};
+  diomode      := {};
+  dfile        := {};
+  dpos         := {};
+  dsize        := {};
+  diotemps     := {};
+
+  
+  -- TEXT_IO:
+
+  tioform       := {[1,""],             [2,""]};
+  page_number   := {[1,1],              [2,1]};
+  line_number 	:= {[1,1], 	  	[2,1]};
+  column_number := {[1,1], 	  	[2,1]};
+  new_line	:= {[1,true],		[2,false]};
+  text 		:= {[1,"  "], 		[2,""]};
+  nextline      := {};
+  nextline2     := {};
+  line_length 	:= {[1,0], 	  	[2,0]};
+  page_length 	:= {[1,0], 	  	[2,0]};
+  tiomode 	:= {[1,in_file],   	[2,tio_out_file]};
+  tiotemps      := {};
+  file_not_read_yet := {[1, true]};
+ 
+
+  datafile 	:= "";
+  openfiles 	:= {1,2};
+  iofname 	:= {[1,"stdin"], 	[2,"stdout"]};
+  iohandle	:= {[1,"stdin"], 	[2,"stdout"]};
+
+  standard_in_file := current_in_file := mk_file_rec(1);
+  standard_out_file := current_out_file := mk_file_rec(2);
+  current_in_file_name := datafile;
+  current_out_file_name := lisfile;
+ 
+  -- Initialize count variable for the number of temporary files.
+  temp_count := 0;
+
+  -- Set up special characters.
+ 
+  bs := char (8);
+  ht := char (9);
+  lf := char (10);
+  ff := char (12);
+  cr := char (13);
+  
+  blanks := {" ", ht};
+  page_mark := ff;
+ 
+  exception    := newat();
+  successfully := newat();
+
+  count_last := 32767;
+
+-- Check if the DATAFILE can be opened. If it can't raise PROGRAM_ERROR 
+-- since the standard input file should be open at the beginning of 
+-- program execution.
+
+     --if not (open_status := open(datafile, "TEXT-IN")) then
+        --to_errfile ("*** Cannot open standard input file: " + datafile);
+        --exec([["raise", "PROGRAM_ERROR","Cannot open standard input"]]);
+        --return;
+     --end if;
+
+end initialize_predef;
+
+--T+ proc PREDEF : Routine which handles all predefined operations
+procedure predef(operation);
+--
+-- This procedure handles all predefined operations.  It is called
+-- by the 'predef_' interpretive statement which is contained in the 
+-- body of the TEXT_IO procedures. It is passed a marker which
+-- determines the operation to be performed. The formal
+-- parameters of the original call have been evaluated onto
+-- VALSTACK.
+--
+-- (Note that although it usually doesn't return a value, and indeed it
+-- shouldn't return one, it can sometimes return EXCEPTION from one
+-- of the procedure when an exception is detected.  Since the value of a
+-- call to PREDEF is thrown away anyway, this shouldn't cause any prob-
+-- lems, but it is, nevertheless, a "bug".)
+--
+ 
+  if cdebug5 > 5 then
+    to_errfile("Predefined " + operation);
+  end if;
+ 
+-- Perform requested operation
+ 
+  case operation  
+ 
+----------------------------- 
+-- SEQUENTIAL_IO routines  --
+----------------------------- 
+
+--
+--  procedure CREATE (FILE : in out FILE_TYPE;    
+--                    MODE : in FILE_MODE := OUT_FILE;
+--                    NAME : in STRING    :="";
+--                    FORM : in STRING    :="");
+--
+    when "SIO_CREATE" => 
+
+    	open_seq_io("create");
+
+--
+--  procedure OPEN (FILE : in out FILE_TYPE;
+--                  MODE : in     FILE_MODE;
+--                  NAME : in     STRING;
+--                  FORM : in     STRING:="");
+--
+    when "SIO_OPEN" => 
+
+    	open_seq_io ("open");
+
+--
+--  procedure CLOSE (FILE : in out FILE_TYPE);
+--
+    when "SIO_CLOSE" => 
+
+	get_argument_addr (file_addr);
+	filenum := i_value (file_addr);
+	file_no := convert_filenum(filenum);
+	if file_not_open() then
+	   return;
+	end if;
+	setval (file_addr, mk_file_rec(uninitialized), om);
+
+    	close_seq_io;
+
+--
+--  procedure DELETE (FILE : in out FILE_TYPE);
+--
+    when "SIO_DELETE" => 
+
+    	-- The delete statement is implemented only in the UNIX and VMS
+        -- versions of ADA/Ed. In the others a USE_ERROR exception
+        -- will be raised if the file is open.
+
+	get_argument_addr (file_addr);
+	filenum := i_value (file_addr);
+	file_no := convert_filenum(filenum);
+    	if file_not_open() then
+	   return;
+	end if;
+
+        if opsys in {opsys_unix, opsys_vms} then
+           name := iofname(file_no);
+           setval (file_addr, mk_file_rec(uninitialized),  om);
+    	   close_seq_io;
+           delete (name);
+           siotemps less:= name;
+        else
+           raise ("USE_ERROR","not implemented");
+    	   return;
+        end if;
+
+--  procedure RESET  (FILE : in out FILE_TYPE;  MODE : in FILE_MODE);
+--  procedure RESET  (FILE : in out FILE_TYPE);
+--
+    when "SIO_RESET","SIO_RESET_MODE" => 
+
+        get_argument_value (filenum);
+	file_no := convert_filenum(filenum);
+        if file_not_open() then
+	   return;
+	end if;
+        if operation = "SIO_RESET_MODE" then
+           get_argument_value (newmode);
+        else
+           newmode := siomode(file_no);
+        end if;         
+        close (iohandle(file_no));
+        
+        if newmode = in_file then
+           iohandle(file_no) := open (iofname(file_no), "BINARY-IN");
+           getb (iohandle(file_no), file_type);
+        else
+           iohandle(file_no) := open (iofname(file_no), "BINARY-OUT");
+           putb (iohandle(file_no), "SEQUENTIAL");
+        end if;
+        siomode(file_no) := newmode;
+        sio_buffer(file_no) := om;
+   
+--
+--  function  MODE (FILE : in FILE_TYPE) return FILE_MODE;
+--
+   when "SIO_MODE" => 
+
+	get_argument_value (filenum);
+	file_no := convert_filenum(filenum);
+	if file_not_open() then
+	   return;
+	end if;
+	valstack with := siomode(file_no);
+
+--
+--  function  NAME (FILE : in FILE_TYPE) return STRING;
+--
+    when "SIO_NAME" => 
+
+    	get_argument_value (filenum);
+	file_no := convert_filenum(filenum);
+    	if file_not_open() then
+	   return;
+	end if;
+    	valstack with:= ada_string (iofname(file_no));
+
+--
+--  function  FORM (FILE : in FILE_TYPE)  return STRING;
+--
+   when "SIO_FORM" => 
+
+	get_argument_value (filenum);
+	file_no := convert_filenum(filenum);
+	if file_not_open() then
+	   return;
+	end if;
+	valstack with := ada_string(sioform(file_no));
+
+--
+--  function  IS_OPEN (FILE : in FILE_TYPE) return BOOLEAN;
+--
+    when "SIO_IS_OPEN" => 
+
+    	get_argument_value (filenum);
+	file_no := convert_filenum(filenum);
+    	valstack with:= if file_no = uninitialized
+    			  then boolean_false
+    			  else boolean_true
+    			end if;
+
+--
+--  procedure READ (FILE : in FILE_TYPE; ITEM : out ELEMENT_TYPE);
+--
+    when "SIO_READ" => 
+
+    	get_argument_value (filenum);
+    	get_argument_addr (item);
+        get_argument_addr (element_type);
+	file_no := convert_filenum(filenum);
+    	if file_not_open() or incorrect_mode (siomode(file_no), in_file) then
+	   return;
+	end if;
+
+     	if (item_value := sio_buffer(file_no)) = om then
+    	      if (item_value := read_elem()) = om then
+                 raise ("END_ERROR","");
+                 return;
+              end if;
+        else 
+            sio_buffer(file_no) := om;
+    	end if;
+
+--        CHECK_DATA_VALUE;
+    	setval (item, item_value, om);
+    	
+--
+--  procedure WRITE (FILE : in FILE_TYPE; ITEM : in ELEMENT_TYPE);
+--
+    when "SIO_WRITE" => 
+
+    	get_argument_value (filenum);
+    	get_argument_value (item);
+	file_no := convert_filenum(filenum);
+    	if file_not_open() or incorrect_mode(siomode(file_no),sio_out_file) then
+	   return;
+	end if;
+
+    	putb (iohandle(file_no), item);
+        
+--
+--  function  END_OF_FILE(FILE : in FILE_TYPE)	return BOOLEAN;
+--
+    when "SIO_END_OF_FILE" => 
+
+    	get_argument_value (filenum);
+	file_no := convert_filenum(filenum);
+    	if file_not_open() or incorrect_mode (siomode(file_no), in_file) then
+	   return;
+	end if;
+
+    	valstack with:= if sio_buffer(file_no) /= om 
+    			  then boolean_false
+    			elseif (sio_buffer(file_no) := read_elem()) = om
+                          then boolean_true
+                        else boolean_false
+    			end if;
+
+ 
+-------------------------- 
+-- DIRECT_IO  routines  --
+-------------------------- 
+
+--
+--  procedure CREATE (FILE : in out FILE_TYPE;    
+--                    MODE : in FILE_MODE := INOUT_FILE;
+--                    NAME : in STRING := "";
+--                    FORM : in STRING := "");
+--
+    when "DIO_CREATE" => 
+
+    	open_dir_io("create");
+
+--
+--  procedure OPEN (FILE : in out FILE_TYPE;
+--                  MODE : in     FILE_MODE;
+--                  NAME : in     STRING;
+--                  FORM : in     STRING:="");
+--
+    when "DIO_OPEN" => 
+
+    	open_dir_io ("open");
+
+--
+--  procedure CLOSE (FILE : in out FILE_TYPE);
+--
+    when "DIO_CLOSE" => 
+
+	get_argument_addr (file_addr);
+	filenum := i_value (file_addr);
+	file_no := convert_filenum(filenum);
+        file_no := convert_filenum(filenum);
+	if file_not_open() then
+	   return;
+	end if;
+	setval (file_addr, mk_file_rec(uninitialized), om);
+
+    	close_dir_io;
+
+--
+--  procedure DELETE (FILE : in out FILE_TYPE);
+--
+    when "DIO_DELETE" => 
+
+    	-- The delete statement is implemented only in the UNIX and VMS
+        -- versions of ADA/Ed. In the others a USE_ERROR exception
+        -- will be raised if the file is open.
+
+	get_argument_addr (file_addr);
+	filenum := i_value (file_addr);
+        file_no := convert_filenum(filenum);
+    	if file_not_open() then
+	   return;
+	end if;
+
+        if opsys in {opsys_unix, opsys_vms} then
+           name := iofname(file_no);
+           setval (file_addr, mk_file_rec(uninitialized),  om);
+    	   close_dir_io;
+           delete (name);
+           diotemps less:= name;
+        else
+           raise ("USE_ERROR","not implemented");
+    	   return;
+        end if;
+
+--  procedure RESET  (FILE : in out FILE_TYPE;  MODE : in FILE_MODE);
+--  procedure RESET  (FILE : in out FILE_TYPE);
+--
+    when "DIO_RESET","DIO_RESET_MODE" => 
+
+        get_argument_value (filenum);
+        file_no := convert_filenum(filenum);
+        if file_not_open() then
+	   return;
+	end if;
+        if operation = "DIO_RESET_MODE" then
+           get_argument_value (newmode);
+        else
+           newmode := diomode(file_no);
+        end if;
+        
+        if newmode = in_file and diomode(file_no) /= in_file then
+           iohandle(file_no) := open (iofname(file_no), "BINARY-OUT");
+           putb (iohandle(file_no), "DIRECT", dfile(file_no));
+           close (iohandle(file_no));
+        end if;
+
+        diomode(file_no)  := newmode;
+        dpos(file_no)     := 1;
+   
+--
+--  function  MODE (FILE : in FILE_TYPE) return FILE_MODE;
+--
+   when "DIO_MODE" => 
+
+       get_argument_value (filenum);
+       file_no := convert_filenum(filenum);
+       if file_not_open() then
+	  return;
+	end if;
+       valstack with := diomode(file_no);
+
+--
+--  function  NAME (FILE : in FILE_TYPE) return STRING;
+--
+    when "DIO_NAME" => 
+
+    	get_argument_value (filenum);
+        file_no := convert_filenum(filenum);
+    	if file_not_open() then
+	   return;
+	end if;
+    	valstack with:= ada_string (iofname(file_no));
+
+
+--
+--  function  FORM (FILE : in FILE_TYPE)  return STRING;
+--
+   when "DIO_FORM" => 
+
+       get_argument_value (filenum);
+       file_no := convert_filenum(filenum);
+       if file_not_open() then
+	  return;
+       end if;
+       valstack with := ada_string (dioform(file_no));
+
+--
+--  function  IS_OPEN (FILE : in FILE_TYPE) return BOOLEAN;
+--
+    when "DIO_IS_OPEN" => 
+
+    	get_argument_value (filenum);
+        file_no := convert_filenum(filenum);
+    	valstack with:= if file_no = uninitialized
+    			  then boolean_false
+    			  else boolean_true
+    			end if;
+
+
+--
+--  procedure READ (FILE : in FILE_TYPE; ITEM : out ELEMENT_TYPE);
+--  procedure READ (FILE : in FILE_TYPE; ITEM : out ELEMENT_TYPE;
+--                                       FROM : in  POSITIVE_COUNT);
+--
+    when "DIO_READ", "DIO_READ_FROM" => 
+
+    	get_argument_value (filenum);
+    	get_argument_addr (item);
+        file_no := convert_filenum(filenum);
+        if operation = "DIO_READ_FROM" then
+           get_argument_value (from_pos);
+        else
+           from_pos := dpos(file_no);
+        end if;
+        get_argument_addr (element_type);
+     	if file_not_open() then
+	   return;
+	end if;
+
+        if diomode(file_no) = dio_out_file then
+            raise ("MODE_ERROR","");
+            return;
+        elseif from_pos > dsize(file_no) then
+            raise ("END_ERROR","");
+            return;
+     	elseif (item_value := dfile(file_no) (from_pos)) = om then
+            raise ("DATA_ERROR","");
+            return;
+    	end if;
+
+--        CHECK_DATA_VALUE;
+
+        -- When END_ERROR or DATA_ERROR is raised ITEM and the current
+        -- index are unaffected.
+
+        dpos(file_no) :=  from_pos + 1;
+    	setval (item, item_value, om);
+    	
+--
+--  procedure WRITE (FILE : in FILE_TYPE; ITEM : in ELEMENT_TYPE);
+--  procedure WRITE (FILE : in FILE_TYPE; ITEM : in ELEMENT_TYPE;
+--                                        TO : in POSITIVE_COUNT);
+--
+    when "DIO_WRITE", "DIO_WRITE_TO" => 
+
+    	get_argument_value (filenum);
+    	get_argument_value (item);
+        file_no := convert_filenum(filenum);
+        if operation = "DIO_WRITE_TO" then
+           get_argument_value (to);
+        else
+           to := dpos(file_no);
+        end if;
+    	if file_not_open() then
+	   return;
+	end if;
+ 
+        if diomode(file_no) = in_file then
+            raise ("MODE_ERROR","");
+            return;
+	end if; 
+
+        dfile(file_no) (to) := item;
+        if to > dsize(file_no) then
+            dsize(file_no) := to;
+        end if;
+        dpos(file_no) := to + 1;
+
+
+--
+--  procedure SET_INDEX(FILE : in FILE_TYPE; TO : in POSITIVE_COUNT);
+--
+    when "DIO_SET_INDEX" => 
+
+	get_argument_value (filenum);
+        get_argument_value (to_index);
+        file_no := convert_filenum(filenum);
+	if file_not_open() then
+	   return;
+	end if;
+        dpos(file_no) := to_index;
+
+--
+--  function  INDEX (FILE : in FILE_TYPE)  return POSITIVE_COUNT;
+--
+   when "DIO_INDEX" => 
+
+       get_argument_value (filenum);
+       file_no := convert_filenum(filenum);
+       if file_not_open() then
+	  return;
+       end if;
+       valstack with := dpos(file_no);
+
+--
+--  function  SIZE (FILE : in FILE_TYPE)  return COUNT;
+--
+   when "DIO_SIZE" => 
+
+       get_argument_value (filenum);
+       file_no := convert_filenum(filenum);
+       if file_not_open() then
+	  return;
+       end if;
+       valstack with := dsize(file_no);
+
+--
+--  function  END_OF_FILE(FILE : in FILE_TYPE)	return BOOLEAN;
+--
+    when "DIO_END_OF_FILE" => 
+
+    	get_argument_value (filenum);
+        file_no := convert_filenum(filenum);
+    	if file_not_open() then
+	   return;
+	end if;
+        if diomode(file_no) = dio_out_file then
+           raise ("MODE_ERROR","");
+           return;
+        end if;
+    	valstack with:= if dpos(file_no) > dsize(file_no)
+    			  then boolean_true
+                          else boolean_false
+    			end if;
+
+
+-----------------------
+-- TEXT_IO routines  --
+-----------------------
+
+--
+-- A file integer is allocated for a new input or output file with the
+-- specified name; the file data structures are initialized accordingly.
+--
+-- Note that opening an output file is identical to creating a file. 
+--
+-- Notes: 
+--
+-- 1) The file integer assigned is the smallest element of [1,2..]  
+--    which is not in OPENFILES. 
+--
+-- 2) The fact that the file is  closed (the value of the file variable =
+--    UNINITIALIZED) is checked by the procedure CHECK_INTERNAL_FILE_CLOSED 
+--    which raises an exception and returns if the variable is currently
+--    associated.  Note that there is a corresponding procedure for ensuring
+--    that a file variable is associated.  
+--
+--
+-- procedure CREATE (FILE : in out FILE_TYPE; 
+--                   MODE : in FILE_MODE := OUT_FILE;
+--                   NAME : in STRING    := "";
+--                   FORM : in STRING    := "");
+ 
+    when "TIO_CREATE" => 
+ 
+      open_textio ("create");
+
+--
+-- procedure OPEN   (FILE : in out FILE_TYPE;
+--                   MODE : in FILE_MODE;
+--                   NAME : in STRING;
+--                   FORM : in STRING := "");
+
+    when "TIO_OPEN" => 
+
+      open_textio ("open");
+ 
+--
+-- procedure CLOSE (FILE : in out FILE_TYPE);
+--
+-- If this is an output file, then TEXT is cleared out.
+-- The file integer and space in the data structures is then 
+-- de-allocated.  
+--
+ 
+    when "TIO_CLOSE" => 
+
+      get_argument_addr (file_addr);
+      filenum := i_value(file_addr);
+      file_no := convert_filenum(filenum);
+      if file_not_open() then
+	 return;
+      end if;
+ 
+      close_textio;
+
+      -- If the file being closed is one of the default files
+      -- set the default file indicator to UNINITIALIZED to indicate 
+      -- it is closed.
+
+      if filenum = current_in_file then
+         current_in_file := mk_file_rec (uninitialized);
+      elseif filenum = current_out_file then
+         current_out_file := mk_file_rec (uninitialized);
+      end if;
+
+      setval(file_addr, mk_file_rec(uninitialized), om);
+
+--
+-- procedure DELETE (FILE : in out FILE_TYPE);
+--
+   when "TIO_DELETE" => 
+
+      -- The delete statement is implemented only in the UNIX and VMS
+      -- versions of ADA/Ed. In the others a USE_ERROR exception
+      -- will be raised if the file is open.
+
+      get_argument_addr (file_addr);
+      filenum := i_value(file_addr);
+      file_no := convert_filenum(filenum);
+      if file_not_open() then
+	 return;
+      end if;
+
+      if opsys in {opsys_unix, opsys_vms} then
+         name := iofname(file_no);
+         setval (file_addr, mk_file_rec(uninitialized), om);
+  	 close_textio;
+         delete (name);
+         tiotemps less:= name;
+      else
+         raise ("USE_ERROR","not implemented");
+    	 return;
+      end if;
+ 
+--
+-- procedure RESET (FILE : in out FILE_TYPE; MODE : in FILE_MODE);
+-- procedure RESET (FILE : in out FILE_TYPE);
+--
+   when "TIO_RESET", "TIO_RESET_MODE" => 
+   
+       get_argument_value (filenum);
+       file_no := convert_filenum(filenum);
+       if file_not_open() then
+	  return;
+       end if;
+
+       if operation = "TIO_RESET_MODE" then
+          get_argument_value (newmode);
+       -- Raise MODE_ERROR on attempt to change the mode of the current 
+       -- default input or output file.
+          if filenum in {current_in_file, current_out_file} and 
+             newmode /= tiomode(file_no) then
+               raise ("MODE_ERROR","cannot change mode");
+               return;
+          end if;
+       else
+          newmode := tiomode(file_no);
+       end if;
+
+       if tiomode(file_no) = tio_out_file then  
+    
+       -- Simulate effect of NEW_PAGE unless current page is
+       -- already terminated.
+
+       
+          if not page_terminated() then
+
+          -- Simulate a NEW_PAGE :
+          --  If the current line is not terminated or if the current 
+          --  page is empty (COL = 1 and PAGE = 1) output a line 
+          --  terminator.
+             if text(file_no) /= "" or 
+		(column_number(file_no) =1 and line_number(file_no) = 1) then
+                put_line;
+             end if;
+
+          --  Output Page terminator
+             export (iohandle(file_no), page_mark);
+          end if;
+       
+       end if;
+
+       close (iohandle(file_no));
+
+       if newmode = in_file then
+          iohandle(file_no) := open (iofname(file_no), "TEXT-IN");
+          new_line(file_no) := true;
+          text(file_no) := "  ";
+          nextline(file_no) := om;
+          nextline2(file_no) := om;
+          file_not_read_yet(file_no) := true;
+       else 
+          iohandle(file_no) := open (iofname(file_no), "TEXT-OUT");
+          line_length(file_no) := 0;
+          page_length(file_no) := 0;
+          text(file_no) := "";
+       end if;
+       
+       tiomode(file_no) := newmode;
+       column_number(file_no) := 1;
+       line_number(file_no) := 1;
+       page_number(file_no) := 1;
+   
+--
+-- function MODE (FILE : in FILE_TYPE) return FILE_MODE;
+--
+   when "TIO_MODE" => 
+
+       get_argument_value (filenum);
+       file_no := convert_filenum(filenum);
+       if file_not_open() then
+	  return;
+       end if;
+       valstack with := tiomode(file_no);
+      
+--
+-- function NAME (FILE : in FILE_TYPE) return STRING;    
+--
+-- The name of the file is returned.  The name is the same string which
+-- was passed on the OPEN or CREATE call.
+--
+ 
+    when "TIO_NAME" => 
+      get_argument_value (filenum);
+      file_no := convert_filenum(filenum);
+      if file_not_open() then
+	 return;
+      end if;
+
+      -- Convert SETL name string to an Ada object.
+
+      valstack with:= ada_string (iofname(file_no));
+
+--
+-- function FORM (FILE : in FILE_TYPE) return STRING;    
+--
+ 
+    when "TIO_FORM" => 
+      get_argument_value (filenum);
+      file_no := convert_filenum(filenum);
+      if file_not_open() then
+	 return;
+      end if;
+
+      -- Convert SETL name string to an Ada object.
+
+      valstack with:= ada_string (tioform(file_no));
+    
+--
+-- function IS_OPEN (FILE : in FILE_TYPE) return BOOLEAN;
+--
+-- The boolean evaluation of "Is the file variable associated?" is
+-- returned.
+--
+ 
+    when "TIO_IS_OPEN" => 
+      get_argument_value (filenum);
+      file_no := convert_filenum(filenum);
+      valstack with:= if file_no  = uninitialized
+			 then boolean_false
+			 else boolean_true
+		      end if;
+
+--
+-- procedure SET_INPUT (FILE : in FILE_TYPE);    
+--
+
+    when "SET_INPUT" => 
+      get_argument_value (filenum);
+      file_no := convert_filenum(filenum);
+      if file_not_open() or incorrect_mode (tiomode(file_no), in_file) then
+	 return;
+      end if;
+
+      current_in_file := filenum;
+       
+      -- Save a copy of the current default input file number
+      -- which can be checked after the default file is closed.
+       
+      current_in_file_name := iofname(file_no);
+
+ 
+--
+-- procedure SET_OUTPUT (FILE : in FILE_TYPE);
+--
+
+    when "SET_OUTPUT" => 
+      get_argument_value (filenum);
+      file_no := convert_filenum(filenum);
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+	 return;
+      end if;
+
+      current_out_file := filenum;
+       
+      -- Save a copy of the current default output file number
+      -- which can be checked after the default file is closed.
+       
+      current_out_file_name := iofname(file_no);
+--
+-- function STANDARD_INPUT return FILE_TYPE;
+--
+ 
+    when "STANDARD_INPUT" => 
+      valstack with:= standard_in_file;
+ 
+--
+-- function STANDARD_OUTPUT return FILE_TYPE;
+--
+ 
+    when "STANDARD_OUTPUT" => 
+      valstack with:= standard_out_file;
+   
+--
+-- function CURRENT_INPUT return FILE_TYPE;
+--
+    when "CURRENT_INPUT" => 
+      valstack with:= current_in_file;
+ 
+--
+-- function CURRENT_OUTPUT return FILE_TYPE;
+--
+    when "CURRENT_OUTPUT" => 
+      valstack with:= current_out_file;
+--
+-- procedure SET_LINE_LENGTH (FILE : in FILE_TYPE;  TO : in COUNT);
+-- procedure SET_LINE_LENGTH (TO : in COUNT);
+--
+ 
+    when "SET_LINE_LENGTH", "SET_LINE_LENGTH_FILE" => 
+
+      set__line__length (operation);
+--
+-- procedure SET_PAGE_LENGTH (FILE : in FILE_TYPE;  TO : in COUNT);
+-- procedure SET_PAGE_LENGTH (TO : in COUNT);
+--
+ 
+    when "SET_PAGE_LENGTH", "SET_PAGE_LENGTH_FILE" => 
+
+      set__page__length (operation);
+--
+-- function LINE_LENGTH (FILE : in FILE_TYPE) return COUNT;
+-- function LINE_LENGTH return COUNT;
+--
+
+    when "LINE_LENGTH", "LINE_LENGTH_FILE" => 
+      line__length (operation);
+--
+-- function PAGE_LENGTH (FILE : in FILE_TYPE) return COUNT;
+-- function PAGE_LENGTH return COUNT;
+--
+
+    when "PAGE_LENGTH", "PAGE_LENGTH_FILE" => 
+      page__length (operation);
+--
+-- procedure NEW_LINE (FILE : in FILE_TYPE; 
+--                     SPACING : in POSITIVE_COUNT := 1);
+-- procedure NEW_LINE (SPACING : in POSITIVE_COUNT := 1);
+--
+
+    when "NEW_LINE_FILE", "NEW_LINE" => 
+      new__line (operation);
+--
+-- procedure SKIP_LINE (FILE : in FILE_TYPE;  
+--                      SPACING : in POSITIVE_COUNT := 1);
+-- procedure SKIP_LINE (SPACING : in POSITIVE_COUNT := 1);
+--
+
+    when "SKIP_LINE_FILE", "SKIP_LINE" => 
+
+      skip_line(operation);
+--
+-- function END_OF_LINE (FILE : in FILE_TYPE) return BOOLEAN;
+-- function END_OF_LINE return BOOLEAN;
+--
+
+    when "END_OF_LINE_FILE", "END_OF_LINE" => 
+
+      end__of__line (operation);
+--
+-- procedure NEW_PAGE (FILE : in FILE_TYPE);
+-- procedure NEW_PAGE;
+--
+
+    when "NEW_PAGE_FILE", "NEW_PAGE" => 
+      get_file_argument_or_default(operation,"NEW_PAGE","out");
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+	 return;
+      end if;
+
+      if text(file_no) /= "" or 
+	 (column_number(file_no) =1 and line_number(file_no) = 1 ) then
+         put_line;
+      end if;
+
+      -- Output a page terminator to terminate the current page.
+      export (iohandle(file_no), page_mark);
+
+      line_number(file_no) := 1;
+      page_number(file_no) := add(page_number(file_no),1);
+      
+--
+-- procedure SKIP_PAGE (FILE : in FILE_TYPE);
+-- procedure SKIP_PAGE;
+--
+
+    when "SKIP_PAGE_FILE", "SKIP_PAGE" => 
+
+      skip_page(operation);
+
+--
+-- function END_OF_PAGE (FILE : in FILE_TYPE) return BOOLEAN;
+-- function END_OF_PAGE return BOOLEAN;
+--
+
+    when "END_OF_PAGE_FILE", "END_OF_PAGE" => 
+
+      end__of__page (operation);
+
+--
+-- function END_OF_FILE (FILE : in FILE_TYPE) return BOOLEAN;
+-- function END_OF_FILE return BOOLEAN;
+--
+
+    when "TIO_END_OF_FILE", "TIO_END_OF_FILE_FILE" => 
+
+      end__of__file (operation);
+--
+-- procedure SET_COL (FILE : in FILE_TYPE; TO : in POSITIVE_COUNT); 
+-- procedure SET_COL (TO : in POSITIVE_COUNT);
+--
+
+    when "SET_COL", "SET_COL_FILE" => 
+
+     set_col(operation);
+
+--
+-- procedure SET_LINE (FILE : in FILE_TYPE;  TO : in POSITIVE_COUNT);
+-- procedure SET_LINE (TO   : in POSITIVE_COUNT);
+--
+
+    when "SET_LINE", "SET_LINE_FILE" => 
+
+      set_line(operation);
+ 
+--
+-- function COL (FILE : FILE_TYPE)  return POSITIVE_COUNT;
+-- function COL return POSITIVE_COUNT;
+--
+
+    when "COL", "COL_FILE" => 
+      get_file_argument_or_default(operation, "COL", "out");
+      if file_not_open() then
+	 return;
+      end if;
+
+      if column_number(file_no) > count_last then
+         raise ("LAYOUT_ERROR","");
+         return;
+      end if;
+
+      valstack with:= column_number(file_no);
+
+--
+-- function LINE (FILE : FILE_TYPE) return POSITIVE_COUNT;    
+-- function LINE return POSITIVE_COUNT;
+--
+
+    when "LINE", "LINE_FILE" => 
+      get_file_argument_or_default(operation, "LINE", "out");
+      if file_not_open() then
+	 return;
+      end if;
+
+      if line_number(file_no) < 0 then
+         raise ("LAYOUT_ERROR","");
+         return;
+      end if;
+
+      valstack with:= line_number(file_no);
+
+--
+-- function PAGE (FILE : FILE_TYPE) return POSITIVE_COUNT;    
+-- function PAGE return POSITIVE_COUNT;
+--
+
+    when "PAGE", "PAGE_FILE" => 
+      get_file_argument_or_default(operation, "PAGE", "out");
+      if file_not_open() then
+	 return;
+      end if;
+
+      if page_number(file_no) < 0 then
+         raise ("LAYOUT_ERROR","");
+         return;
+      end if;
+
+      valstack with:= page_number(file_no);
+ 
+--
+-- procedure GET (FILE : in FILE_TYPE;  ITEM : out CHARACTER);    
+-- procedure GET (ITEM : out CHARACTER);    
+--
+
+    when "GET_CHAR_FILE_ITEM", "GET_CHAR_ITEM" => 
+      get_file_argument_or_default(operation, "GET_CHAR_ITEM", "in");
+      get_argument_addr (item);
+      if file_not_open() or incorrect_mode (tiomode(file_no), in_file) then
+	 return;
+      end if;
+
+       until not end_of_line() loop
+         if check_new_line() = exception then
+	    return exception;
+	 end if;
+      end loop;
+      ch := text(file_no)(column_number(file_no));
+      incr_col (1);
+      setval(item, abs(ch) , om);
+
+--
+-- procedure PUT (FILE : in FILE_TYPE;  ITEM : in CHARACTER);    
+-- procedure PUT (ITEM : in CHARACTER);    
+--
+
+    when "PUT_CHAR_FILE_ITEM", "PUT_CHAR_ITEM" => 
+      get_file_argument_or_default(operation, "PUT_CHAR_ITEM", "out");
+      get_argument_value (item);
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+	 return;
+      end if;
+
+      put_string (char (item));
+ 
+--
+-- procedure GET (FILE : in FILE_TYPE;  ITEM : out STRING);    
+-- procedure GET (ITEM : out STRING);    
+-- 
+
+    when "GET_STRING_FILE_ITEM", "GET_STRING_ITEM" => 
+      get_file_argument_or_default(operation,"GET_STRING_ITEM","in");
+      get_argument_addr (item);
+      if file_not_open() or incorrect_mode (tiomode(file_no), in_file) then
+	 return;
+      end if;
+ 
+      -- Determine the size of the string.
+
+      [-, seq, l_bnd, u_bnd] := item;
+      string_size := contents(u_bnd) - contents(l_bnd) + 1;
+
+      s      := "";
+      needed := string_size;
+
+      while needed > 0 loop 
+        if check_new_line() = exception then
+	   return exception;
+	end if;
+	if #(text(file_no)(column_number(file_no)..#text(file_no)-1)) <= needed
+	then 
+	     chars := text(file_no)(column_number(file_no)..#text(file_no)-1);
+	else 
+	     chars := text(file_no)(column_number(file_no)..
+				    column_number(file_no) + needed - 1);
+	end if;
+	incr_col (#chars);
+	s      +:= chars;
+	needed -:= #chars;
+      end loop;
+
+      setval(item, ada_string (s), om);
+
+--
+-- procedure PUT (FILE : in FILE_TYPE;  ITEM : in STRING);    
+-- procedure PUT (ITEM : in STRING);    
+-- 
+
+    when "PUT_STRING_FILE_ITEM", "PUT_STRING_ITEM" => 
+      get_file_argument_or_default(operation,"PUT_STRING_ITEM","out");
+      get_argument_value (item);
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+	 return;
+      end if;
+
+      put_string (make_string (item));
+
+--
+-- procedure GET_LINE (FILE : in FILE_TYPE;  ITEM : out STRING;
+--                                           LAST : out INTEGER);    
+-- procedure GET_LINE (ITEM : out STRING; LAST : out INTEGER);
+-- 
+
+    when "GET_LINE_FILE", "GET_LINE" => 
+      get_file_argument_or_default(operation,"GET_LINE","in");
+      get_argument_addr (item);
+      get_argument_addr (last_pos);
+      if file_not_open() or incorrect_mode (tiomode(file_no), in_file) then
+	 return;
+      end if;
+ 
+      -- Determine the size of the string.
+
+      [-, seq, l_bnd, u_bnd] := item;
+      string_size := contents(u_bnd) - contents(l_bnd) + 1;
+-- GET_LINE should not read any characters if its string parameter is null;
+-- according to AI-50.
+
+      if (string_size <= 0) then
+
+      -- If no characters are read, returns in LAST an index value that is one
+      -- less than ITEM'FIRST.
+
+         item_size := contents (l_bnd) - 1;
+
+         setval(last_pos, item_size, om);
+         return;
+      end if;
+
+      end_of_line();
+
+      item_size := (#text(file_no) - column_number(file_no)) min string_size;
+
+      s := text(file_no)(column_number(file_no)..
+			 column_number(file_no) + item_size -1);
+      s +:= (string_size - item_size) * " ";
+
+      column_number(file_no) := column_number(file_no) + item_size;
+
+      -- AI-50
+      if (item_size /= string_size and end_of_line()) then
+         line_return();
+         if get_line() = exception then
+            raise ("END_ERROR","");
+            line_number(file_no) -:= 1;
+            return exception;
+         elseif text(file_no) = page_mark then
+            get_line();
+         end if;
+      end if;
+
+      -- If characters are read, returns in LAST the index value such 
+      -- that ITEM(LAST) is the last character replaced (the index of the
+      -- first character replaced is ITEM'FIRST). If no characters are 
+      -- read, returns in LAST an index value that is one less than 
+      -- ITEM'FIRST.
+      item_size +:= contents (l_bnd) - 1;
+
+      setval(item, ada_string (s), om);
+      setval(last_pos, item_size, om);
+
+--
+-- procedure PUT_LINE (FILE : in FILE_TYPE; ITEM : in STRING);
+-- procedure PUT_LINE (ITEM : in STRING);
+--
+
+    when "PUT_LINE_FILE", "PUT_LINE" => 
+      get_file_argument_or_default(operation,"PUT_LINE", "out");
+      get_argument_value (item);
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+	 return;
+      end if;
+
+      put_string (make_string (item));
+      put_line;
+
+--
+-- type NUM is range <>;
+--
+-- procedure GET (FILE : in FILE_TYPE;  ITEM : out NUM;
+--                                      WIDTH : in FIELD := 0);
+-- procedure GET (ITEM : out NUM;  WIDTH : in FIELD := 0);
+--
+
+    when "GET_INTEGER_FILE_ITEM","GET_INTEGER_ITEM" => 
+      get_file_argument_or_default(operation,"GET_INTEGER_ITEM","in");
+      get_argument_addr (item);
+      get_argument_value (width);
+      get_argument_addr (num_type);
+
+      if file_not_open() or incorrect_mode (tiomode(file_no), in_file) then
+	 return;
+      end if;
+
+      numval := scan_ada_number (num_type, width);
+      if exception_raised(numval) then
+    	return;
+      end if;
+      setval(item, numval, om);
+
+--
+-- procedure PUT (FILE  : in FILE_TYPE;
+--		 ITEM  : in NUM;
+--		 WIDTH : in FIELD := DEFAULT_WIDTH;
+--		 BASE  : in NUMBER_BASE := DEFAULT_BASE);
+--
+-- procedure PUT (ITEM  : in NUM;
+--		 WIDTH : in FIELD := DEFAULT_WIDTH;
+--		 BASE  : in NUMBER_BASE := DEFAULT_BASE);
+--
+
+    when "PUT_INTEGER_FILE_ITEM", "PUT_INTEGER_ITEM" => 
+      get_file_argument_or_default(operation,"PUT_INTEGER_ITEM","out");
+      get_argument_value (item);
+      get_argument_value (width);
+      get_argument_value (bse);
+
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+	 return;
+      end if;
+
+      item_string := adjust_base (item, bse);
+      put_buffer (item_string, width, "int");
+
+-- 
+-- procedure GET (FROM : in STRING; ITEM : out NUM; LAST : out POSITIVE);
+--
+
+    when "GET_INTEGER_STRING" => 
+      get_argument_value (from_str);
+      get_argument_addr  (item);
+      get_argument_addr  (last_pos);
+      get_argument_addr  (num_type);
+
+      [numval, last_char] := 
+		scan_ada_number_string (num_type, from_str);
+      if exception_raised(numval) then 
+         return;
+      end if;
+
+      setval (item, numval, om);
+      setval (last_pos, last_char, om);
+
+--
+-- procedure PUT (TO   : out STRING;
+--                ITEM : in  NUM;
+--                BASE : in  NUMBER_BASE := DEFAULT_BASE);
+--
+
+    when "PUT_INTEGER_STRING" => 
+     get_argument_addr (to);
+     get_argument_value (item);
+     get_argument_value (bse);
+
+     -- Determine the size of the string.
+
+     [-, seq, l_bnd, u_bnd] := to;
+     string_size := contents (u_bnd) - contents (l_bnd) + 1;
+
+     item_string := adjust_base (item, bse);
+     if #item_string > string_size then
+        raise ("LAYOUT_ERROR","string too long");
+        return;
+     end if;
+     item_string := (string_size - #item_string) * " " + item_string;
+     
+     setval (to, ada_string (item_string), om);
+    
+--
+-- type NUM is digits <>;
+--
+-- procedure GET (FILE : in FILE_TYPE;  ITEM : out NUM;
+--                                      WIDTH : in FIELD := 0);
+-- procedure GET (ITEM : out NUM;  WIDTH : in FIELD := 0);
+--
+
+    when "GET_FLOAT_FILE_ITEM","GET_FLOAT_ITEM" => 
+      get_file_argument_or_default(operation,"GET_FLOAT_ITEM","in");
+      get_argument_addr (item);
+      get_argument_value (width);
+      get_argument_addr (num_type);
+
+      if file_not_open() or incorrect_mode (tiomode(file_no), in_file) then
+	 return;
+      end if;
+
+      numval := scan_ada_number(num_type, width);
+      if exception_raised(numval) then
+    	return;
+      end if;
+      setval(item, numval, om);
+
+--
+-- procedure PUT (FILE	  : in FILE_TYPE;
+--		 ITEM	  : in NUM;
+--		 FORE	  : in FIELD := DEFAULT_FORE;
+--		 AFT      : in FIELD := DEFAULT_AFT;
+--		 EXP      : in FIELD := DEFAULT_EXP);
+--
+-- procedure PUT (ITEM	  : in NUM;
+--		 FORE	  : in FIELD := DEFAULT_FORE;
+--		 AFT      : in FIELD := DEFAULT_AFT;
+--		 EXP      : in FIELD := DEFAULT_EXP);
+--
+
+    when "PUT_FLOAT_FILE_ITEM", "PUT_FLOAT_ITEM" => 
+      get_file_argument_or_default(operation,"PUT_FLOAT_ITEM","out");
+      get_argument_value (item);
+      get_argument_value (fore);
+      get_argument_value (aft);
+      get_argument_value (expnt);
+
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+	 return;
+      end if;
+
+      -- ADJUST SETL STRING:  Note that this initial conversion via the
+      -- Setl STR function will give sufficient precision (7-8 digits)so 
+      -- long as ADA_MAX_DIGITS remains at 7.
+
+      num_string := float_tos(item);
+      if cdebug5 > 5 then
+         to_errfile("num_string=" + num_string ) ;
+      end if;
+
+      item_string := image_float (num_string,
+				      fore, aft max 1, expnt);
+      put_buffer (item_string, #item_string, "float");
+
+--
+-- procedure GET (FROM : in STRING; ITEM : out NUM; LAST : out POSITIVE);
+--
+
+    when "GET_FLOAT_STRING" => 
+      get_argument_value (from_str);
+      get_argument_addr  (item);
+      get_argument_addr  (last_pos);
+      get_argument_addr  (num_type);
+
+      [numval, last_char] := 
+		scan_ada_number_string (num_type, from_str);
+      if exception_raised(numval) then 
+         return;
+      end if;
+
+      setval (item, numval, om);
+      setval (last_pos, last_char, om);
+
+--
+-- procedure PUT (TO   : out STRING;
+--                ITEM : in NUM;
+--                AFT  : in FIELD := DEFAULT_AFT;
+--                EXP  : in FIELD := DEFAULT_EXP);
+--
+
+    when "PUT_FLOAT_STRING" => 
+      get_argument_addr  (to);
+      get_argument_value (item);
+      get_argument_value (aft);
+      get_argument_value (expnt);
+
+      num_string := float_tos( item );
+      if cdebug5 > 5 then
+          to_errfile("num_string=" + num_string ) ;
+      end if;
+      item_string := image_float (num_string, 0, aft max 1, expnt);
+
+      -- Determine the size of the string.
+
+      [-, seq, l_bnd, u_bnd] := to;
+      string_size := contents (u_bnd) - contents (l_bnd) + 1;
+
+      if #item_string > string_size then
+         raise ("LAYOUT_ERROR","string too long");
+         return;
+      end if;
+      item_string := (string_size - #item_string) * " " + item_string;
+     
+      setval (to, ada_string (item_string), om);
+
+
+--
+-- type NUM is delta <>;
+--
+-- procedure GET (FILE : in FILE_TYPE;  ITEM : out NUM;
+--                                      WIDTH : in FIELD := 0);
+-- procedure GET (ITEM : out NUM;  WIDTH : in FIELD := 0);
+--
+
+    when "GET_FIXED_FILE_ITEM","GET_FIXED_ITEM" => 
+      get_file_argument_or_default(operation,"GET_FIXED_ITEM","in");
+      get_argument_addr (item);
+      get_argument_value (width);
+      get_argument_addr (num_type);
+
+      if file_not_open() or incorrect_mode (tiomode(file_no), in_file) then
+	 return;
+      end if;
+
+      numval := scan_ada_number (num_type, width);
+      if exception_raised(numval) then 
+ 	return;
+      end if;
+      setval(item, numval, om);
+
+--
+-- procedure PUT (FILE	: in FILE_TYPE;
+--		 ITEM	: in NUM;
+--		 FORE	: in FIELD := DEFAULT_FORE;
+--		 AFT	: in FIELD := DEFAULT_AFT;
+--               EXP    : in FIELD := DECIMAL_EXP);
+--
+-- procedure PUT (ITEM	: in NUM;
+--		 FORE	: in FIELD := DEFAULT_FORE;
+--		 AFT	: in FIELD := DEFAULT_AFT;
+--               EXP    : in FIELD := DEFAULT_EXP);
+--
+
+    when "PUT_FIXED_FILE_ITEM", "PUT_FIXED_ITEM" => 
+      get_file_argument_or_default(operation,"PUT_FIXED_ITEM","out");
+      get_argument_value (item);
+      get_argument_value (fore);
+      get_argument_value (aft);
+      get_argument_value (expnt);
+      get_argument_addr (num_type);
+
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+	 return;
+      end if;
+
+      [-, -, -, precision] := num_type;
+      item_string := image_float(fix_toflts(item, precision),
+		      		 fore, aft max 1, expnt);
+
+      if cdebug5 > 5 then
+        to_errfile("item_string=" + item_string ) ;
+      end if;
+      put_buffer (item_string, #item_string, "fixed");
+
+--
+-- procedure GET (FROM : in STRING; ITEM : out NUM; LAST : out POSITIVE);
+--
+
+    when "GET_FIXED_STRING" => 
+      get_argument_value (from_str);
+      get_argument_addr  (item);
+      get_argument_addr  (last_pos);
+      get_argument_addr  (num_type);
+
+      [numval, last_char] := 
+		scan_ada_number_string (num_type,from_str);
+      if exception_raised(numval) then 
+         return;
+      end if;
+
+      setval (item, numval, om);
+      setval (last_pos, last_char, om);
+
+--
+-- procedure PUT (TO   : out STRING;
+--                ITEM : in NUM;
+--                AFT  : in FIELD := DEFAULT_AFT;
+--                EXP  : in FIELD := DEFAULT_EXP);
+--
+
+    when "PUT_FIXED_STRING" => 
+      get_argument_addr  (to);
+      get_argument_value (item);
+      get_argument_value (aft);
+      get_argument_value (expnt);
+      get_argument_addr (num_type);
+
+      [-, -, -, precision] := num_type;
+      item_string := image_float(fix_toflts(item, precision),
+		      		 0, aft max 1, expnt);
+
+      -- Determine the size of the string.
+
+      [-, seq, l_bnd, u_bnd] := to;
+      string_size := contents (u_bnd) - contents (l_bnd) + 1;
+
+      if #item_string > string_size then
+         raise ("LAYOUT_ERROR","string too long");
+         return;
+      end if;
+      item_string := (string_size - #item_string) * " " + item_string;
+     
+      setval (to, ada_string (item_string), om);
+
+-- type ENUM is (<>);
+--
+-- procedure GET (FILE : in FILE_TYPE;  ITEM : out ENUM);
+-- procedure GET (ITEM : out ENUM);
+--
+
+    when "GET_ENUM_FILE_ITEM","GET_ENUM_ITEM" => 
+      get_file_argument_or_default(operation,"GET_ENUM_ITEM","in");
+      get_argument_addr (item);
+      get_argument_addr (enum_descr);
+
+      if file_not_open() or incorrect_mode (tiomode(file_no), in_file) then
+	 return;
+      end if;
+
+      [-,enum_lo,enum_hi,enum_map] := enum_descr;
+      enum_string := scan_ada_enum();
+      if exception_raised(enum_string) then
+    	return;
+      end if;
+
+      -- Check to see if the identifier or character literal read 
+      -- corresponds to a value of the given enumeration subtype.
+
+      if (item_val := enum_ord_of(enum_map, enum_string)) = om 
+        or item_val notin {enum_lo..enum_hi} then
+    	raise ("DATA_ERROR","");
+    	return;
+      end if;
+
+      setval(item,item_val, om);
+
+--
+-- procedure PUT (FILE       : in FILE_TYPE;
+--    		 ITEM       : in ENUM;
+--    		 WIDTH      : in FIELD    := DEFAULT_WIDTH;
+--		 SET        : in TYPE_SET := DEFAULT_SETTING);
+-- procedure PUT (ITEM       : in ENUM;
+--    		 WIDTH      : in FIELD    := DEFAULT_WIDTH;
+--		 SET        : in TYPE_SET := DEFAULT_SETTING);
+--
+
+    when "PUT_ENUM_FILE_ITEM","PUT_ENUM_ITEM" => 
+      get_file_argument_or_default(operation,"PUT_ENUM_ITEM","out");
+      get_argument_value (item);
+      get_argument_value (width);
+      get_argument_value (setting);
+      get_argument_addr (enum_descr);
+
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+	 return;
+      end if;
+
+      [-,-,-,enum_map] := enum_descr;
+      item_string  := enum_lit_of(enum_map,item);
+      if setting = lower_case and item_string(1) /= "'" then
+    	item_string := lower_case_of(item_string);
+      end if;
+
+      put_buffer (item_string, width, "enum");
+
+--
+-- procedure GET(FROM : in STRING; ITEM : out ENUM; LAST : out POSITIVE);
+--
+
+    when "GET_ENUM_STRING" => 
+      get_enum_string (operation);
+
+-- 
+-- procedure PUT (TO   : out STRING;
+--                ITEM : in ENUM;
+--                SET  : in TYPE_SET := DEFAULT_SETTING);
+--
+
+    when "PUT_ENUM_STRING" => 
+      get_argument_addr (to);
+      get_argument_value (item);
+      get_argument_value (setting);
+      get_argument_addr (enum_descr);
+
+      [-,-,-,enum_map] := enum_descr;
+      item_string := enum_lit_of (enum_map, item);
+      if setting = lower_case and item_string(1) /= "'" then
+        item_string := lower_case_of(item_string);
+      end if;
+
+      -- Determine the size of the string
+
+      [-, seq, l_bnd, u_bnd] := to;
+      string_size := contents (u_bnd) - contents (l_bnd) + 1;
+
+      if #item_string > string_size then
+         raise ("LAYOUT_ERROR","string too long");
+         return;
+      end if;
+      item_string +:= (string_size - #item_string) * " ";
+    
+      setval (to, ada_string (item_string), om);     
+
+    when "dump" => 
+      produce_dump;
+
+
+    when "CLOCK", "YEAR", "MONTH", "DAY", "SECONDS",
+         "SPLIT", "TIME_OF", "ADD_TIME_DUR", "ADD_DUR_TIME", 
+         "SUB_TIME_DUR", "SUB_TIME_TIME", 
+         "LT_TIME", "LE_TIME", "GT_TIME", "GE_TIME" => 
+
+      calendar (operation);
+
+    otherwise =>
+        to_list("Execution error: "
+          + "attempt to execute unknown tio operation - "+
+            operation);
+        raise ("SYSTEM_ERROR",""); 
+ 
+  end case;
+ 
+ 
+  if cdebug5 > 5 then
+    to_errfile("End of Text_io processing.");
+  end if;
+
+end predef;
+
+procedure end_of_line;
+
+if file_not_read_yet(file_no) then
+   import (iohandle(file_no), textline);
+   if textline = page_mark then
+      text(file_no) := page_mark;
+   else
+      text(file_no) := (textline ? "") + " ";
+   end if;
+   file_not_read_yet(file_no) := false;
+   new_line(file_no) := false;
+end if;
+
+return column_number(file_no) >= #text(file_no);
+
+end end_of_line;
+
+procedure set__line__length (operation);
+
+      get_file_argument_or_default(operation,"SET_LINE_LENGTH", "out");
+      get_argument_value (to);
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+	 return;
+      end if;
+
+      if to > max_line_length then 
+        raise ("USE_ERROR","length > 133");
+	return;
+      end if;
+      
+      line_length(file_no) := to;
+
+end set__line__length;
+
+procedure set__page__length (operation);
+
+      get_file_argument_or_default(operation,"SET_PAGE_LENGTH", "out");
+      get_argument_value (to);
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+         return;
+      end if;
+
+      page_length(file_no) := to;
+end set__page__length;
+
+procedure line__length (operation);
+
+      get_file_argument_or_default(operation,"LINE_LENGTH", "out");
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+	 return;
+      end if;
+
+      valstack with:= line_length(file_no);
+end line__length;
+
+procedure page__length (operation);
+      get_file_argument_or_default(operation,"PAGE_LENGTH", "out");
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+	 return;
+      end if;
+
+      valstack with:= page_length(file_no);
+end page__length;
+
+procedure end__of__line (operation);
+
+      get_file_argument_or_default(operation,"END_OF_LINE", "in");
+      if file_not_open() or incorrect_mode (tiomode(file_no), in_file) then
+	 return;
+      end if;
+
+      valstack with:= if end_of_line()
+      			 then boolean_true
+      			 else boolean_false
+      		      end if;
+
+end end__of__line;
+
+procedure end__of__page (operation);
+
+      get_file_argument_or_default(operation,"END_OF_PAGE", "in");
+      if file_not_open() or incorrect_mode (tiomode(file_no), in_file) then
+         return;
+      end if;
+
+      if not end_of_line() then
+        result := boolean_false;
+      elseif nextline(file_no) /= om then 
+        if nextline(file_no) = page_mark then
+           result := boolean_true;
+        else
+           result := boolean_false;
+        end if;
+      else
+        import (iohandle(file_no), nextline(file_no));
+        if nextline(file_no) = om then
+           result := boolean_true;
+        elseif nextline(file_no) = page_mark then
+           result := boolean_true;
+        else 
+           result := boolean_false;
+        end if;
+      end if;
+      valstack with := result;
+
+end end__of__page;
+
+procedure end__of__file (operation);
+
+      get_file_argument_or_default(operation, "TIO_END_OF_FILE", "in");
+      if file_not_open() or incorrect_mode (tiomode(file_no), in_file) then
+	 return;
+      end if;
+
+      if not end_of_line() then
+        result := boolean_false;
+      elseif nextline(file_no) /= om and nextline(file_no) /= page_mark then 
+        result := boolean_false;
+      else
+        if nextline(file_no) = page_mark then
+           if nextline2(file_no) = om then
+              import (iohandle(file_no), nextline2(file_no));
+           end if;
+           if nextline2(file_no) = om then
+              result := boolean_true;
+           else
+              result := boolean_false;
+           end if;
+        else    -- NEXTLINE = OM
+           import (iohandle(file_no), nextline(file_no));
+           import (iohandle(file_no), nextline2(file_no));
+           if nextline2(file_no) = om then
+              result := boolean_true;
+           else
+              result := boolean_false;
+           end if;
+        end if;
+      end if;
+      valstack with := result;
+
+end end__of__file; 
+
+procedure new__line (operation);
+
+      get_file_argument_or_default(operation,"NEW_LINE", "out");
+      get_argument_value (spacing);
+      if file_not_open() or incorrect_mode (tiomode(file_no), tio_out_file) then
+	 return;
+      end if;
+
+      for i in {1..spacing} loop 
+    	put_line;
+      end loop;
+end new__line;
+
+procedure skip_line(operation);
+
+get_file_argument_or_default(operation,"SKIP_LINE", "in");
+get_argument_value (spacing);
+if file_not_open() or incorrect_mode (tiomode(file_no), in_file) then
+   return;
+end if;
+
+file_not_read_yet(file_no) := false;
+
+if new_line(file_no) then 
+   if get_line() = exception then
+      raise ("END_ERROR","");
+      return exception;
+   end if;
+end if;
+
+for i in {1..spacing } loop 
+   line_return;
+   if get_line() = exception then
+      raise ("END_ERROR","");
+      line_number(file_no) -:= 1;
+      return exception;
+   elseif text(file_no) = page_mark then
+     get_line();
+   end if;
+end loop;
+
+
+end skip_line;
+
+procedure skip_page(operation);
+
+get_file_argument_or_default(operation, "SKIP_PAGE", "in");
+if file_not_open() or incorrect_mode (tiomode(file_no), in_file) then
+   return;
+end if;
+
+file_not_read_yet(file_no) := false;
+
+ while text(file_no) /= page_mark loop
+     if get_line() = exception then
+        raise ("END_ERROR","");
+        return exception;
+     end if;
+end loop;
+if get_line() = exception then
+   new_line(file_no) := true;
+end if;
+line_number(file_no) := 1;
+end skip_page;
+
+procedure set_col(operation);
+
+get_file_argument_or_default(operation,"SET_COL", "out");
+get_argument_value (to_val);
+if file_not_open() then
+   return;
+end if;
+	
+if tiomode(file_no) = tio_out_file then
+
+   if bounded_line_length() and to_val > line_length(file_no) then
+      raise ("LAYOUT_ERROR","> line_length");
+      return;
+   end if;
+
+   if to_val > column_number(file_no) then
+      put_string (" " * (to_val - column_number(file_no)));
+      column_number(file_no) := to_val;
+   elseif to_val < column_number(file_no) then
+      put_line;
+      put_string (" " * (to_val - 1));
+      column_number(file_no) := to_val;
+   end if;
+
+else    -- TIOMODE = in_file
+
+  -- If the value specified by TO is equal to the current column
+  -- number there is no effect.
+
+    while to_val < column_number(file_no) or to_val >= #text(file_no) loop
+      column_number(file_no) := #text(file_no);
+      if check_new_line() = exception then
+	 return exception;
+      end if;
+   end loop;
+ 
+   column_number(file_no) := to_val;
+ 
+end if;
+
+end set_col;
+
+procedure set_line(operation);
+
+get_file_argument_or_default(operation, "SET_LINE", "out");
+get_argument_value (to_val);
+if file_not_open() then
+   return;
+end if;
+	
+if tiomode(file_no) = tio_out_file then
+
+     if bounded_page_length() and to_val > page_length(file_no) then
+        raise ("LAYOUT_ERROR",">page_length");
+        return;
+     end if;
+
+     if to_val > line_number(file_no) then
+        for i in {1..to_val - line_number(file_no)} loop 
+           put_line;
+        end loop;
+     elseif to_val < line_number(file_no) then
+        if text(file_no) /= "" or 
+	   (column_number(file_no)=1 and line_number(file_no) = 1) then 
+           put_line;
+        end if;
+        export (iohandle(file_no), page_mark);
+        line_number(file_no) := 1;
+        page_number(file_no) := add(page_number(file_no), 1);
+        for i in {1..to_val - 1} loop 
+           put_line;
+        end loop;
+     end if;
+
+else    -- TIOMODE = in_file
+
+-- If the value specified by TO is equal to the
+-- current line number there is no effect.
+     if line_number(file_no) /= to_val then
+
+        if check_new_line() = exception then
+	   return exception;
+        end if;
+
+        while line_number(file_no) /= to_val  loop 
+           line_return;
+           if check_new_line() = exception then
+	      return exception;
+           end if;
+        end loop;
+
+     end if;
+     
+end if;
+
+end set_line;
+
+procedure get_enum_string (operation);
+      get_argument_value (from_str);
+      get_argument_addr (item);
+      get_argument_addr (last_pos);
+      get_argument_addr (enum_descr);
+
+      [-,enum_lo,enum_hi,enum_map] := enum_descr;
+      [enum_string, last_char] := scan_ada_enum_string(from_str);
+      if enum_string = exception then
+    	 return;
+      end if;
+
+      -- Check to see if the identifier or character literal read 
+      -- corresponds to a value of the given enumeration subtype.
+
+      if (item_val := enum_ord_of(enum_map, enum_string)) = om 
+        or item_val notin {enum_lo..enum_hi} then
+    	raise ("DATA_ERROR","");
+    	return;
+      end if;
+
+      setval(item,item_val, om);
+      setval(last_pos, last_char, om);
+
+end get_enum_string;
+
+
+procedure produce_dump;
+
+to_errfile("**** Predef dump begin ****");
+
+to_errfile ("SIOFORM -- " + str(sioform) );
+to_errfile ("SIOMODE -- " + str(siomode) );
+to_errfile ("SIO_BUFFER -- " + str(sio_buffer) );
+
+to_errfile ("DIOFORM -- " + str(dioform) );
+to_errfile ("DIOMODE -- " + str(diomode) );
+to_errfile ("DFILE -- " + str(dfile) );
+to_errfile ("DPOS -- " + str(dpos) );
+to_errfile ("DSIZE -- " + str(dsize) );
+      
+to_errfile("TIOFORM --" + str(tioform) );
+to_errfile("TIOMODE --" + str(tiomode) );
+to_errfile("PAGE_NUMBER --" + str(page_number) );
+to_errfile("LINE_NUMBER --" + str(line_number) );
+to_errfile("COLUMN_NUMBER --" + str(column_number) );
+to_errfile("TEXT --" + str(text) );
+to_errfile("NEXTLINE --" + str(nextline) );
+to_errfile("NEXTLINE2 --" + str(nextline2) );
+to_errfile("LINE_LENGTH --" + str(line_length) );
+to_errfile("PAGE_LENGTH --" + str(page_length) );
+to_errfile("NEW_LINE --" + str(new_line) );
+
+to_errfile("OPENFILES --" + str(openfiles) );
+to_errfile("NAME --" + str(iofname) );
+to_errfile("**** Predef dump end ****");
+
+end produce_dump;
+
+
+procedure calendar (operation);
+
+--------------------------------------------
+-- Implementation of CALENDAR subprograms --
+--------------------------------------------
+
+-- Perform requested CALENDAR operation
+
+  case operation 
+
+--
+-- function CLOCK return TIME;
+--
+
+    when "CLOCK" => 
+      da := date();
+      ti := time();
+      ymds := [ 1900 + intval(da(7..8)),
+	        intval(da(1..2)),
+	        intval(da(4..5)),
+	        fix_fri(3600 * intval(ti(1..2)) +
+     	                60 * intval(ti(4..5)) + 
+		        intval(ti(7..8)),
+                        delay_small) ];
+
+      valstack with:= ["array_ivalue", ymds, 1, 4];
+
+-- 
+-- function YEAR   (DATE     : in TIME) return YEAR_NUMBER;
+--
+
+   when "YEAR" => 
+     get_argument_value (date_val);
+     valstack with:= year_val(date_val);
+
+--
+-- function MONTH  (DATE     : in TIME) return MONTH_NUMBER;
+--
+
+    when "MONTH" => 
+      get_argument_value (date_val);
+      valstack with:= month_val(date_val);
+
+--
+-- function DAY    (DATE     : in TIME) return DAY_NUMBER;
+--
+
+    when "DAY" => 
+      get_argument_value (date_val);
+      valstack with:= day_val(date_val);
+
+--
+-- function SECONDS(DATE     : in TIME) return DURATION;
+--
+
+    when "SECONDS" => 
+      get_argument_value (date_val);
+      valstack with:= seconds_val(date_val);
+
+--
+-- procedure SPLIT (DATE     : in  TIME;
+--                  YEAR     : out YEAR_NUMBER;
+--                  MONTH    : out MONTH_NUMBER;
+--                  DAY      : out DAY_NUMBER;
+--                  SECONDS  : out DURATION);
+--
+
+    when "SPLIT" => 
+      get_argument_value (date_val);
+      get_argument_addr  (year);
+      get_argument_addr  (month);
+      get_argument_addr  (day);
+      get_argument_addr  (seconds);
+
+      setval (year,    year_val(date_val),     om);
+      setval (month,   month_val(date_val),    om);
+      setval (day,     day_val(date_val),      om);
+      setval (seconds, seconds_val(date_val),  om);
+
+--
+-- function TIME_OF(YEAR     : YEAR_NUMBER;
+--                  MONTH    : MONTH_NUMBER;
+--                  DAY      : DAY_NUMBER;
+--                  SECONDS  : DURATION := 0.0) return TIME;
+--
+
+    when "TIME_OF" => 
+      get_argument_value (year);
+      get_argument_value (month);
+      get_argument_value (day);
+      get_argument_value (seconds);
+      if fix_eql(seconds, fix_fri(one_day, delay_small)) then
+	 -- Normalize to next day.
+         [days, seconds] :=  
+		adjust_ds(days_in(year, month, day), seconds);
+         [year, month, day] := ymd_of(days) ;
+      end if;
+								
+      valstack with:= ["array_ivalue", [year,month,day,seconds],1,4];
+
+      if year < 1901 or year > 2099 then
+	raise ("TIME_ERROR","year out of range");
+
+      elseif year mod 4 = 0 and month = 2 then
+	if day > 29 then
+            raise ("TIME_ERROR", "February overflow");
+	end if;
+
+      elseif day > days_in_month (month) then 
+         raise ("TIME_ERROR", "day out of range");
+      end if;
+--
+-- function "+" (LEFT : TIME;       RIGHT : DURATION)	return TIME;
+-- function "+" (LEFT : DURATION;   RIGHT : TIME)	return TIME;
+-- function "-" (LEFT : TIME;	   RIGHT : DURATION)	return TIME;
+--
+
+    when "ADD_TIME_DUR", "ADD_DUR_TIME", "SUB_TIME_DUR" => 
+      get_argument_value (left);
+      get_argument_value (right);
+      case operation 
+	when "ADD_TIME_DUR" => 
+	  dur := right;
+	when "ADD_DUR_TIME" => 
+	  [dur, left] := [left, right];
+	when "SUB_TIME_DUR" => 
+	  dur := fix_umin(right);
+      end case;
+-- -left- is now the time value.
+      y := year_val(left);
+      m := month_val(left);
+      d := day_val(left);
+      s := seconds_val(left);
+      days := days_in(y, m, d);
+      secs := fix_add(dur, s);
+      [days, secs] := adjust_ds(days, secs);
+      ymds := ymd_of(days) with secs;
+      if ymds(1) < 1901 or ymds(1) > 2099 then
+	raise ("TIME_ERROR","year out of range");
+      else
+	valstack with:= ["array_ivalue", ymds, 1, 4];
+      end if;
+
+--
+-- function "-" (LEFT : TIME;	RIGHT : TIME)	return DURATION;
+--
+
+    when "SUB_TIME_TIME" => 
+      get_argument_value (left);
+      get_argument_value (right);
+
+      y1 := year_val(left);
+      m1 := month_val(left);
+      d1 := day_val(left);
+      s1 := seconds_val(left);
+
+      y2 := year_val(right);
+      m2 := month_val(right);
+      d2 := day_val(right);
+      s2 := seconds_val(right);
+
+      days := days_in(y1, m1, d1) - days_in(y2, m2, d2);
+      secs := fix_sub(s1, s2);
+      dur := fix_add(fix_fri(days * one_day, delay_small), secs);
+      if fix_lss(dur, fix_fri(- one_day, delay_small)) or
+         fix_gtr(dur, fix_fri(one_day, delay_small))   then
+	raise ("TIME_ERROR","out of range");
+      else
+        valstack with:= dur;
+      end if;
+
+--
+-- function "<"  (LEFT, RIGHT : TIME) return BOOLEAN;
+-- function "<=" (LEFT, RIGHT : TIME) return BOOLEAN;
+-- function ">"  (LEFT, RIGHT : TIME) return BOOLEAN;
+-- function ">=" (LEFT, RIGHT : TIME) return BOOLEAN;
+--
+
+    when "LT_TIME", "LE_TIME", "GT_TIME", "GE_TIME" => 
+      get_argument_value (left);
+      get_argument_value (right);
+
+      y1 := year_val(left);
+      m1 := month_val(left);
+      d1 := day_val(left);
+      s1 := seconds_val(left);
+
+      y2 := year_val(right);
+      m2 := month_val(right);
+      d2 := day_val(right);
+      s2 := seconds_val(right);
+
+      days1 := days_in(y1, m1, d1);
+      days2 := days_in(y2, m2, d2);
+      dur1  := fix_add (fix_fri (days1 * one_day, delay_small), s1);
+      dur2  := fix_add (fix_fri (days2 * one_day, delay_small), s2);
+
+       if case operation 
+            when "LT_TIME" => 
+               fix_lss(dur1, dur2)
+            when "LE_TIME" => 
+               fix_leq(dur1, dur2)
+            when "GT_TIME" => 
+               fix_gtr(dur1, dur2)
+            when "GE_TIME" => 
+               fix_geq(dur1, dur2)
+          otherwise =>
+               false
+          end case
+       then 
+     	   valstack with := boolean_true ;
+       else 
+           valstack with := boolean_false ;
+       end if;
+
+  end case;
+
+end calendar;
+
+--
+-- Utility routines used by the SEQUENTIAL_IO routines.
+--
+procedure open_seq_io (opn);
+--
+-- Create or open an input or output file.  If the file is to be
+-- created, an entry in the data structures is created and it
+-- starts out empty.  If the file is to be opened, the existing
+-- file is read in and the data structures initialized for that
+-- file.
+--
+    get_argument_addr (file_addr);
+    get_argument_value (tmode);
+    get_argument_value (tname);
+    get_argument_value (tform);
+    get_argument_addr (element_type);
+
+    tname := make_string (tname);
+    tform := make_string (tform);
+
+    if internal_file_not_closed (file_addr) then
+       return;
+    end if;
+
+    if #openfiles = max_open_files then
+       raise ("USE_ERROR", "too many file currently open");
+       return;
+    end if;
+
+    assert exists num in [1..#openfiles+1] | num notin openfiles;
+ 
+    -- A null string given for a file name indicates a temporary file.
+
+    if tname = "" then
+	ti := time();
+	tname := "S" + ti(1..2) + ti(4..5) + ti(7..8) + str(num) + ".TMP";
+	tname := full_file_name(tname);
+	siotemps with := tname;
+    else
+	tname := full_file_name(tname);
+    end if;
+
+
+    filenum := mk_file_rec (num);
+    file_no := convert_filenum(filenum);
+    if external_file_not_closed (tname) or invalid_file_name(tname) then
+       return;
+    end if;
+
+    if opn = "create"  then      -- create input or output file
+
+       if (iohandle(file_no) := open (tname, "BINARY-OUT")) = om  then
+          raise ("NAME_ERROR","invalid file name");
+          return;
+       end if;
+
+       putb (iohandle(file_no), "SEQUENTIAL");
+
+       -- Create a file of mode IN_FILE
+
+       if tmode = in_file then
+          close (iohandle(file_no));
+          iohandle(file_no) := open (tname, "BINARY-IN");
+          getb (iohandle(file_no), file_type);
+       end if;
+
+    else		--  open an input or output file
+
+       if (iohandle(file_no) := open (tname, "BINARY-IN")) = om then
+          raise ("NAME_ERROR","file not found");
+    	  return;
+       end if;
+
+       getb (iohandle(file_no), file_type);
+
+       if file_type /= "SEQUENTIAL" then
+          raise ("USE_ERROR","not sequential");
+          close (iohandle(file_no));
+          return;
+       end if;
+
+       -- Open a file with mode OUT_FILE
+
+       if tmode = sio_out_file then
+          close (iohandle(file_no));
+          iohandle(file_no) := open (tname, "BINARY-OUT");
+          putb (iohandle(file_no), "SEQUENTIAL");
+       end if;
+
+    end if;
+
+    openfiles with:= file_no;
+    iofname(file_no) := tname;
+    sioform(file_no)  := tform;
+    siomode(file_no)  := tmode;
+
+    setval (file_addr, filenum, om);
+
+end open_seq_io;
+
+
+procedure close_seq_io;
+--
+-- Close a file and delete its entries from the data structures.
+--
+    close (iohandle(file_no));
+  
+    openfiles 	less:= file_no;
+    iofname(file_no) := om; 
+    sioform(file_no) := om;
+    siomode(file_no) := om; 
+    sio_buffer(file_no) := om;
+
+end close_seq_io;
+
+--
+-- Utility routines used by the DIRECT_IO routines.
+--
+
+procedure open_dir_io (opn);
+--
+-- Create or open an input or output file.  If the file is to be
+-- created, an entry in the data structures is created and it
+-- starts out empty.  If the file is to be opened, the existing
+-- file is read in and the data structures initialized for that
+-- file.
+--
+    get_argument_addr (file_addr);
+    get_argument_value (tmode);
+    get_argument_value (tname);
+    get_argument_value (tform);
+    get_argument_addr (element_type);
+
+    tname := make_string (tname);
+    tform := make_string (tform);
+    if internal_file_not_closed (file_addr) then
+       return;
+    end if;
+
+    if #openfiles = max_open_files then
+       raise ("USE_ERROR", "too many file currently open");
+       return;
+    end if;
+
+    assert exists num in [1..#openfiles+1] | num notin openfiles;
+
+    -- A null string given for a file name indicates a temporary file.
+
+    if tname = "" then
+	ti := time();
+	tname := "D" + ti(1..2) + ti(4..5) + ti(7..8) + str(num) + ".TMP";
+    	tname := full_file_name(tname);
+	diotemps with := tname;
+    else
+    	tname := full_file_name(tname);
+    end if;
+
+
+    filenum := mk_file_rec (num);
+    file_no := convert_filenum(filenum);
+    if external_file_not_closed (tname) or invalid_file_name(tname) then
+       return;
+    end if;
+
+    if opn = "create" then      -- create input, output and inout files
+       
+       if (iohandle(file_no) := open (tname, "BINARY-OUT")) = om  then
+          raise ("NAME_ERROR","invalid filename");
+          return;
+       end if;
+
+       close (iohandle(file_no));
+       dfile(file_no)    := [];
+
+       -- Create a file of mode IN_FILE
+
+       if tmode = in_file then
+          iohandle(file_no) := open (tname, "BINARY-OUT");
+          putb (iohandle(file_no), "DIRECT", []);
+          close (iohandle(file_no));
+       end if;
+    	
+
+    else			--  open input, inout, output files
+
+       if (iohandle(file_no) := open (tname, "BINARY-IN")) = om  then
+    	  raise ("NAME_ERROR","file not found");
+    	  return;
+       end if;
+       getb (iohandle(file_no), file_type);
+       if file_type /= "DIRECT" then
+          raise ("USE_ERROR","file not direct");
+          close (tname);
+          return;
+       end if;
+       getb (iohandle(file_no), dfile(file_no));
+       if dfile(file_no) = om or not is_tuple(dfile(file_no)) then
+          raise ("USE_ERROR","");
+          close (iohandle(file_no));
+          return;
+        end if;
+        close (iohandle(file_no));
+    end if;
+
+    openfiles with:= file_no;
+    iofname(file_no) := tname;
+    dioform(file_no)  := tform;
+    diomode(file_no)  := tmode;
+    dpos(file_no)     := 1;
+    dsize(file_no)    := #dfile(file_no);
+
+    setval (file_addr, filenum, om);
+
+end open_dir_io;
+
+procedure close_dir_io;
+--
+-- Close a file and delete its entries from the data structures.
+--
+    if diomode(file_no) in {dio_out_file, inout_file} then
+       iohandle(file_no ) := open (iofname(file_no), "BINARY-OUT");
+       putb (iohandle(file_no), "DIRECT", dfile(file_no));
+       close (iohandle(file_no));
+    end if;
+
+    openfiles less:= file_no;
+    iofname(file_no) := om;
+    dioform(file_no) := om; 
+    diomode(file_no) := om;
+    dfile(file_no)   := om;
+    dpos(file_no)    := om;
+    dsize(file_no)   := om;
+
+end close_dir_io;
+
+--
+-- Utility routines used by the TEXT_IO routines.  
+--
+
+procedure open_textio (opn);
+--
+-- This routine is called by the OPEN and CREATE portions of the
+-- PREDEF procedure to perform common data structure operations 
+-- for text_io.
+--
+  get_argument_addr (file_addr);
+  get_argument_value (tmode);
+  get_argument_value (tname);
+  get_argument_value (tform);
+  fname := make_string(tname);
+  form  := make_string (tform);
+  if internal_file_not_closed (file_addr) then
+     return;
+  end if;
+
+  if #openfiles = max_open_files then
+     raise ("USE_ERROR", "too many file currently open");
+     return;
+  end if;
+
+  -- Allocate file identifier and adjust data structures for new file.
+ 
+  assert exists num in [1..#openfiles+1] | num notin openfiles;
+
+  if fname = "" then
+	ti := time();
+	fname := "T" + ti(1..2) + ti(4..5) + ti(7..8) + str(num) + ".TMP";
+	fname := full_file_name(fname);
+	tiotemps with := fname;
+  else
+	fname := full_file_name(fname);
+  end if;
+
+  filenum := mk_file_rec (num);
+  file_no := convert_filenum(filenum);
+  if external_file_not_closed(fname) or invalid_file_name(fname) then
+     return;
+  end if;
+
+  if opn = "create"  then      -- create input or output file
+
+     if (iohandle(file_no) := open (fname, "TEXT-OUT")) = om  then
+        raise ("NAME_ERROR","invalid file name");
+        return;
+     end if;
+
+     -- Create a file of mode IN_FILE
+
+     if tmode = in_file then
+        close (iohandle(file_no));
+        iohandle(file_no) := open (fname, "TEXT-IN");
+     end if;
+
+  else		--  open an input or output file
+
+     --
+     -- According to AI-00048:
+     -- Opening a file with IN_FILE mode which is the default output file
+     -- will raise MODE_ERROR.
+     -- Opening a file with OUT_FILE mode which is the default input file
+     -- will raise MODE_ERROR.
+     -- The values to be checked is in current_in_file_name and
+     -- current_out_file_name which are the names of the default files 
+     -- These names are saved so that they are available even after the 
+     -- default files are closed and their IOFNAME values are lost.
+     --
+
+     if fname = current_in_file_name and tmode = tio_out_file then
+        raise ("MODE_ERROR","File is default in file");
+    	return;
+     elseif fname = current_out_file_name and tmode = in_file then
+        raise ("MODE_ERROR","File is default out file");
+    	return;
+     end if;
+
+     if (iohandle(file_no) := open (fname, "TEXT-IN")) = om then
+        raise ("NAME_ERROR","file not found");
+    	return;
+     end if;
+
+     -- Open a file with mode OUT_FILE
+
+     if tmode = tio_out_file then
+        close (iohandle(file_no));
+        iohandle(file_no) := open (fname, "TEXT-OUT");
+     end if;
+
+  end if;
+
+  openfiles with:= file_no;
+  iofname(file_no) 	:= fname;
+  tioform(file_no)     	:= form;
+  tiomode(file_no)	:= tmode;
+  page_number(file_no)  := 1;
+  line_number(file_no)  := 1;
+  column_number(file_no):= 1;
+  text(file_no)		:= if tmode = in_file then "  " else "" end if;
+  new_line(file_no) 	:= true;
+  nextline(file_no)    	:= om;
+  nextline2(file_no)   	:= om;
+  line_length(file_no) 	:= 0;
+  page_length(file_no) 	:= 0;
+  file_not_read_yet(file_no) := true;
+
+  setval(file_addr, filenum, om);
+
+end open_textio;
+
+procedure close_textio;
+--
+-- This routine is called by the CLOSE portion of the
+-- PREDEF procedure to perform common data structure operations
+-- for text_io.
+--
+-- Perform various actions based on whether this is an input or output
+-- file.
+ 
+
+  if tiomode(file_no) = tio_out_file then  
+   
+       -- Simulate effect of NEW_PAGE unless current page is
+       -- already terminated.
+
+       if not page_terminated() then
+
+          -- Simulate NEW_PAGE
+          -- If the current line is not terminated or if the current
+          -- page is empty (COL = 1 and PAGE = 1) output line 
+          -- terminator.
+          if text(file_no) /= "" or 
+	     (column_number(file_no) =1 and line_number(file_no) = 1 ) then
+             put_line;
+          end if;
+
+          -- Output Page terminator
+          export (iohandle(file_no), page_mark);
+       end if;
+
+
+  end if;
+
+ 
+  -- Sever the association between the given file and its associated
+  -- external file.  The given file is left closed.  Do not perform 
+  -- system closes on the standard input and output files.
+
+  if filenum notin {standard_in_file, standard_out_file} then
+     close (iohandle(file_no));
+  end if;
+
+  -- Remove file from data structures.
+ 
+  openfiles 	less:= file_no;
+  iofname(file_no) 	 := om;
+  tioform(file_no)	 := om;
+  page_number(file_no)   := om;
+  line_number(file_no) 	 := om;
+  column_number(file_no) := om;
+  new_line(file_no) 	 := om;
+  line_length(file_no) 	 := om;
+  page_length(file_no) 	 := om;
+  tiomode(file_no) 	 := om;
+  text(file_no)		 := om;
+  nextline(file_no)      := om;
+  nextline2(file_no)     := om;
+  file_not_read_yet(file_no) := om;
+
+end close_textio;
+
+procedure read_elem;
+--
+-- Read the next element of a sequential input file.
+--
+  getb (iohandle(file_no), elem);
+  return elem;
+end read_elem;
+
+procedure line_return;
+--
+-- Perform a line return on an input file.
+--
+  line_number(file_no)   := add(line_number(file_no),1);
+  column_number(file_no) := 1;
+  new_line(file_no)      := true;
+  text(file_no)          := "  ";
+
+end line_return;
+
+procedure get_line();
+--
+-- Get the next line of text for an input file.
+--
+
+  new_line(file_no) := false;
+
+  if nextline(file_no) /= om then
+     text(file_no) := nextline(file_no);
+     nextline(file_no) := nextline2(file_no);
+     nextline2(file_no) := om;
+     if text(file_no) = page_mark then
+        page_number(file_no)   := add(page_number(file_no),1);
+        line_number(file_no)   := 1;
+        column_number(file_no) := 1;
+        new_line(file_no) := true;
+     else
+       text(file_no) +:= " ";
+     end if;
+     return successfully;
+  end if;      
+
+  import (iohandle(file_no),textline);
+  if textline = om then
+     text(file_no) := " ";
+     return exception;
+  end if;
+  text(file_no) := textline;
+  if text(file_no) = page_mark then
+     page_number(file_no)   := add(page_number(file_no), 1);
+     line_number(file_no)   := 1;
+     column_number(file_no) := 1; 
+     new_line(file_no) := true;
+  else   
+     text(file_no) +:= " ";
+  end if;
+
+return successfully;
+
+end get_line; 
+
+procedure put_line;
+--
+-- Perform a line return on an output file.
+--
+  export (iohandle(file_no), text(file_no));
+  if bounded_page_length() and line_number(file_no) >= page_length(file_no) then
+    export (iohandle(file_no), page_mark);
+    page_number(file_no) := add(page_number(file_no),1);
+    line_number(file_no) := 1;
+  else
+    line_number(file_no) := add(line_number(file_no),1);
+  end if;
+  text(file_no)  := "";
+  column_number(file_no)   := 1;
+
+end put_line;
+
+procedure put_string(s);
+--
+-- Put a string into the output file:  if the file is of unbounded
+-- line length, then put the entire string onto the current text
+-- line;  if the file is of bounded line length, then perform line
+-- breaks where necessary.
+--
+ 
+  if cdebug5 > 5 then
+      to_errfile ("COL "+ str(column_number(file_no)) +
+	"Putting string " + s + " to file " + str(file_no) );
+  end if;
+ 
+  if unbounded_line_length() then
+    text(file_no) +:= s;
+    incr_col (#s);
+  else   -- BOUNDED_LINE_LENGTH
+    while #s > 0 loop 
+      n := line_length(file_no) - column_number(file_no) + 1;
+      if n <= 0 then
+	put_line;
+	n := line_length(file_no);
+      end if;
+      if #s <= n then
+	text(file_no) +:= s;
+	incr_col (#s);
+	s	:= "";
+      else  -- fill up rest of line
+	text(file_no) +:= s(1..n);
+	put_line;
+	s := s(n+1..);
+      end if;
+    end loop;
+  end if;
+
+end put_string;
+
+procedure put_buffer (buffer, width, flag);
+--
+-- This routine writes an item (passed in as a string) with appropriate 
+-- blank padding.
+--
+ 
+  -- Adjust for minimum width setting.
+ 
+  if #buffer < width then
+    case flag  
+      when "int","float","fixed" => 
+	buffer := (width - #buffer) * " " + buffer;
+      otherwise =>
+	buffer := buffer + (width - #buffer) * " ";
+    end case;
+  end if;
+ 
+  -- Ensure the buffer size does not exceed the line length
+ 
+  if bounded_line_length() then
+    if #buffer > line_length(file_no) then
+      raise ("LAYOUT_ERROR","line too big");
+      return exception;
+ 
+    elseif column_number(file_no) + #buffer - 1 > line_length(file_no) then
+      -- Move to new line if buffer does not fit on current line
+      put_line;
+    end if;
+
+  end if;
+ 
+  -- Output buffer
+
+  put_string (buffer); 
+  return successfully;
+
+end put_buffer;
+
+procedure adjust_base (item, bse);
+
+  hex := {[0,"0"],  [1,"1"],  [2,"2"],  [3,"3"],  [4,"4"], 
+	       [5,"5"],  [6,"6"],  [7,"7"],  [8,"8"],  [9,"9"], 
+	       [10,"A"], [11,"B"], [12,"C"], [13,"D"], [14,"E"],
+	       [15,"F"]};
+
+  if cdebug5 >= 9 then
+    to_errfile 
+	("Adjust_base: item = " + str(item) + ", bse = " + str(bse) );
+  end if;
+
+  if bse = 10 then
+    return str(item) ;
+  elseif item = 0 then
+    return str(bse) + "#0#";
+  else
+    if item < 0 then
+      num  := "-" + str(bse) + "#";
+      item := abs(item) ;
+    else
+      num  := str(bse) + "#";
+    end if;
+
+    -- The number of significant digits in base BSE of ITEM is
+    --		floor (log_base_BSE ITEM + 1)
+    -- where the base BSE logarithm of ITEM is
+    --		log_base_BSE ITEM = log_2 ITEM / log_2 BSE
+
+    sigs := fix(log(float(item) ) / log(float(bse) ) + 1.0);
+
+    if cdebug5 >= 9 then
+      to_errfile ("#signicant digits: sigs = " + str(sigs) );
+    end if;
+
+    for i in [sigs, sigs-1..1] loop 
+      place   := bse ** (i-1);
+      dig_val := item / place;
+      num    +:= hex (dig_val);
+      item   -:= dig_val * place;
+    end loop;
+
+    num +:= "#";
+
+    return num;
+  end if;
+
+end adjust_base;
+
+procedure scan_blanks();
+--
+-- When performing a GET on certain types of data, leading spaces and
+-- line breaks are ignored.  This routine performs that function.   
+-- It sets PAGE, LINE and COL to point to the first non-blank found. 
+--
+
+  if check_new_line() = exception then
+     return exception;
+  end if;
+  while text(file_no)(column_number(file_no)) in blanks loop 
+    if (s := span_chars (blanks)) = 0 then
+      incr_col (#text(file_no)-column_number(file_no));
+      if check_new_line() = exception then
+        return exception;
+      end if;
+    else
+      incr_col (s - column_number(file_no));
+    end if;
+  end loop;
+
+  return successfully;
+ 
+end scan_blanks;
+
+procedure scan_blanks_width (rw width);
+--
+-- This routine scans leading spaces on a line and sets COL to point to 
+-- the first non-blank found. WIDTH is the maximum number of spaces that 
+-- can be scanned.  If more than WIDTH spaces need to be scanned a 
+-- DATA_ERROR exception is raised.
+--
+if end_of_line() then
+   raise ("DATA_ERROR","at end of line");
+   return exception;
+end if;
+
+if text(file_no)(column_number(file_no)) in blanks then
+   if (s := span_chars (blanks)) = 0 or       -- Rest of line is all blanks
+      (s - column_number(file_no)) <= 0 then  -- More leading blanks than width
+      incr_col (width);
+      raise ("DATA_ERROR","item not found");
+      return exception;
+   else
+     width -:= s - column_number(file_no) ;
+     incr_col (s - column_number(file_no));
+   end if;
+end if;
+
+return successfully;
+ 
+end scan_blanks_width;
+
+procedure scan_ada_enum;
+--
+-- Scan an Ada enumeration literal, which may be an identifier or
+-- a character literal.
+--
+const
+    alpha := {"A","B","C","D","E","F","G","H","I","J","K","L","M",
+    	     "N","O","P","Q","R","S","T","U","V","W","X","Y","Z",
+    	     "a","b","c","d","e","f","g","h","i","j","k","l","m",
+    	     "n","o","p","q","r","s","t","u","v","w","x","y","z"},
+
+    printing_chars := 
+    	    {"A","B","C","D","E","F","G","H","I","J","K","L","M",
+    	     "N","O","P","Q","R","S","T","U","V","W","X","Y","Z",
+    	     "a","b","c","d","e","f","g","h","i","j","k","l","m",
+    	     "n","o","p","q","r","s","t","u","v","w","x","y","z",
+    	     "0","1","2","3","4","5","6","7","8","9",
+    	     " ","!","\"","#","$","%","&","'","(",")","*","+",",",
+    	     "-",".","/",":",";","<","=",">","?","@","[","\\","]",
+    	     "^","_","`","{","|","{","~"};
+
+  -- Scan over leading blanks or linemarks:
+
+  if scan_blanks () = exception then
+    return exception;
+  end if;
+
+  -- Try identifier:
+
+  if text(file_no)(column_number(file_no)) in alpha then
+    [enum_string, -, scan_errors] := 
+		scan_identifier (text(file_no)(column_number(file_no)..));
+    if #scan_errors > 0 then
+      raise ("DATA_ERROR","");
+
+      -- Skip past bad object to next blank.
+
+       bad_location := scan_errors(1) ?  [[0,0],"",0];
+       bad_location := bad_location(3) ;
+       incr_col(bad_location);
+
+ 
+      return exception;
+    end if;
+    incr_col (#enum_string);
+    enum_string := upper_case_of(enum_string);
+
+  -- Try character literal:
+
+  elseif text(file_no)(column_number(file_no)) = "'" then
+    if text(file_no)(column_number(file_no)+1) in printing_chars and
+       text(file_no)(column_number(file_no)+2)  = "'" then
+      enum_string := text(file_no)
+			 (column_number(file_no)..column_number(file_no)+2);
+      incr_col (3);
+    else
+      raise ("DATA_ERROR","");
+
+      -- Skip past bad object to next blank.
+
+      column_number(file_no) := break_on_chars (blanks);
+      return exception;
+    end if;
+
+  else  -- Error.
+    raise ("DATA_ERROR","");
+
+    -- Keep Column where it is 
+
+    return exception;
+  end if;
+
+  return enum_string;
+
+end scan_ada_enum;
+
+procedure scan_ada_enum_string (from_str);
+--
+-- Scan an Ada enumeration literal, which may be an identifier or
+-- a character literal.
+--
+    const
+	alpha := {"A","B","C","D","E","F","G","H","I","J","K","L","M",
+    	     	"N","O","P","Q","R","S","T","U","V","W","X","Y","Z",
+    	     	"a","b","c","d","e","f","g","h","i","j","k","l","m",
+    	     	"n","o","p","q","r","s","t","u","v","w","x","y","z"},
+
+         printing_chars := 
+    	    	{"A","B","C","D","E","F","G","H","I","J","K","L","M",
+    	     	"N","O","P","Q","R","S","T","U","V","W","X","Y","Z",
+    	     	"a","b","c","d","e","f","g","h","i","j","k","l","m",
+    	     	"n","o","p","q","r","s","t","u","v","w","x","y","z",
+    	     	"0","1","2","3","4","5","6","7","8","9",
+    	     	" ","!","\"","#","$","%","&","'","(",")","*","+",",",
+    	     	"-",".","/",":",";","<","=",">","?","@","[","\\","]",
+    	     	"^","_","`","{","|","{","~"};
+	
+  -- Scan over leading blanks 
+
+  [-,-,str_lbd,str_ubd] := from_str;
+  str_val := make_string (from_str);
+  str_len := #str_val;
+  last_char := 0;
+  blks := " " + char (9);
+  if (junk := span (str_val, blks)) /= "" then
+     last_char +:= #junk;
+  end if;
+
+  if last_char = str_len then
+     raise ("END_ERROR","");
+     return [exception, exception];
+  end if;
+
+  -- Try identifier:
+
+  if str_val(1) in alpha then
+    [enum_string, -, scan_errors] := scan_identifier (str_val + " ");
+    if #scan_errors > 0 then
+      raise ("DATA_ERROR","");
+      return [exception, exception];
+    end if;
+
+    enum_string := upper_case_of(enum_string);
+
+  -- Try character literal:
+
+  elseif str_val(1) = "'" then
+    if str_val(2) in printing_chars and
+       str_val(3) = "'" then
+      enum_string := str_val (1..3);
+    else
+      raise ("DATA_ERROR","");
+      return [exception, exception];
+    end if;
+
+  else  -- Error.
+    raise ("DATA_ERROR","");
+    return [exception, exception];
+  end if;
+
+  last_char +:= #enum_string + str_lbd - 1;
+  return [enum_string, last_char];
+
+end scan_ada_enum_string;
+
+procedure scan_ada_number (num_type, width);
+--
+-- If WIDTH is zero returns number converted from longest potential 
+-- string that could be an Ada number of type integer or real with 
+-- an optional leading sign; exactly WIDTH characters are read or the
+-- characters (possibly none) up to a line terminator whichever comes 
+-- first.  If this number does not fit within the bounds LBD..UBD then 
+-- CONSTRAINT_ERROR is raised.
+--
+[tag_type, lbd, ubd, precision] := num_type;
+
+  -- Skip over leading blanks, linemarks or pagemarks:
+  maxchars := width;
+  if width = 0 then
+     if scan_blanks () = exception then
+        return exception;
+     end if;
+  else
+     if scan_blanks_width (maxchars)= exception  then
+        return exception;
+     end if;
+  end if;
+  
+  -- Scan optional leading sign:
+
+  if text(file_no)(column_number(file_no)) = "+" then
+    sgn := "";
+    incr_col (1);
+  elseif text(file_no)(column_number(file_no)) = "-" then
+    sgn := "-";
+    incr_col (1);
+  else 
+    sgn := "";
+  end if;
+
+  if sgn /= "" then 
+     maxchars -:= 1; 
+  end if;
+
+  if width = 0 then
+     endpos := #text(file_no) - 1;
+  else
+     if maxchars = 0 then
+       raise ("DATA_ERROR","");
+       return exception;
+     end if;  
+     endpos := (column_number(file_no) + maxchars - 1) min (#text(file_no) - 1);
+  end if;
+
+  -- Scan number:
+  
+  scan_type := if tag_type in {"float", "fixed"} then "real"
+               else "integer" end if;
+
+  [num_string, remline, scan_errors] := 
+    scan_number(text(file_no)(column_number(file_no)..endpos) + " ", scan_type);
+  
+
+  if width /= 0 and remline /= " " then
+     raise ("DATA_ERROR","");
+     column_number(file_no) := endpos + 1;
+     return exception;
+  end if;
+
+  if #scan_errors > 0
+  then
+    raise ("DATA_ERROR","");
+
+    -- Skip past bad object to next blank.
+    bad_location := scan_errors(1) ?  [[0,0],"",0];
+    bad_location := bad_location(3) ;
+    incr_col(bad_location);
+    return exception;
+  end if;
+
+  if num_string = ""
+  then
+    raise ("DATA_ERROR","");
+
+    -- Skip past bad object to next blank.
+    column_number(file_no) := break_on_chars (blanks);
+    return exception;
+  end if;
+
+  incr_col (endpos - #remline - column_number(file_no) + 2);
+
+  numval := adaval (tag_type, num_string,precision);
+  if numval = "OVERFLOW" then
+    raise ("DATA_ERROR","overflow");
+    return exception;
+  end if;
+
+  if sgn = "-" then
+     if tag_type = "integer" then 
+        numval := -numval;
+     elseif tag_type = "float" then
+        numval := float_umin(numval) ;
+     elseif tag_type = "fixed" then
+        numval := fix_umin(numval);
+     end if;
+  end if;
+
+  if out_of_bounds (tag_type, numval, lbd, ubd) then
+    raise ("DATA_ERROR","out of bounds");
+    return exception;
+  end if;
+
+  return numval;
+
+  procedure out_of_bounds(typ, val, lbd, ubd);
+      case typ 
+         when "integer" => 
+	      return ( val < lbd or val > ubd);
+         when "float" =>    
+              return (float_lss(val,lbd) or float_gtr(val,ubd));
+         when "fixed" =>    
+             return (fix_lss(val,lbd) or fix_gtr(val,ubd));
+         otherwise => return false;
+      end case;
+  end out_of_bounds;
+
+
+
+end scan_ada_number; 
+
+procedure scan_ada_number_string (num_type, from_str);
+--
+  [tag_type,lbd,ubd,precision] := num_type;
+  [-,-,str_lbd,str_ubd] := from_str;
+  str_val := make_string (from_str);
+  str_len := #str_val;
+  last_char := 0;
+  blks := " " + char (9);
+  
+  --SETL2 bug in the code below
+  --if (junk := span (str_val, blks)) /= "" then
+     --last_char +:= #junk;
+  --end if;
+
+  junk := span (str_val, blks);
+  if junk /= "" then
+     last_char +:= #junk;
+  end if;
+
+  if last_char = str_len then
+     raise ("END_ERROR","");
+     return [exception, exception];
+  end if;
+  
+  -- Scan optional leading sign:
+
+  if str_val(1) = "+" then
+    sgn := "";
+    last_char +:= 1;
+    str_val   := str_val(2..);
+  elseif str_val(1) = "-" then
+    sgn := "-";
+    last_char +:= 1;
+    str_val   := str_val(2..);
+  else 
+    sgn := "";
+  end if;
+
+  if last_char = str_len then 
+     raise ("DATA_ERROR","");
+     return [exception, exception];
+  end if;
+
+  -- Scan number:
+
+  scan_type := if tag_type in {"fixed", "float"} then "real"
+               else "integer" end if;
+
+  [num_string, remline, scan_errors] := 
+    scan_number (str_val + " ", scan_type);
+
+  if num_string = ""
+  or #scan_errors > 0
+  then
+    raise ("DATA_ERROR","");
+    return [exception, exception];
+  end if;
+
+  last_char +:= #str_val - #remline + str_lbd;
+
+  numval := adaval (tag_type, num_string, precision);
+  if numval = "OVERFLOW" then
+    raise ("DATA_ERROR","overflow");
+    return [exception, exception];
+  end if;
+
+  if sgn = "-" then
+     if tag_type = "integer" then 
+        numval := -numval;
+     elseif tag_type = "float" then
+        numval := float_umin(numval) ;
+     elseif tag_type = "fixed" then
+        numval := fix_umin(numval);
+     end if;
+  end if;
+
+  if out_of_bounds (tag_type, numval, lbd, ubd) then
+    raise ("DATA_ERROR","out of bounds");
+    return [exception, exception];
+  end if;
+
+  return [numval, last_char];
+
+  procedure out_of_bounds(typ, val, lbd, ubd);
+      case typ 
+         when "integer" => 
+	      return ( val < lbd or val > ubd);
+         when "float" =>    
+              return (float_lss(val,lbd) or float_gtr(val,ubd));
+         when "fixed" =>    
+             return (fix_lss(val,lbd) or fix_gtr(val,ubd));
+         otherwise => return false;
+      end case;
+ end out_of_bounds;
+
+end scan_ada_number_string;
+
+procedure fix_toflts (u, small);
+--
+-- fix_toflts converts a fixed point number to a string.
+--
+  den_len := 0 ;         	        -- Count number of places in denominator
+  [num, den] := fix_tra(u, small) ;	-- to determine number of decimal places
+
+  while den > 1 loop  den_len +:= 1 ; den /:= 10 ; end loop;
+
+  s := fix_tos (u, small, den_len) ;	-- Convert to decimal string
+
+  return s;
+
+end fix_toflts;
+
+procedure import(file_handle, rw line); 
+--
+-- This routine is used to read a line of input 
+
+    if file_handle = "stdin" then
+       get (line);
+    else
+       geta(file_handle, line);
+    end if;
+end import;
+
+procedure export(file_handle,tline); 
+--
+-- This routine is used to write a line of text to a physical file.
+-- tlines that are too long are written as multiple lines.
+
+  const mll := max_line_length - 1;
+
+   while #tline > mll loop
+    if file_handle = "stdout" then
+       print (tline(1 .. mll));
+    else
+       printa (file_handle, tline(1 .. mll));
+    end if;
+    tline := tline(mll + 1 .. );
+  end loop;
+
+  if file_handle = "stdout" then
+     print (tline);
+  else
+     printa (file_handle, tline);
+  end if;
+  return successfully;
+ 
+end export;
+
+--T+ proc PREDEF_TERM : Termination routine for Input/Output packages.
+procedure predef_term;
+--
+-- SEQUENTIAL_IO, DIRECT_IO and TEXT_IO termination routine. 
+--
+-- Clear out all the buffers of unclosed files and then close them.
+--
+  --if open_status then 
+      --close (datafile);
+  --end if;
+
+  for i in openfiles | siomode(i) = sio_out_file  loop 
+      filenum := mk_file_rec (i);
+      file_no := convert_filenum(filenum);
+      close_seq_io;
+  end loop;
+
+  for i in openfiles | diomode(i) in {dio_out_file, inout_file}  loop 
+      filenum := mk_file_rec (i);
+      file_no := convert_filenum(filenum);
+      close_dir_io;
+  end loop;
+
+  for i in openfiles | tiomode(i) = tio_out_file loop 
+      filenum := mk_file_rec (i);
+      file_no := convert_filenum(filenum);
+      close_textio;
+  end loop;
+
+  for name in siotemps + diotemps + tiotemps loop 
+     delete (name);
+  end loop;
+
+end predef_term;
+
+procedure add (a,b);        
+return
+  if a = count_last then -1
+  elseif a > 0 then a + b
+  else a
+  end if;
+end add;
+end predefs;

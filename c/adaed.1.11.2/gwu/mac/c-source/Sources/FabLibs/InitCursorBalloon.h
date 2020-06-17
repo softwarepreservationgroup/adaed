@@ -1,0 +1,1 @@
+OSErr InitCursorBalloonManager(void);

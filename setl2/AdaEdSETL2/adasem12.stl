@@ -1,0 +1,1934 @@
+-- Copyright 1990, Ada Project, Courant Institute, New York University
+--Header: /cs.a/ada/ada/src/hll/adasem12.stl,v 1.56 90/07/09 16:53:45 schonber Exp $
+package body adasem12;
+
+use globals;
+use adasem1;
+use adasem2;
+use adasem3;
+use adasem4;
+use adasem5;
+use adasem6;
+use adasem7;
+use adasem8;
+use adasem9;
+use adasem10;
+use adasem11;
+use adasem13;
+use evalstat;
+use adalib;
+use adaio;
+use adaarith;
+
+--
+--T+ 12. Generic Units 
+--T+ 12.1 Generic Declarations
+--S+ Generic Subprogram Specifications
+procedure generic_subprogram_specification(node) ;
+sem_trace_proc_entry(3, "Generic_Subprogram_Specification");
+sem_trace(4,str(node)) ;
+ 
+-- Build specifications of a generic subprogram. We create a scope for
+-- it, and define within the names of generics and formal parameters.
+-- The signature of the generic subprogram includes the generic parameter
+-- list and the formals. These two are unpacked during instantiation.
+ 
+[kind, id_node, generic_part_node, formal_part, ret_node] := ast(node);
+
+    id := adasem(id_node) ;
+
+    new_compunit("subprog spec", id) ;
+
+    if is_comp_unit() then 
+       generic_units with:= unit_name;
+    end if;
+
+    gen_name := find_new(id) ;
+    declared(gen_name) := {} ;
+    ST(  gen_name).nature := "generic_part" ;
+    newscope(gen_name) ; 
+     
+    [gen_list, gen_code] := adasem(generic_part_node) ;
+
+    -- Now declared(gen_name) contains the generic parameters: 
+    -- types, objects and  subprograms.
+    ST(gen_name).nature := "void" ;              -- To catch usage of name
+    formals := get_formals(formal_part, id) ;
+
+    form_list := [] ; 
+    -- Process formals as for a non-generic subprogram.
+    for [id ,in_out,type_mark, opt_init] = formals(i) loop 
+
+        form_name := find_new(id) ;     
+        ST(form_name).nature  := in_out ;                          
+        ST(form_name).type_of := type_mark ;
+
+        ST(form_name).default_expr := opt_init ;
+        if kind = "generic_function" and in_out /= "in" then
+             errmsg("parameters of functions must have mode IN", "", "6.5") ;
+        end if;
+        form_list with:= form_name ; 
+    end loop;
+    check_out_parameters(formals) ;
+    
+    -- Save signature of generic object, in the format which the
+    -- instantiation procedure requires.
+
+    ST(gen_name).nature := kind + "_spec" ;
+    sem_trace(4,"NATURE("+str(gen_name) +")="+ str(ST(gen_name).nature) );
+    ST(gen_name).signature := [[gen_list, gen_code+ collect_reprs()], form_list] ;
+    ST(gen_name).type_of  := if kind = "generic_function" then
+                        find_old(adasem(ret_node)) else "none" end if;
+
+
+    if #form_list > 0 then 
+        -- Preserve the declaration tree for conformance checks later on.
+        -- It is attached to the overloads field of the first formal.
+        ST(form_list(1)).overloads := formals.formal_decl_tree(5);
+    end if;
+
+    popscope() ;
+ 
+    -- No code is emitted for a generic specification, but if it is a
+    -- compilation unit the library must be updated.
+    save_subprog_info(gen_name) ;                               
+    sem_trace_proc_exit(3, "Generic_Subprogram_Specification");
+    return [] ;
+end generic_subprogram_specification;
+ 
+--S+ Generic Subprogram Body
+procedure generic_subprogram_body(prog_name, node) ;
+
+-- Within its body, the generic subprogram name behaves as a regular
+-- (i.e. non-generic) subprogram. In  particular, it can be called (and
+-- it cannot be instantiated). Its nature must be set accordingly, prior
+-- to compilation of the body.
+sem_trace(3,"Generic_Subprogram_Body "+ str(prog_name) )  ;
+
+if is_comp_unit() then 
+   generic_units with:= unit_name;
+end if;
+ST(prog_name).nature  :=  if ST(prog_name).nature = "generic_procedure_spec" 
+                    then "procedure"  else "function"   end if;
+
+
+-- The signature of a generic object includes the generic part. During
+-- compilation of the body, set the signature to contain only the formals
+
+sig := ST(prog_name).signature ;
+ST(prog_name).signature := sig(2) ;
+ST(prog_name).overloads := {prog_name} ;
+                                                                
+[-, specs_node, decl_node, stats_node, except_node] := ast(node) ;
+[-, -, formal_part] := ast(specs_node) ;                     
+id := original_name(prog_name) ;
+                                                                
+newscope(prog_name) ;
+name_prefix +:= id + ".";                    -- For names of local objects.
+
+-- Check conformance with generic specification.
+formals := get_formals(formal_part, id) ;
+reprocess_formals(prog_name, formals) ;                         
+
+-- an inner declarative part forces all types declared so far.
+force_all_types();
+previous_repr_info := collect_reprs();
+
+errors_so_far := errcount;
+decl_info := adasem(decl_node);
+force_all_types();
+decl_info +:= collect_reprs() ;
+body_ := block(decl_info, adasem(stats_node), adasem(except_node));
+
+lab_end() ;                     -- Validate goto statements in subprogam.
+popscope() ;                    -- And exit body.
+
+-- Outside of its body, the object is generic again.
+       
+ST(prog_name).nature  :=  if ST(prog_name).nature = "procedure"
+               then "generic_procedure"  else "generic_function"   end if;
+if errcount = errors_so_far  then
+   ST(prog_name).signature := sig with body_ ;         -- Save for instantiation
+else
+   ST(prog_name).signature := sig ;
+end if;
+
+ST(prog_name).overloads := om ;                    -- Not a callable object.
+
+-- If the spec for this generic subprogram was defined in another
+-- compilation unit, it must be updated (see module_body). This
+-- places the restriction on generic units that spec and body must
+-- be defined in the same compilation (source file). Ideally the
+-- librarian will know to look for the updated specs of a generic
+-- object in the library entry for the body. Currently there is no
+-- such.
+
+unit_kind := if is_comp_unit() then
+                 "subprog spec"
+             elseif unit_name(1) = "body" and #unit_name = 2 then
+                 "spec"
+             else
+                 om                          -- Just a sub-unit.
+             end if;
+
+if unit_kind /= om then 
+    spec_name := [unit_kind, unit_name(2)] ;
+
+    if lib_unit(spec_name) = aisfile            -- i.e. current compilation
+      and       #(unit_decl(spec_name) ? []) > 0 then
+         -- Update nature, signature, etc. for generic object, and
+         -- for its generic types.
+         [-, specs, -] := unit_decl(spec_name) ;        
+         specs(prog_name) := ST(prog_name) ;      
+
+          for [-, t_name] in declared(prog_name)
+                                        | is_generic_type(t_name) loop 
+              specs(t_name) := ST(t_name) ;
+           end loop;
+
+         unit_decl(spec_name)(2) := specs ;             
+    elseif is_comp_unit() then
+        -- Save it as if it were a new subprogram specification. This
+        -- will replace the previous copy in the library.
+        unit_name := [unit_kind, id] ;
+        save_subprog_info(prog_name) ;                          
+    end if;
+end if;
+
+-- No code is generated for a generic subprogram, but any instantiation of
+-- the generic unit that precedes that of the body must raise PRGORAM_ERROR.
+-- The elaboration of the body is indicated by that of a dummy procedure.
+-- Each early instantiation carries a call to that dummy procedure, which will
+-- raise the exception if it preceeds the body.
+return previous_repr_info 
+	+ [["procedure", prog_name, [], [[], [["return", prog_name, 0]],[]]]] ;
+
+end generic_subprogram_body;
+
+--S+ Generic Package Specification 
+procedure generic_package_specification(node) ;
+sem_trace_proc_entry(3, "Generic_Package_Specification");
+
+[-, id_node, generic_part_node, vis_node, priv_node] := ast(node);
+
+id := adasem(id_node) ;
+new_compunit("spec", id);
+
+if is_comp_unit() then
+   generic_units with:= unit_name;
+end if;
+
+new_package(id, "generic_part") ;
+
+-- Process generic parameters. Their definition will appear in
+-- the scope of the generic package. The list of them is also
+-- preserved in the signature of the package, for instantiation.
+-- The signature of the generic package as the format:
+--
+--    [ [generic_type_list, anonymous_types], specification,  body_]
+--
+
+ST(current_scope).signature := [adasem(generic_part_node)] ; 
+ST(current_scope).nature    := "generic_package_spec" ;
+
+-- The rest of the package is processed as in a non-generic case.
+specs := package_declarations(vis_node, priv_node) + collect_reprs() ;
+
+ST(current_scope).signature +:= [specs] ; 
+sem_trace_proc_exit(3, "Generic_Package_Specification");
+return end_specs("generic_package", specs) ;
+end generic_package_specification;
+
+
+--S+ Generic Object Declaration
+procedure generic_object_declaration(node) ;
+sem_trace_proc_entry(3, "Generic_Object_Declaration");
+
+[-, id_list_node, in_out_node, type_node, exp_node] := ast(node) ;
+
+id_list  := [adasem(id_node): id_node in id_list_node] ;
+nam_list := [find_new(id) : id in id_list] ;
+
+kind     := adasem(in_out_node) ;
+if kind = "" then   -- implicit "in"
+   kind := "in" ; 
+end if;       
+
+type_mark := find_old(adasem(type_node)) ;
+
+if is_incomplete_type(type_mark)  then                          
+    errmsg("premature usage of incomplete or private type ",
+                        original_name(type_mark), "3.8.1(4),7.4.1(4)");
+end if;
+
+opt_init  := adasem(exp_node) ;
+
+case kind 
+
+    when "in" => 
+        if is_limited_type(type_mark) then
+            errmsg("Type of a generic formal object of mode IN ",
+                             "must not be a limited type", "12.1.1") ;
+        end if;
+	force_representation(type_mark) ;
+
+        if opt_init /= [] then
+
+            opt_init := check_type(type_mark, opt_init) ;       
+            if is_deferred_constant(opt_init) then
+                errmsg("Deferred constant cannot be default expression",
+                        " for a generic parameter","7.4.3") ;
+            end if;
+        end if;
+
+        for name in nam_list loop 
+            ST(name).nature  := "generic_in" ;
+            ST(name).type_of := type_mark ;
+        end loop;
+
+    when "inout" =>  
+        -- constraints will be inherited from actual. This is described
+	-- by regarding the subtype of the in out parameter as an additional
+	-- generic parameter, obtained from the actual at instantiation.
+        type_mark := make_generic_subtype(type_mark) ;
+
+        if opt_init /= [] then
+            errmsg("Initialization not allowed for IN OUT ",     
+                                      "generic parameters","12.1.1") ;
+        end if;
+
+        for name in nam_list loop 
+            ST(name).nature  := "generic_inout" ;
+            ST(name).type_of := type_mark ;
+        end loop;
+
+    when "out" => 
+        current_node := in_out_node ;
+        errmsg("OUT generic formals objects not allowed","", "12.1.1") ;
+
+end case;
+sem_trace_proc_exit(3, "Generic_Object_Declaration");
+return [[name, kind, type_mark, opt_init]: name in nam_list] ;
+end generic_object_declaration;
+
+--S+ Generic Type Declaration
+procedure generic_type_declaration(node) ;
+sem_trace_proc_entry(3, "Generic_Type_Declaration");
+
+[-, id_node, def_node] := ast(node) ;
+id := adasem(id_node) ;
+
+-- In the case of generic array types, anonymous parent array may be
+-- introduced. They are not generic in themselves, and play no role in 
+-- the instantiated code; they are collected here and  discarded.
+
+newtypes with:= [] ;
+if node_kind(def_node) = "generic" then         --  scalar type
+        type_name := find_new(id) ;
+        [-, kind] := adasem(def_node) ;
+        -- A generic signature must be constructed for these types, in
+        -- order  to verify bounds  in instantiations,  subtypes,  etc.
+        -- These bounds must expressed by means of attributes.
+
+	-- The attributes that were formally given as T_ are now given 
+        -- without the prefix so that they could be recognized in eval_attribute
+	-- and possibly constant folded.
+
+        lo := ["'", "FIRST", type_name, "I:1"] ;
+        hi := ["'", "LAST" , type_name, "I:1"] ;
+
+        case kind  
+          when "integer_type" => 
+              root   := "INTEGER";
+              bounds := ["range", lo, hi] ;
+
+	  when "discrete_type" =>  
+              root   := "discrete_type";
+              bounds := ["range", lo, hi] ;
+          
+          when "floating_type" => 
+              root   := "FLOAT";
+              precision := ["'", "DIGITS", type_name];
+	      bounds := ["digits", lo, hi, precision, precision] ;
+
+	  when "fixed_type" => 
+              root   := "$FIXED";
+              d := ["'", "DELTA", type_name, "universal_real"];        
+              s := ["'", "SMALL", type_name, "universal_real"];       
+	      bounds := ["delta", lo, hi, s, d] ;
+
+        end case;
+
+        -- The base type of a generic type is the base of its actual. In
+        -- order to be able to refer to the base type of a generic within
+        -- the object, we introduce an anonymous type that will be instan
+        -- tiated with the base type of the actual.
+        
+        generic_base := anonymous_type() ;
+        ST(generic_base) := ["type", root, bounds, 
+			       {"$generic"}, current_scope, ST(root).root_type];
+
+        ST(type_name) := ["subtype", generic_base, bounds,
+				{}, current_scope, ST(root).root_type] ;
+
+else                            -- array type or access type.
+    type_name := type_declaration(id, [], def_node) ;
+    -- A generic type definition is not a valid context for use of an
+    -- incomplete private type as a type mark. (7.4.1)
+
+    if is_array(type_name) then
+        t := component_type(type_name)  ;
+    elseif is_access(type_name) then
+        t := ST(type_name).designated_type ;
+    end if;
+
+    if is_incomplete_type(t)  then
+        errmsg("premature usage of incomplete or private type ",
+                        original_name(type_mark), "3.8.1(4),7.4.1(4)");
+
+    elseif is_anonymous(t) or 
+    (is_array(type_name) and
+    (exists i in index_types(type_name)|is_anonymous(i)))
+    then
+        errmsg("a generic formal type cannot include an explicit constraint",
+			"","12.1(4)") ;
+    end if;
+end if;
+
+ST(type_name).misc_type_attributes := (ST(type_name).misc_type_attributes ?{})
+                                    with "$generic" ;             
+
+anon_typ frome newtypes ;
+sem_trace_proc_exit(3, "Generic_Type_Declaration");        
+return [[type_name, "type", []]] ;
+end generic_type_declaration;
+
+--S+ is generic type
+procedure is_generic_type(type_mark) ;
+return (is_set(ST(type_mark).misc_type_attributes) 
+        and "$generic" in ST(type_mark).misc_type_attributes) ;
+
+end is_generic_type;
+--S+ Generic Private Declaration
+procedure generic_private_declaration(node) ;
+sem_trace_proc_entry(3, "Generic_Private_Declaration");
+
+[-, id_node, discr_list, kind] := ast(node) ; 
+id := adasem(id_node) ;
+discriminants := [adasem(d) : d in discr_list] ;
+type_name := private_decl(id, discriminants, kind) ;
+if ST(type_name).type_of /= kind then
+    -- error in type declaration, or duplicate name.
+    sem_trace_proc_exit(3, "Generic_Private_Declaration");
+    return [] ;
+end if;
+
+ST(type_name).misc_type_attributes := {"$generic"} ; 
+
+if exists discr in discriminant_list(type_name) 
+                                | ST(discr).default_expr /= om then
+   errmsg("generic private type cannot have defaults for discriminants",
+                                "","12.1.2") ;
+end if;
+sem_trace_proc_exit(3, "Generic_Private_Declaration");
+return [[type_name, "type", [] ]] ;
+end generic_private_declaration;
+
+procedure make_generic_subtype(type_mark) ;
+return base_type(type_mark) ;		-- for now. Scheme is in doubt.
+if is_generic_type(type_mark) then
+   generic_subtype :=  type_mark ;
+
+elseif is_scalar_type(type_mark) then
+   generic_subtype := anonymous_type() ;
+
+   -- The attributes that were formally given as T_ are now given 
+   -- without the prefix so that they could be recognized in eval_attribute
+   -- and possibly constant folded.
+
+   lo := ["'", "FIRST", generic_subtype, "I:1"] ;  -- i.e. non-static.
+   hi := ["'", "LAST" , generic_subtype, "I:1"] ;
+   constraint := ST(type_mark).signature ;
+   constraint(2..3) := [lo, hi] ; 
+   ST(generic_subtype) := ["subtype", type_mark, constraint, {}, current_scope];
+
+elseif is_private_type(type_mark) and discriminant_list(type_mark) = []
+then
+   generic_subtype := anonymous_type() ;
+   constraint := ["discr", {}] ;
+   ST(generic_subtype) := ["subtype", type_mark, constraint, {}, current_scope];
+else
+   -- arrays, records, etc: must describe non-static subtype.
+   generic_subtype := type_mark ;
+
+end if;
+return generic_subtype ;
+end make_generic_subtype;
+--S+ Check Generic Usage
+procedure check_generic_usage(type_mark) ;
+
+-- If a private generic type, or a subtype or derived type of it, is used
+-- in an object declaration, component declaration, or allocator, indicate
+-- that it must be instantiated with a constrained type.
+
+sem_trace_proc_entry(3, "Check_Generic_Usage");
+sem_trace(3, "type_mark: " + str(type_mark) ) ;
+
+if ST(ST(type_mark).root_type).type_of in priv_types 
+   and is_generic_type(ST(type_mark).root_type)
+   and (can_constrain(type_mark) 
+   or not has_discriminants(type_mark))
+then
+    ST(ST(type_mark).root_type).misc_type_attributes with:= "$constrain" ;
+end if;
+sem_trace_proc_exit(3, "Check_Generic_Usage");
+end check_generic_usage;
+
+--S+ Generic Subprogram Declaration
+procedure generic_subprogram_declaration(node) ;
+sem_trace_proc_entry(3, "Generic_Subprogram_Declaration");
+
+[-, spec_node, opt_is_node] := ast(node)  ;
+[kind, id, formals, typ] := adasem(spec_node) ;
+opt_default := adasem(opt_is_node)  ;
+
+if opt_default = "box" then 
+    opt_default := ["box", id] ;
+elseif opt_default = [] then 
+    null ;
+else
+    if node_kind(opt_is_node) = "string-node" then            
+        -- Default is given by an operator name.
+        opt_default := desig_to_name("\"" + opt_default + "\"") ; 
+    end if;
+    if is_identifier(opt_default) then
+        invisible_designator(id,  opt_default) ;
+    end if;
+    -- Name of default is  bound at the point of generic definition.
+    opt_default := find_old(opt_default) ;
+    if is_identifier(opt_default) and ST(opt_default).nature = "generic_part" then
+       errmsg("premature use of identifier ",original_name(opt_default),"8.3");
+    else null;
+    end if;
+end if;
+
+check_new_op(id,formals,typ);	-- if parameter is an operator.
+u_name := chain_overloads(id, [kind, typ, formals]) ;
+if id = "=" then
+   new_ne := chain_overloads("/=", [kind, typ, formals]);
+   if is_overloaded(opt_default) and
+      not (exists eq in opt_default | 
+		(ST(eq).type_of = "BOOLEAN" and #ST(eq).signature = 2 
+		and is_limited_type(ST(ST(eq).signature(1)).type_of)))  then
+         errmsg("default has wrong profile to rename equality","", "6.7");
+   end if;
+end if;
+
+-- A generic subprogram parameter is treated as a renaming of some
+-- unspecified subprogram, whose actual name is supplied at the 
+-- point of instantiation.
+p_name := id + newat_str();
+ST(u_name).alias := p_name; 
+ST(p_name) := ST(u_name) ;
+sem_trace_proc_exit(3, "Generic_Subprogram_Declaration");
+return [[u_name, kind, [formals, typ], opt_default]] ;
+end generic_subprogram_declaration;
+
+--S+ Subprogram Instance
+procedure subprogram_instance(kind, new_id, gen_name, instance) ;
+ 
+-- Create an instantiation of a generic procedure.  
+--
+-- To construct the new instance, we first process the instantiation of
+-- the generics. This yields a series of renames statements, which map
+-- the generic parameters into actual types and subprograms. This map
+-- is used to rename all generic entities within the spec and body of the
+-- generic object, to yield the AIS for the instantiated one.
+-- If the body has not been seen, we emit an instance stub, to be filled
+-- at binding time.
+
+sem_trace_proc_entry(3, "Subprogram_Instance");
+sem_trace2(4, kind, new_id);
+sem_trace2(4, gen_name, instance) ;
+
+rmatch(kind, "_instance") ;                 -- drop 'instance' marker.
+if not is_identifier(gen_name)              
+   or (kind = "procedure" and ST(gen_name).nature notin
+                        {"generic_procedure", "generic_procedure_spec"})
+   or (kind = "function"  and ST(gen_name).nature notin
+                        {"generic_function", "generic_function_spec"}) 
+then 
+    errmsg(original_name(gen_name), 
+                        " is not a generic " + kind,"12.1, 12.3") ;
+    sem_trace_proc_exit(3, "Subprogram_Instance"); 
+    return [] ;
+end if;
+
+[generics, formals,  body_] := ST(gen_name).signature ;
+return_type := ST(gen_name).type_of ;
+-- Now match generic specification with instantiation. 
+
+[instantiation, rename_map, must_constrain] := 
+                        instantiate_generics(generics, instance) ;
+
+-- Obtain the actual signature and return type of the new procedure,
+-- and create new overloadable object with these specifications.
+ 
+f_info := [[original_name(f), ST(f).nature, ST(f).type_of, ST(f).default_expr]:
+                                                        f in formals] ;
+new_formals   := replace(f_info, rename_map) ;
+new_return    := replace(return_type, rename_map) ;
+ 
+check_new_op(new_id, new_formals, new_return) ;
+proc_name := chain_overloads(new_id, [kind, new_return, new_formals]) ;  
+
+-- In the body of the subprogram, the generic name is replaced by the
+-- instantiated name. (It appears on the return statement, and of
+-- course in any recursive call). 
+rename_map(gen_name) := proc_name ;
+
+-- The formal parameters of the generic subprogram are mapped into the 
+-- names given to the formals of the instantiation.
+
+new_sig := ST(proc_name).signature ;
+for i in [1..#new_sig] loop 
+    rename_map(formals(i)) := new_sig(i) ;
+end loop;
+
+-- Instantiate remaining entities local to the subprogram.
+[rename_map,-] := instantiate_symbol_table(gen_name, proc_name, rename_map) ;
+
+-- Now replace generic entities by their instantiations throughout.
+
+if body_ /= om  and not contains_stubs(body_(1)) then
+    body_ := replace(body_, rename_map) ;
+else
+    -- Only the subprogram specification has been seen, or the generic body
+    -- contains stubs. Emit a stub for  the binder, where the instantiation
+    -- will be completed.
+    body_ := [ "subprogram_instance", gen_name, rename_map, {},
+                              must_constrain, spans(current_node)] ;
+    if premature_instantiation(gen_name) then
+        instantiation with:= ["call", gen_name, []];
+    end if;
+end if;
+ 
+save_subprog_info(proc_name) ;                                  
+
+-- The instantiation code is emitted in front of the procedure, so 
+-- that it is elaborated in the instantiation environment.
+sem_trace_proc_exit(3, "Subprogram_Instance"); 
+return instantiation + 
+    [ [ ST(proc_name).nature, proc_name, build_signature(proc_name), body_ ] ] ; 
+ 
+end subprogram_instance;
+
+--S+ premature_instantiation
+procedure premature_instantiation(gen_name) ;
+
+-- If an instantiation takes place before the elaboration of the generic
+-- body, PROGRAM_ERROR must be raised. This can occur because of order of
+-- elaboration of units, or simply by having an instance before the body
+-- and in the same scope. This artificial situation is tested in c39007a.
+-- More detailed checks are needed eventually.
+return
+    ST(gen_name).scope_of in open_scopes and ST(gen_name).scope_of /="STANDARD#0"
+    and needs_body(gen_name) 
+    and not (exists stub in new_stubs | stub(2) = original_name(gen_name)) ;
+end premature_instantiation;
+--S+ contains_stubs
+procedure contains_stubs(decls) ;
+return exists d in decls |  d(1) = "SEPARATE" ;
+end contains_stubs;
+
+--S+ Package Instance 
+procedure package_instance(gen_name, instance) ;
+sem_trace_proc_entry(3, "Package_Instance");
+sem_trace3(4,pack_head, gen_name, instance) ;
+ 
+-- Create an instantiation of a generic package. The renaming and
+-- instantiation of local objects is done as for subprograms.
+ 
+pack := current_scope;
+ 
+if not is_identifier(gen_name) or 
+   ST(gen_name).nature notin ["generic_package", "generic_package_spec"]
+then
+    errmsg(original_name(gen_name), " is not a generic package","12.1");
+    popscope() ;
+    sem_trace_proc_exit(3, "Package_Instance");
+    return [] ;
+elseif gen_name in open_scopes then
+    errmsg(original_name(gen_name),
+                        " contains an instance of itself", "12.3") ;
+    popscope() ;
+    sem_trace_proc_exit(3, "Package_Instance");
+    return [] ;
+end if;
+
+[generics, p_specs, body_] := ST(gen_name).signature ;
+ 
+[instantiation, type_map, must_constrain] := 
+                        instantiate_generics(generics, instance) ;
+ 
+rename_map := type_map with [gen_name, pack] ;
+
+-- Instantiate entities local to the package.
+[rename_map, packs] :=
+       instantiate_symbol_table(gen_name, pack, rename_map) ;
+
+-- Complete construction of visibility information for inner packages. 
+
+for g_p in packs loop 
+    new_p := rename_map(g_p) ;
+
+    -- Construct visible map for it, so that the proper instantiated
+    -- entities within new package become accessible.
+
+    visible(new_p) := { [id, rename_map(old_n) ? old_n] : 
+                                       [id, old_n] in  visible(g_p) } ;
+
+    -- Nested packages (which are not generic) are now visible: their
+    -- local entities are nameable using qualified names.
+    if ST(g_p).nature notin {"generic_package", "generic_package_spec"}
+    then
+        vis_mods with:= new_p ;
+    end if;
+    -- The top level package is added to vis_mods in end_specs, called
+    -- at the end of package_instance.
+
+    -- Apply renamings to the private declarations.
+    ST(new_p).private_decls := replace(ST(g_p).private_decls, rename_map) ;
+
+end loop;
+
+-- Finally, apply same replacement rule to body of package. The body has
+-- the same format as that produced for a non-generic package.
+
+if body_ /= om then
+    [decls, stmts, except] := body_ ;
+end if;
+   
+if body_ = om or contains_stubs(decls) then
+    -- Emit an instance stub for the binder. The package spec may
+    -- actually not require a body, but the binder will find out.
+    if premature_instantiation(gen_name) then
+        instantiation with:= ["call", gen_name, []];
+    end if;
+
+    new_body := [["package_instance", gen_name,
+          replace(instantiation + p_specs, rename_map) ,
+      			 rename_map, must_constrain, spans(current_node)]] ;
+else                            
+    new_decls := instantiation + p_specs + decls ;
+    new_body :=  
+      replace( [["package_body", pack, [new_decls ,stmts, except]]],
+                                                           rename_map) ;
+end if;
+
+gen_parms := [n: [n,- ] in generics(1)] ;
+
+for n in gen_parms loop 
+    -- The instance does not include a copy of the generic part. Thus the
+    -- (instantiation of) the generic parameters themselves is not visible
+    -- If however a generic subprogam parameter has an overload in the 
+    -- visible part of the package, that overload itself must remain 
+    -- accessible, so we just remove the name of the instantiated generic 
+    -- subprogram parameter from its own overload set.
+    new_n := rename_map(n) ;
+    if ST(n).nature in ["procedure", "function"] then
+        ST(new_n).overloads := {rename_map(o) : 
+                                o in ST(n).overloads | o notin gen_parms} ;
+    else 
+        visible(pack)(original_name(n)) := om;
+    end if;
+end loop;
+
+end_specs("package", visible(pack)); 
+
+-- The instantiated entity is a package although it appears syntactically
+-- as a package specification. 
+ST(pack).nature := "package" ; 
+ST(pack).signature := om ;                    -- Drop generic information
+
+rep_clause_domain := domain rep_clause_info;
+rename_map_domain := domain rename_map;
+generic_rep_clause := rep_clause_domain * rename_map_domain;
+sem_trace(3, "generic rep clauses" + str(generic_rep_clause) );
+for gen_n in generic_rep_clause loop 
+   new_n := rename_map(gen_n);
+   rep_clause_info(new_n) := rep_clause_info(gen_n);
+   representation(new_n) := representation(gen_n);
+   emit_repr with :=new_n;
+end loop;
+sem_trace_proc_exit(3, "Package_Instance");
+return new_body ;
+
+end package_instance;
+
+--S+ instantiate_symbol_table
+procedure instantiate_symbol_table(gen_name, new_n, rename_map) ;
+
+-- This procedure constructs the symbol table for instantiated units.
+-- This involves the instantiation of local entities. Constructing their
+-- symbol table entries is akin to assigning "locations" for them. Such
+-- locations also have to be created for instantiated 'in' parameters.
+-- but not for types or inout parameters, which are simply renamings. On the
+-- other hand, generic subprogram parameters are already defined as 
+-- renamings, and the instantiation provides the name of the entity which they
+-- actually rename. Finally, the discriminants of generic private types are 
+-- mapped into the discriminants of the actuals by renaming also, and are not 
+-- otherwise instantiated.
+-- The mapping rename_map is expanded by this procedure, and used at the
+-- point of call to complete instantiation of the bodies.
+
+sem_trace_proc_entry(3, "Instantiate_Symbol_Table");
+sem_trace3(3, gen_name, new_n, rename_map) ;
+
+[generics, -,-] := ST(gen_name).signature ;
+gen_list := [n: [n,- ] in generics(1)] ;
+
+renamed_params := { n : n in gen_list | 
+                ST(n).nature  notin ["procedure", "function",  "in"]} +
+   {gen_d : [gen_d, -] in rename_map | ST(gen_d).nature = "discriminant"} ;
+
+-- Create the proper prefix for the unique names of instantiated entities
+
+o_pref := name_prefix ;
+name_prefix := original_name(new_n) + "." ;
+
+-- An additional complication has to do with nested declarations(records,
+-- other packages) within the generic object. For these we must also
+-- create instances of their symbol tables, so that type checking of
+-- their uses can be performed. We therefore traverse recursively all
+-- nested declarations within the generic object, to collect every object
+-- whose symbol table field must be instantiated. This may be done at
+-- generic definition time, and will be more efficient than here. For
+-- procedures and functions, only their signature is needed to perform
+-- type checking, but their symbol tables are instantiated as well, for
+-- completeness and for use by the code generator.
+
+packs := {} ;                   -- To collect names of nested packages.
+instantiated_scopes := {} ;     -- All of which have declared maps.
+
+workpile := {[gen_name, new_n, name_prefix ]} ;
+
+while workpile /= {} loop 
+
+    [g_n, new_pn, pref] from workpile ;
+    instantiated_scopes with:= g_n ;
+
+    sem_trace(3,"Instantiating scope " + g_n) ;
+                        
+    -- Iterate over all items declared in g_n, the generic object (or any
+    -- object nested within and which has declarations : package, record,
+    -- subprogram, task) and collect declarations for instantiated items.
+
+    old_decls := declared(g_n) ;
+    new_decls := {} ;
+
+    for [id, old_n] in old_decls  loop 
+
+        sem_trace(0,"     Instantiating item " + id) ;
+
+        if old_n in renamed_params then
+           -- Generic parameter or inner renaming. Will point to entity 
+           -- it renames.
+           new_decls(id) := rename_map(old_n) ;
+
+        elseif (new_n := rename_map(old_n)) /= om then
+           -- -id- renames an object which has been instantiated already.
+           -- The instantiation of id will point to the instantiation of
+           -- that object.
+           --$$  renamed_params with:= old_n ;
+           new_decls(id) := new_n ;
+
+        elseif ST(old_n).scope_of /= g_n then
+           -- old_n is a renaming of some other entity, generic or other-
+           -- wise, which is defined in some outer scope. The instantia-
+           -- tion of old_n must rename the same entity.
+           if (new_n := rename_map(old_n)) = om then
+               new_n := rename_map(old_n) := old_n ;
+           end if;
+           renamed_params with:= old_n ;
+           new_decls(id) := new_n ;
+
+        else       
+            new_n := pref + id + newat_str();   -- New unique name
+            rename_map(old_n) := new_n ;        -- map generic to actual.
+            -- Create entry in declared for instantiated item, and symbol
+            -- table fields.
+
+            new_decls(id) := new_n ;
+	    -- create initial fields, with the rest to be filled in below
+	    ST(new_n) := [ST(old_n).nature, om, [], "", new_pn, om];
+
+            if ST(old_n).scope_of /= old_n and declared(old_n) /= om 
+               and not is_anonymous_task(old_n)
+            then
+                -- Nested record, package, subprogram, or task.
+                -- Put on workpile with appropriate prefix for new names.
+                workpile with:= [old_n, new_n, pref + id + "."] ;
+            end if;
+        end if;
+
+    end loop;
+
+    -- Assign new declarations to package, record or task entity.
+
+    declared(new_pn) := new_decls ;
+
+    nat := ST(g_n).nature ;
+    if match(nat, "package") /= "" or 
+       match(nat, "generic_package") /= "" then
+        packs with:= g_n ;
+    end if;
+
+end loop;
+
+-- The rename_map contains the generic items and the names of their
+-- instantiations. We must now complete the symbol table entries for
+-- the later, to insure that type information is correct. Entities
+-- that have been renamed (generic types, inout parameters, or actual
+-- renaming within the generic object) have no symbol table entry in
+-- it, and are skipped.
+
+for [old_n, new_n] in rename_map | old_n notin renamed_params
+                                            and ST(new_n).type_of = om loop 
+
+    ST(new_n).type_of   := rename_map(ST(old_n).type_of) ? ST(old_n).type_of ;
+    ST(new_n).signature := replace(ST(old_n).signature, rename_map) ;
+    if ST(new_n).nature in ["array", "record"]  then
+        -- The miscelaneous type attributes are not necessarily inherited.
+        -- Their correct computation is currently not done.
+        ST(new_n).misc_type_attributes := {};
+
+    elseif ST(new_n).nature in ["task_obj", "task_obj_spec"] then
+	-- Assign to the task type the entry declarations, that were instantiated
+	-- with the task object.
+	tt := ST(new_n).type_of ;
+        declared(tt) := {[e_id, e_name] : [e_id, e_name] in declared(new_n) |
+				ST(e_name).nature in ["entry", "entry_family"]};
+
+    else
+        ST(new_n).overloads := replace(ST(old_n).overloads, rename_map) ;
+    end if;
+    ST(new_n).alias     := rename_map(ST(old_n).alias)   ? ST(old_n).alias   ;
+    if is_type(new_n) then
+       case ST(new_n).root_type 
+          when "discrete_type" =>  
+             -- Subtype of generic discrete type. Its new root type is the
+             -- root type of the actual, not the renamed root type.
+             ST(new_n).alias := ST(ST(new_n).type_of).alias ;
+
+          when "FLOAT", "LONG_FLOAT" =>  
+             -- The actual precision is inherited from the machine type, not
+             -- from the DIGITS given in the parent type definition.
+             ST(new_n).signature.precision_of := 
+				    ST(ST(new_n).alias).signature.precision_of;
+
+          when "$FIXED" => 
+             -- The delta and small of the type are inherited from the parent
+             -- and must be static at this point (unless the parent is still
+             -- generic.
+             null ; -- TBSL
+        end case;
+
+        if is_derived_type(old_n) 
+	and is_generic_type(generic_parent := ST(old_n).type_of) 
+        and ST(old_n).scope_of = ST(generic_parent).scope_of then
+ 	    -- old_n is derived from a generic formal type. To complete the
+            -- instantiation, the subprograms of the generic actual  must be
+	    -- derived by the instance of the derived type.(AIR 398). If the 
+	    -- parent is an enumeration type, the derived actual inherits all
+	    -- the literals as well.
+	    n_scop := newat_str(); -- To avoid name conflicts (kludge).
+	    ST(n_scop) := ["void", "none", [], "", current_scope, om] ;
+	    newscope(n_scop);  
+            actual_parent := rename_map(generic_parent) ;
+	    build_derived_type(actual_parent, new_n) ;
+	    -- derive_subprograms(new_n, actual) ;
+	    popscope();
+        end if;
+    end if;
+
+end loop; 
+
+name_prefix := o_pref ;                          -- Restore naming environment
+sem_trace_proc_exit(3, "Instantiate_Symbol_Table");
+return [rename_map, packs] ;
+
+end instantiate_symbol_table; 
+--S+ Instantiate Generics 
+procedure instantiate_generics (generics, instance) ; 
+ 
+-- Produce the list of renamings which transforms generic parameters
+-- into actual ones.
+-- Generic types play a special role in this renaming. We collect the
+-- Instantiations of generic types into the map -type_map- and use it
+-- in a substitution procedure to obtain the signature of generic
+-- subprogram arguments.
+-- Generic subprograms are also renamed by the actual subprograms, and
+-- the mapping from one to the other is also added to the same renaming
+-- map.
+ 
+error_instance := [ [],{},{} ] ;                
+
+sem_trace_proc_entry(3, "Instantiate_Generics");
+sem_trace2(4, generics, instance) ; 
+
+[gen_list, gen_code] := generics ; 
+instantiation_code := gen_code ;                -- Anonymous types, etc.
+type_map := {} ;
+must_constrain := {} ;                          
+
+if #instance > #gen_list then
+    errmsg("Too many actuals in generic instantiation","","12.3") ;
+    return error_instance;
+end if;
+ 
+-- Values may be supplied either positionally or by name.
+ 
+if exists [formal, actual] = instance(i) | formal /= []
+  then
+    first_named := i ;
+    if exists k in [i..#instance] | instance(k)(1) = [] then
+        errmsg("Positional association after named one", "", "12.3") ;
+        return error_instance ;
+    end if;
+else first_named := #instance + 1 ;
+end if;
+
+sem_trace(0,"new instance " + str(instance) ) ;
+sem_trace(5,"Process positional parameters ") ; 
+-- Process positional parameters.
+ 
+for i in [1..first_named-1] loop 
+    [g_name, g_mode, g_type, g_init] := gen_list(i) ;
+    [-, actual] := instance(i) ;
+    sem_trace(5,"Processing next positional parameter");
+    sem_trace2(5,g_name, g_mode);
+    sem_trace2(5,g_type, g_init) ;
+
+    case g_mode 
+ 
+    when "in", "inout" => 
+        instantiation_code :=
+          [instantiate_object(gen_list(i), actual, type_map) ] 
+                                                   + instantiation_code;
+    
+    when "type" => 
+
+        actual_type := instantiate_type(actual, g_name, type_map) ;
+        if actual_type = "" then return error_instance ;
+        else
+            type_map(g_name) := actual_type ;
+            if ST(g_name).type_of in priv_types and 
+                        is_unconstrained(actual_type) then         
+                must_constrain with:= g_name ;
+            end if;
+            if ST(g_name).type_of notin priv_types  then              
+                type_map(ST(g_name).type_of) := base_type(actual_type) ;   
+            end if;
+        end if;
+ 
+    when "procedure", "function" => 
+        -- Actual may be given by an operator symbol, which appear as
+        -- string literal.
+
+       if is_tuple(actual) and actual(1) = "string_literal" then
+           actual := desig_to_name("\"" + actual(2) + "\"") ;
+       end if;
+ 
+       generic_subprogram_instance(find_old(actual), g_name, g_type,
+                                                         type_map);
+
+    end case;
+ 
+end loop;
+ 
+-- Now process named parameters.
+sem_trace(5,"Now process named parameters" ) ;
+ 
+named_instance := instance(first_named..) ;
+
+for i in [first_named..#gen_list] loop 
+ 
+    [g_name, g_mode, g_type, g_init] := gen_list(i) ;
+    sem_trace(5,"Processing next named parameter");
+    sem_trace2(5,g_name, g_mode);
+    sem_trace2(5,g_type, g_init) ;
+
+    -- [-, actual] := instance(i) ;
+    if exists [id, i_expr] = named_instance(k) |
+                                        id = original_name(g_name)
+    then
+        -- Remove this named association to catch duplicate associations.
+        named_instance := named_instance(1..k-1) 
+                          + named_instance(k+1..) ;
+        case g_mode 
+
+        when "in", "inout" => 
+
+          instantiation_code := 
+                [instantiate_object(gen_list(i) ,i_expr, type_map)]
+                                                + instantiation_code ;
+    
+        when "type" => 
+
+          actual_type := instantiate_type(i_expr, g_name, type_map) ;
+          if actual_type = "" then return error_instance ;
+          else
+            type_map(g_name) := actual_type ;
+            if ST(g_name).type_of in priv_types and 
+                        can_constrain(actual_type) then         
+                must_constrain with:= g_name ;
+            end if;
+            if ST(g_name).type_of notin priv_types  then              
+                type_map(ST(g_name).type_of) := base_type(actual_type) ; 
+            end if;
+          end if;
+ 
+        when "procedure","function" => 
+       
+          if #(ST(declared(ST(g_name).scope_of)(id)).overloads ? {}) > 1 then
+            errmsg("Named associations not allowed for overloaded names"
+							, "", "12.3(3)") ;
+          end if;
+
+          if is_tuple(i_expr) and i_expr(1) = "string_literal" then
+              i_expr := desig_to_name("\"" + i_expr(2) + "\"") ;
+          end if;
+
+          generic_subprogram_instance(find_old(i_expr), g_name, g_type,
+                                                        type_map) ;
+
+        end case;
+
+    elseif g_mode /= "type" and g_init /= [] then
+        -- A default was supplied for generic parameter. This can be the
+        -- case for 'in' parameters and for subprograms.
+        case g_mode 
+ 
+        when "in" => 
+ 
+	     -- Instantiate_object will use the default expression.
+
+             instantiation_code with:=
+                 instantiate_object(gen_list(i), [], type_map) ;
+ 
+        when "procedure", "function" => 
+ 
+           generic_subprogram_instance
+                                (g_init, g_name, g_type, type_map);
+        end case;
+    else
+        errmsg("Missing instantiation for generic parameter ", 
+                        original_name(g_name),"12.3") ;
+        return error_instance ;
+    end if;
+        
+ 
+end loop;
+
+if named_instance /= [] then 
+    -- Not all named associations were processed.
+    errmsg("duplicate or erroneous named associations in instantiation",
+                        "","12.3") ;
+end if;
+
+-- The fragments in code_gen contain definitions of anonymous types,
+-- etc. which may still refer to generic types. Replace them with
+-- the actuals also.
+
+instantiation := replace(instantiation_code, type_map) ;
+ 
+
+sem_trace(0,"Instantiated generics: " + str(instantiation) ) ;
+sem_trace(0,"Type map: " + str(type_map) ) ;
+sem_trace_proc_exit(3, "Instantiate_Generics"); 
+return [instantiation, type_map, must_constrain] ;
+ 
+end instantiate_generics;
+ 
+
+--S+ Instantiate Object
+procedure instantiate_object(gen_info, actual_expr, rw type_map) ;
+sem_trace_proc_entry(3, "Instantiate_Object");
+sem_trace3(4,gen_info, actual_expr, type_map) ;
+
+-- Unpack information about generic parameter.
+[g_name, g_mode, g_type, g_init] := gen_info;
+
+-- The type of a generic object may be a generic type, a subtype of a
+-- generic type, or a normal (non-generic) type. In the first two cases
+-- we must determine or compute the equivalent instantiated type to
+-- complete type checking.
+
+if ST(g_type).nature in {"subtype","access"} and   -- May be subtype 
+    type_map(ST(g_type).type_of) /= om and         -- of a generic type.
+    type_map(g_type) = om 
+then
+    -- Create new subtype, after substitution.
+    actual_type := 
+             promote_subtype(replace(ST(g_type), type_map)) ;
+else
+    actual_type := type_map(g_type)             -- If generic.
+                                ? g_type;       -- Otherwise.
+end if;
+
+-- For each instantiation we must create locations for the generic
+-- parameters, and replace in the body of the object the generic ones
+-- with the actual ones.
+
+actual_name := name_prefix + original_name(g_name) + newat_str();
+sem_trace(5,"Actual name="+ str(actual_name) ) ;
+type_map(g_name) := actual_name ;
+
+if g_mode = "in" then
+    if actual_expr /= [] then		-- Type check the actual.
+        actual := check_type(actual_type, actual_expr) ;
+    else				-- use default expression.
+        actual := replace(g_init, type_map) ;
+    end if;
+
+    if is_deferred_constant(actual) then
+       errmsg("Instantiation of a generic in parameter",
+              " cannot be a deferred constant","7.4.3");
+       sem_trace_proc_entry(3, "Instantiate_Object");
+       return [];
+    end if;
+    ST(actual_name) := ["constant", actual_type, actual, {}, current_scope, om];
+    sem_trace_proc_entry(3, "Instantiate_Object");
+    return  ["constant", actual_name, actual_type, actual];
+else                                            -- in out parameter.
+    sem_trace(5,"Actual name="+ str(actual_name) ) ;
+    sem_trace(5,"Actual expr="+ str(actual_expr) ) ;
+    if not is_tuple(actual_expr) or actual_expr(1) /= "name" then
+        errmsg("Instantiation of generic in out parameter ",
+                             " must be a variable.(1)",
+			     "12.1.1, 12.3.1") ;
+        sem_trace_proc_entry(3, "Instantiate_Object");
+        return [] ;
+    else
+        actual_expr := find_old(actual_expr) ;
+    end if;
+
+    if is_tuple(actual_expr) and actual_expr(1) = "convert"
+    then
+        errmsg("Instantiation of generic in out parameter ",
+                           "cannot be a conversion","12.3.1") ;
+        sem_trace_proc_entry(3, "Instantiate_Object");
+        return [] ;
+    end if;
+    out_context := false ;                                      
+    actual := check_type(base_type(actual_type), actual_expr) ;
+    -- A constraint may have been imposed on the variable, in the
+    -- process of type checking. This is an artifact of type checking, as
+    -- the only constraint on the actual come from its own type.
+
+    if is_tuple(actual) and actual(1) in qualifiers then
+        actual := actual(3) ;
+    end if;
+    -- Mark the actual with its actual type, rather than the one deduced
+    -- from the instantiation. 
+    actual_type := expression_type(actual);
+    ST(actual_name) := ["obj", actual_type, [], {}, current_scope, om] ;
+
+    if not is_variable(actual) then
+        errmsg("Instantiation of generic in out parameter ",
+                              " must be a variable.(2)",
+			      "12.1.1, 12.3.1") ;
+        sem_trace_proc_entry(3, "Instantiate_Object");
+        return [] ;
+    elseif illegal_discriminant_dependence ( actual ) then
+         errmsg("existence of generic in out parameter "
+                + str(original_name( g_name )) ,
+                " depends on a discriminant","8.5(5), 12.3.1") ;
+        sem_trace_proc_entry(3, "Instantiate_Object");
+        return [];
+    else
+        sem_trace_proc_entry(3, "Instantiate_Object");
+        return ["renames", actual_name, actual] ;
+    end if;
+end if;
+
+end instantiate_object;
+
+--S+ instantiate_type
+procedure instantiate_type(type_expr, g_name, rw type_map) ;
+sem_trace_proc_entry(3, "Instantiate_Type");
+sem_trace(4, "type_expr: " + str(type_expr) );
+sem_trace(4, "g_name: " + str(g_name) );
+sem_trace(4, "type_map: " + str(type_map) ) ;
+
+-- Validate the instantiation of a generic type. The actual is a type
+-- name or a subtype expression. The grammar allows a general expression
+-- at this point, and we must insure that it is only a name, or a name
+-- followed by a numeric constraint.
+-- We must then check that the actual belongs to the same class as the
+-- formal, and that in the case of arrays, constrained generics are ins-
+-- tantiated with a constrained type.
+
+if is_tuple(type_expr) then
+
+    [tag, t] := type_expr ;
+    if tag = "name" and is_identifier(t)  then     -- Type identifier.
+        actual_type := find_old(t) ;
+
+    elseif tag = "name" then                       -- Index constraint
+        actual_type := promote_subtype(make_subtype([t,[]])) ;
+
+    elseif tag = "subtype" then                    -- numeric constraint
+        actual_type := promote_subtype(make_subtype(t)) ;
+    else
+        errmsg("invalid expression for instantiation of ", 
+                   original_name(g_name),"12.3, 12.3.2-12.3.5") ;
+        sem_trace_proc_exit(3, "Instantiate_Type");
+        return "" ;
+    end if;
+else errmsg("invalid expression for instantiation of ",
+                        original_name(g_name),"12.3") ;
+    sem_trace_proc_exit(3, "Instantiate_Type");
+    return "" ;
+end if;
+
+if not is_type(actual_type) then
+    errmsg("Expect type to instantiate ", original_name(g_name),
+                      "12.3.2-12.3.5") ;
+    sem_trace_proc_exit(3, "Instantiate_Type");
+    return "" ;
+else 
+    sem_trace_proc_exit(3, "Instantiate_Type");
+    return valid_type_instance(g_name, actual_type, type_map) ;
+end if;
+
+end instantiate_type;
+
+--S+  Valid Type Instance
+procedure valid_type_instance(g_name, actual_type, rw type_map) ;
+sem_trace_proc_entry(3, "Valid_Type_Instance");
+sem_trace(5, "g_name: " + str(g_name) );
+sem_trace(5, "actual_type: " + str(actual_type) );
+sem_trace(5, "type_map: " + str(type_map) );
+
+return trace_and_return(3, "Valid_Type_Instance",
+       if is_scalar_type(g_name) then
+            valid_scalar_instance(g_name, actual_type, type_map)
+       elseif is_access(g_name) then
+            valid_access_instance(g_name, actual_type, type_map)
+       elseif is_array(g_name) then
+            valid_array_instance(g_name, actual_type, type_map)
+       else
+            valid_private_instance(g_name, actual_type, type_map) 
+       end if);
+end valid_type_instance;
+
+
+--S+ valid_scalar_instance
+procedure valid_scalar_instance(g_name, actual_type, type_map) ;
+
+-- Complete the validation of the instantiation of a generic scalar type.
+-- This procedure is also used to emit constraint checks on access types
+-- and array types.
+
+sem_trace_proc_entry(3, "Valid_Scalar_Instance");
+sem_trace(4, "g_name: " + str(g_name) );
+sem_trace(4, "actual_type: " + str(actual_type) );
+sem_trace(4, "type_map: " + str(type_map) );
+
+g_type := ST(g_name).root_type ;           -- INTEGER,FLOAT,$FIXED, etc.
+
+if ST(g_name).root_type = "FLOAT" and ST(actual_type).root_type = "LONG_FLOAT"
+   and is_generic_type(g_name) then
+    sem_trace_proc_exit(3, "Valid_Scalar_Instance");
+    return actual_type ;
+elseif ST(g_name).root_type = ST(actual_type).root_type 
+   and is_generic_type(g_name)
+then
+    sem_trace_proc_exit(3, "Valid_Scalar_Instance");
+    return actual_type ;
+
+elseif base_type(ST(g_name).root_type) = base_type(actual_type)
+then    
+     -- Checking instantiation of the designated type of an access type 
+     -- or index type of an array type. Verify that constraints match.
+
+     check_actual_constraint(g_name, actual_type) ;
+     sem_trace_proc_exit(3, "Valid_Scalar_Instance");
+     return actual_type ;
+
+elseif (ST(g_name).root_type = "discrete_type" 
+        and is_discrete_type(actual_type))
+            then 
+               sem_trace_proc_exit(3, "Valid_Scalar_Instance");
+               return actual_type ;
+else
+    errmsg("Invalid type for instantiation of ", 
+                original_name(g_name),"12.3.2 - 12.3.5") ;  
+    sem_trace_proc_exit(3, "Valid_Scalar_Instance");
+    return "" ;
+end if;
+
+end valid_scalar_instance;
+
+--S+ check_actual_conatraint
+procedure check_actual_constraint(g_type, a_type) ;
+sem_trace_proc_entry(3, "Check_Actual_Constraint");
+sem_trace(5, "g_type: " + str(g_type) );
+sem_trace(5, "a_type: " + str(a_type) ) ;
+
+-- Verify that the constraint on the designated type of an access type,
+-- or an index type of an array type, match the constraints on the 
+-- corresponding formal generic type. The types are known to be compatible.
+
+if is_scalar_type(g_type) then
+    if not is_tuple(ST(g_type).signature) then 
+       return ; 
+    end if;
+
+    if not is_tuple(ST(a_type).signature) then
+    -- Bounds cannot be correct.
+           instantiation_code with:= constraint_error() ;
+    else
+        [-, gen_lo, gen_hi] := ST(g_type).signature ;
+        [-, act_lo, act_hi] := ST(a_type).signature ;
+
+        if gen_lo /= act_lo or gen_hi /= act_hi then
+            -- Need run-time check.
+            instantiation_code with:= 
+             ["if", [[["or",
+                                ["/=", gen_lo, act_lo],
+                                ["/=", gen_hi, act_hi]   ],
+                          [["raise", "CONSTRAINT_ERROR"]] ]]  ] ;
+        end if;
+
+    end if;
+   
+elseif is_record(g_type) and ST(g_type).nature = "subtype" then
+    -- Check that discriminants match.
+    if ST(a_type).nature /= "subtype" then 
+        -- Mismatch was already signalled.
+        return ;
+    end if;
+
+    [-, g_discr_map] := ST(g_type).signature  ;
+    [-, a_discr_map] := ST(a_type).signature ;
+    -- Compare the values of each discriminant.
+
+    for gv = g_discr_map(d) loop 
+        if (av := a_discr_map(d)) /= gv then
+           instantiation_code with:=
+           ["if", 
+              [[ ["/=", gv, av], [["raise", "CONSTRAINT_ERROR"]] ]] ] ;
+        end if;
+    end loop;
+
+elseif is_array(g_type) then
+    g_info := get_array_information(g_type) ;
+    a_info := get_array_information(a_type) ;
+
+    for i in [1..#g_info] loop 
+        check_actual_constraint(g_info(i), a_info(i)) ;
+    end loop;
+
+elseif is_access(g_type) then
+     check_actual_constraint(ST(g_type).designated_type, 
+                             ST(a_type).designated_type) ;
+end if;
+
+end check_actual_constraint;
+
+--S+ Valid Private Instance
+procedure valid_private_instance(g_name, actual_type, rw type_map) ;
+sem_trace_proc_entry(3, "Valid_Private_Instance");
+sem_trace(4, "g_name: " + str(g_name) );
+sem_trace(4, "actual_type: " + str(actual_type) );
+sem_trace(4, "type_map: " + str(type_map) );
+
+actual_base := base_type(actual_type) ;
+
+if ST(actual_base).type_of = "incomplete" then
+    errmsg("Invalid use of incomplete type in instantiation of ",
+                                        original_name(g_name),"12.3");
+    sem_trace_proc_exit(3, "Valid_Private_Instance");
+    return "" ;
+elseif private_ancestor(actual_base) /= om then
+    errmsg("Invalid use of private type in instantiation of ",
+                                        original_name(g_name),"12.3") ;
+    sem_trace_proc_exit(3, "Valid_Private_Instance");
+    return "" ;
+elseif ST(g_name).type_of = "private" and is_limited_type(actual_type) 
+    then errmsg("Expect non-limited type to instantiate ",
+                                        original_name(g_name),"12.3.2");
+    sem_trace_proc_exit(3, "Valid_Private_Instance");
+    return "" ;
+
+elseif has_discriminants(g_name) and 
+       (not is_record(actual_base) or 
+        not has_discriminants(actual_base) or 
+        not is_valid_discriminant_instance
+                            (g_name, actual_base, type_map))
+        
+    then  errmsg("discriminant mismatch in instantiation of ", 
+                                 original_name(g_name), "12.3.2");
+    sem_trace_proc_exit(3, "Valid_Private_Instance");
+    return "" ;
+
+elseif has_discriminants(g_name) and ST(actual_type).nature = "subtype" 
+    then errmsg("Instantiation of " + original_name(g_name),
+                                " must be unconstrained", "12.3.2") ;
+    sem_trace_proc_exit(3, "Valid_Private_Instance");
+    return "" ;
+
+elseif "$constrain" in ST(g_name).misc_type_attributes 
+then 
+    if is_unconstrained(actual_type) then                         
+        errmsg("Usage of private type " + original_name(g_name),
+            " requires instantiation with constrained type","12.3.2") ;
+        sem_trace_proc_exit(3, "Valid_Private_Instance");
+        return "" ;
+    elseif is_generic_type(actual_type) then
+        -- It will need in turn to be instantiated with a constrained typ
+        ST(actual_type).misc_type_attributes with:= "$constrain" ;
+    end if;
+end if;
+sem_trace_proc_exit(3, "Valid_Private_Instance");
+return actual_type ;    
+
+end valid_private_instance;
+
+--S+ Valid Access Instance
+procedure valid_access_instance(g_name, actual_type, type_map) ;
+sem_trace_proc_entry(3, "Valid_Access_Instance");
+sem_trace(5, "g_name: " + str(g_name) );
+sem_trace(5, "actual_type: " + str(actual_type) );
+sem_trace(5, "type_map: " + str(type_map) );
+
+if is_access(actual_type)  then
+   -- The accessed actual type must be the proper instantiation
+   -- of the accessed generic.
+
+   designated_formal := type_map(ST(g_name).designated_type) ? 
+                                 ST(g_name).designated_type ;
+   designated_actual := ST(actual_type).designated_type ;
+
+   if base_type(designated_formal) /= base_type(designated_actual)
+   then
+        errmsg("expect access to " + original_name(designated_formal),
+                " to instantiate " + original_name(g_name), "12.3.3") ;
+        sem_trace_proc_exit(3, "Valid_Access_Instance");
+        return "" ;
+   end if;
+   if is_access(designated_formal) then
+        designated_formal := ST(designated_formal).designated_type ;
+        designated_actual := ST(designated_actual).designated_type ;
+   end if;
+   if (can_constrain(designated_formal) /=
+       can_constrain(designated_actual)) then
+        errmsg("formal and actual designated types must be both ",
+                " constrained or unconstrained", "12.3.3") ;
+        sem_trace_proc_exit(3, "Valid_Access_Instance");
+        return "" ;
+   end if;
+   check_actual_constraint(designated_formal, designated_actual) ; 
+   sem_trace_proc_exit(3, "Valid_Access_Instance");   
+   return actual_type ;
+
+else
+    errmsg("Expect access type to instantiate ",
+                            original_name(g_name),"12.3.5") ;
+   sem_trace_proc_exit(3, "Valid_Access_Instance");   
+    return "" ;
+end if;
+
+end valid_access_instance;
+
+--S+ Valid Array Instance
+procedure valid_array_instance(g_name, actual_type, type_map) ;
+sem_trace_proc_entry(3, "Valid_Array_Instance");
+sem_trace3(5, gname, actual_type, type_map) ;
+
+if not is_array(actual_type) then 
+        errmsg("Expect array type to instantiate ", 
+                        original_name(g_name),"12.3.4") ;
+    return "" ;
+
+elseif can_constrain(actual_type) and 
+      not  can_constrain(g_name) then    
+    errmsg("Expect constrained array type to instantiate ",
+                          original_name(g_name),"12.3.4") ;
+    return "" ;
+
+elseif not can_constrain(actual_type) and 
+               can_constrain(g_name) then
+    errmsg("Expect unconstrained array type to instantiate ",
+                         original_name(g_name),"12.3.4") ;
+   
+elseif no_dimensions(actual_type) /= 
+	   no_dimensions(ST(g_name).type_of) then 
+    errmsg("Dimensions of actual type do not match those of ",
+                                original_name(g_name),"12.3.4") ;
+    return "" ;
+
+else
+    -- Collect index types and component type.
+    g_info := get_array_information(ST(g_name).type_of) ;
+    a_info := get_array_information(actual_type) ;
+    new_info := replace(g_info, type_map) ;
+    g_comp := top(new_info) ;
+    a_comp := top(a_info) ;                                     
+
+    if exists t = new_info(i) |
+                        not compatible_types(t, a_info(i)) then 
+        errmsg("index or component type mismatch in instantiation",
+                   " of array type " + original_name(g_name),"12.3.4") ;
+        return "" ;
+    elseif  (if is_access(g_comp) then
+                can_constrain(ST(g_comp).designated_type) /=
+                can_constrain(ST(a_comp).designated_type)
+            else
+                can_constrain(g_comp) /=
+                can_constrain(a_comp) 
+            end if)
+        then
+        errmsg("formal and actual array component type must be ",
+                "both constrained or unconstrained", "12.3.4");
+        return "";
+    else
+        for i in [1..#new_info] loop 
+            check_actual_constraint(new_info(i), a_info(i)) ;
+        end loop;
+        return actual_type ;    
+    end if;
+end if;
+
+end valid_array_instance;
+
+--S+ is_valid_discriminant_instance
+procedure is_valid_discriminant_instance(g_name, a_name, rw type_map) ;      
+sem_trace_proc_entry(3, "Is_Valid_Discriminant_Instance");
+sem_trace3(5, g_name, a_name, type_map) ;      
+
+-- Checks that the formal and actual discriminant lists match in type
+-- and position.
+
+g_list := discriminant_list(g_name) ;
+a_list := discriminant_list(a_name) ;
+if #g_list /= #a_list then 
+    sem_trace_proc_exit(3, "Is_Valid_Discriminant_Instance");
+    return false ;
+else
+    for gd = g_list(i) loop 
+                                                    -- Type of discriminant
+        gt := type_map(ST(gd).type_of) ? ST(gd).type_of ; -- may be formal generic.
+        at := ST(a_list(i)).type_of ;                  -- Base type of actual
+        if base_type(gt) /= base_type(at) then      -- must match.
+            sem_trace_proc_exit(3, "Is_Valid_Discriminant_Instance");
+            return false ; 
+        else
+            check_actual_constraint(gt, at) ;       -- and constraints also.
+
+            -- The discriminant names of the formal may have been used
+            -- in a selector in the generic body. They must be mapped into
+            -- the actual discriminants. 
+            type_map(gd) := a_list(i) ;
+        end if;
+    end loop;
+end if;
+sem_trace_proc_exit(3, "Is_Valid_Discriminant_Instance");
+return true ;
+
+end is_valid_discriminant_instance;
+
+--S+ get_array_information 
+procedure get_array_information(a_type) ;
+
+-- Make sequence of index and component type marks, for comparing a
+-- generic array type with its instantiation.
+
+sem_trace_proc_entry(4, "Get_Array_Information");
+sem_trace(5, "a_type: " + str(a_type) ) ;
+sem_trace_proc_exit(4, "Get_Array_Information");
+return index_types(a_type) with component_type(a_type) ;
+
+end get_array_information;
+
+--S+ Generic Subprogram Instance 
+procedure generic_subprogram_instance(instance, g_name, g_info, rw type_map);
+
+sem_trace_proc_exit(3, "Generic_Subprogram_Instance");
+sem_trace2(4,instance, g_name);
+sem_trace2(4,g_info, type_map);
+ 
+-- Determine the operator, procedure, or attribute which is used to
+-- instantiate a given generic subprogram parameter.
+ 
+-- -g_info- is the signature and the return type of the generic sub-
+-- program. To validate the new instance, we must first replace
+-- generic types by actual types, to find the instantiated signature
+-- of the subprogram .
+ 
+[new_signature, new_type] := replace(g_info, type_map) ;
+ 
+sem_trace(0,"Generic Subprogram has signature " + str(new_signature) + str(new_type) ) ;
+
+-- If the box was used to specify a default subprogram, we must now 
+-- retrieve the visible instances of that identifier.
+
+name := if is_tuple(instance) and instance(1) = "box" then
+                find_old(instance(2))
+        else
+                instance 
+        end if;
+
+if is_overloaded(name) then
+    -- It must be the name of an operator or user-defined procedure.
+    -- We must find the correct one by matching with the desired
+    -- signature. This is equivalent to the matching of a renamed
+    -- subprogram.
+
+    [proc_name, renamed_sig] 
+			:= renamed(name, new_signature, new_type) ; 
+
+    if proc_name = om  then 
+        -- Ambiguous or no match. 
+        errmsg("ambiguous or invalid match for generic subprogram ",
+                                  original_name(arb name),"12.3.6") ;
+        proc_name := [] ; 
+    else
+        if (ST(proc_name).alias) /= om then         
+            -- Instance is a renamed or derived subprogram. Subprogram 
+            -- calls must use the name of the parent subprogram, so:
+            proc_name := ST(proc_name).alias;
+        end if;
+    end if; 
+
+elseif is_tuple(name) and name(1) = "'" then
+
+    -- Instantiation by an attribute. This is correct if the procedure
+    -- has a single argument, and the proper type relation holds 
+    -- between it and the return type.
+    [-, attr, typ] := name ;
+    typ := replace(typ, type_map) ;
+    proc_name := ["'", attr, typ] ;
+
+    -- Only attributes that are functions can be used as default actual.
+    -- The type of their actual parameter is determined as follows:
+
+    a_type := if attr in {"VAL", "PRED", "SUCC", "VALUE"} 
+                                    then typ
+              elseif attr = "POS"   then "universal_integer" 
+              elseif attr = "IMAGE" then "STRING" 
+              else                       "none"    -- not a function attribute.
+              end if;
+
+    if ST(attr).nature /= "attribute" or not is_type(typ)
+        or # new_signature > 1 or
+        not compatible_types(new_type , a_type) then            
+        errmsg("Attribute does not match generic subprog.spec.",
+                                            "","12.3.6") ;
+        proc_name := [] ;
+    end if;
+
+elseif new_type = "none" and is_tuple(name) then
+
+    -- possible renaming by entry expression.
+    [proc_name, renamed_sig] := renamed_entry(name, new_signature) ;
+
+else 
+    errmsg("Invalid object for instantiation of generic subprog",
+                         "","12.3.6") ;
+    proc_name := [] ;
+end if;
+
+if is_identifier(proc_name) then
+    type_map(ST(g_name).alias) := proc_name ;
+elseif proc_name /= [] then
+
+    if proc_name(1) = "'" then
+        instantiation_code with:= renamed_attribute(ST(g_name).alias, 
+					  new_signature, proc_name) ;
+
+     else                                       -- Instance is an entry.
+        new_name := g_name + newat_str();       -- Procedure whose body
+        type_map(ST(g_name).alias) := new_name ;   -- is an entry call.
+        instantiation_code with:=
+            entry_as_procedure(new_name, new_signature, proc_name)  ;
+     end if;
+end if;
+ 
+end generic_subprogram_instance;
+ 
+--S+ Replace 
+procedure replace(expn, mapping) ;
+sem_trace_proc_entry(5, "Replace");
+sem_trace(5,"Replace all identifiers in " + str(expn) ) ;
+-- General subtitution procedure. Replace all identifiers in expn
+-- by their images under -mapping- . This procedure completes the
+-- process of generic instantiation.
+-- This procedure also includes a few tree normalization and constant-folding
+-- operations that would usually be performed in some subsequent  phase of
+-- translation. 
+ 
+if is_identifier(expn) then
+    sem_trace_proc_exit(5, "Replace");
+    return  mapping(expn) ? expn ;
+
+elseif is_tuple(expn) then
+    new_expn := [replace(twig, mapping) : twig in expn] ;
+
+    case expn(1)  
+
+      when "subprogram_instance", "package_instance" =>  
+      -- Check for illegal recursive instantiations.
+        check_recursive_instance(expn(2)) ;
+
+    when "call" => 
+         [-, subp_name, -] := new_expn ;
+         if ST(subp_name).nature = "literal" then
+	   -- generic formal subprogram instantiated with literal.
+            new_expn := const_val(subp_name) ;
+         end if;
+   
+    when "'" => 
+        [-, attr, -, typ ] := new_expn ;
+        new_expn := eval_attribute(new_expn) ;
+        if is_value(new_expn) and is_universal_real(new_expn(2)) 
+	and typ /= "universal_real" then
+           -- Attribute of some real type.  As this is a non-static attribute,
+	   -- it is computed in the largest floating point precision available.
+
+           new_expn := ["ivalue", 
+			float_fra(new_expn(2), long_float_digits)] ;
+        end if;
+
+    when "bind" => 			--  special-case generic in-out parameters.
+       [-, a_type, f_type, arg] := expn ;
+       if is_identifier(arg) and ST(arg).nature = "generic_inout" 
+	and (act := mapping(arg)) /= om then
+          -- Impose the constraint that applies to the actual.
+          new_expn(2) := ST(act).type_of ; 
+        end if;
+
+    when "convert" =>  new_expn := eval_conversion(new_expn) ;
+ 
+    when "delayed_repr" => 
+    --
+    -- 
+      [-, typs] := new_expn;
+    -- Replace  the representation of a record type with generic components
+    -- with its actual representation now that the representation of the 
+    -- instance is known.
+      repr_map := {};
+      for typ in typs loop 
+	if is_record(typ) then
+	   representation(typ) := [default_size_value(typ), true, false,
+				   default_record_value(typ)];
+	   repr_map(typ) := representation(typ);
+	elseif is_fixed_type(typ) then
+	   sig := ST(typ).signature ;
+	   if is_value(sig(2)) and is_value(sig(3)) then
+      	   repr_map(typ) := ST(typ).signature  + 
+	   		    (representation(ST(typ).type_of) ? [32]);
+           else  continue;
+           end if;
+    -- Replace the delayed_repr corresponding to a subtype which is
+    -- dependent on a generic formal type, with the representation of its
+    -- instance, now that the actual type is known.
+	else
+           repr_map(typ) := representation(ST(typ).type_of)?[32];
+	end if;
+      end loop;
+      new_expn := ["repr", repr_map];
+    otherwise =>					-- to be continued.
+        null;
+    end case;    
+    sem_trace_proc_exit(5, "Replace");
+    return new_expn;
+
+elseif is_set(expn) then
+    return  trace_and_return(5, "Replace",
+              {replace(obj, mapping)  : obj  in expn});
+else                                            -- numeric literal
+    sem_trace_proc_exit(5, "Replace");
+    return  expn ;
+end if; 
+end replace;
+--+ Check Recursive Instance
+procedure check_recursive_instance(nam) ;
+sem_trace_proc_entry(3, "Check_Recursive_Instance");
+sem_trace(5,nam) ;
+
+-- Verify that an instance appearing in the current instantiation does
+-- not include an instantiation of the unit being instantiated. We
+-- use open_scopes to keep track of units already seen.
+
+if nam in open_scopes then
+    errmsg(original_name(nam),
+                        " contains an instance of itself", "12.3") ;
+else
+    open_scopes with:= nam ; 
+    case ST(nam).nature 
+        when "generic_procedure", "generic_function" => 
+            [-,-,body_] := ST(nam).signature ;
+            scan_instance(body_);
+
+        when "generic_package_spec" => 
+            [-, specs, -] := ST(nam).signature ;
+            scan_instance(specs) ;
+
+        when "generic_package" => 
+            [-, specs, body_] := ST(nam).signature ;
+            scan_instance(specs) ;
+            scan_instance(body_) ;
+    end case;
+    nam frome open_scopes ;
+end if;
+sem_trace_proc_exit(3, "Check_Recursive_Instance");
+end check_recursive_instance; 
+--S+ Scan Instance
+procedure scan_instance(tree) ;
+sem_trace_proc_entry(4, "Scan_Instance");
+
+-- Subsidiary procedure to the above: search the specs or body of a
+-- generic object, for the presence of forward instantiations, i.e.
+-- instantiations that preceeded the body of the generic. Non-trivial
+-- recursive instantiations can only occur in the presence of such.
+
+if not is_tuple(tree) then 
+    sem_trace_proc_exit(4, "Scan_Instance");
+    return ;
+elseif tree(1) in ["subprogram_instance", "package_instance"] then
+        check_recursive_instance(tree(2)) ;
+else
+     for twig in tree loop  scan_instance(twig) ; end loop;
+end if;
+sem_trace_proc_exit(4, "Scan_Instance");
+end scan_instance;
+--S+ Replace Prefix 
+procedure replace_prefix(body_, old_prefix, new_prefix) ;
+sem_trace_proc_entry(3, "Replace_Prefix");
+sem_trace3(5,body_, old_prefix, new_prefix) ;
+ 
+-- This procedure creates new names for the identifiers in a generic
+-- module, by replacing the generic package name, which appears as a
+-- prefix of all local names, with name of instantiated package.
+ 
+return trace_and_return(3, "Replace_Prefix",
+       if body_ = om then 
+            om 
+       elseif is_identifier(body_) then 
+            (if match(body_,old_prefix) /= "" then new_prefix + body_
+                                     else body_ end if)
+       elseif is_tuple(body_) then 
+            [replace_prefix(branch, old_prefix,new_prefix) 
+                                                : branch in body_]
+       elseif is_set(body_) then 
+            {replace_prefix(branch, old_prefix,new_prefix) 
+                                                : branch in body_} 
+       else 
+            body_
+       end if) ;
+end replace_prefix;
+end adasem12;

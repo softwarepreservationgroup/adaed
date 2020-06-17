@@ -1,0 +1,1 @@
+with text_io; use text_io;package my_int_io is new integer_io(integer);

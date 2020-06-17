@@ -1,0 +1,597 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_tasking.stl,v 1.1 91/01/02 15:26:17 banner Exp $
+--
+package body int_tasking;
+
+  use int_globals;
+  use int_procs;
+  use int_util;
+  use adaio;
+  use predefs;
+  use callout_package;
+
+--T+ TASKING PROCEDURES (Chap. 9)
+--S+ ACTIVATE_TASK
+procedure activate_task(task);
+-- 
+-- Elaboration of the declarations is complete. RM 11.4.2 (d) requires
+-- exceptions raised during elaboration of a task's declarations to
+-- propagate to the activating unit. This insures it, and allows
+-- termination of not yet activated tasks .
+-- (RM 9.3 - proc TERMINATE_UNACTIVATED)
+--
+    [taskid, taskbody] := task;
+    body_ := emap(taskbody);
+    if absent(body_) then 
+      exec([["raise", "PROGRAM_ERROR",
+            "Access to task body before elaboration"]]);
+      return;
+    end if;
+    [decls, stmts, hndlr] := body_;
+    special_hndlr := 
+          [["exception",
+            [[{"others"},
+              [["signal_", curtask, "error"]
+          ]]]]];
+    envstackt(taskid)(height(taskid)).stsqt := 
+      [["block",
+         [ special_hndlr + decls + [["signal_", curtask, "ok"]],
+           stmts,
+           hndlr
+         ]
+      ]];    
+    envstackt(taskid)(height(taskid)).emapt +:= (emap lessf "current_task");
+    active_tasks with:= taskid;
+    ready_tasks with:= taskid;
+    activating_subtasks(curtask) with:= taskid;
+
+end activate_task;
+--S+ ADJUST_DELAYS
+procedure adjust_delays(actual_delay);
+--
+--  Adjusts the delay times remaining in delayed tasks
+--  by subtracting the amount of time since the last
+--  time the clock was serviced.
+--
+  disable;
+--
+  delayed_tasks := {[t, [d - actual_delay, b]] :
+			[d, b] = delayed_tasks(t)};
+--
+  enable;
+--
+end adjust_delays;
+--S+ CHECK_MASTER
+procedure check_master(taskid);
+--
+-- Called when a task terminates, is aborted, or is waiting at 
+-- a selective wait with an open terminate alternative.
+-- This may allow the master to complete termination, 
+-- leave a scope, or its decendants to be terminated.
+-- (RM 9.4 and 9.7.1 (f) )
+--
+  if strace >= 5 then 
+    do_dumps(["ACTIVE_TASKS", "TERMINATED_TASKS", "COMPLETED_TASKS", 
+	      "ABNORMAL_TASKS", "TERMINATABLE", "HELD_TASKS"]);
+  end if;
+  my_master := master(taskid);
+  disable;
+  if my_master in held_tasks or my_master in terminatable then
+    d_set := all_inner_dependents(my_master);
+    if my_master in held_tasks and is_empty(d_set) then
+ --     master may complete its termination
+      ready_tasks with:= my_master;
+      held_tasks less:= my_master;
+    elseif my_master in terminatable
+      and (is_empty(d_set) or d_set subset terminatable) then
+        check_master(my_master);
+    elseif nonempty(d_set) and d_set subset terminatable then
+          -- all tasks in d_set may be terminated
+      stsq := [["terminate"]]; -- including myself.
+       for d in d_set loop
+        envstackt(d)(height(d)).stsqt := [["terminate"]];
+        open_entries(d) := om;
+        ready_tasks with:= d;
+      end loop;
+      terminatable -:= d_set;
+    end if;
+    if strace >= 5 then 
+      do_dumps(["ACTIVE_TASKS", "TERMINATED_TASKS", "COMPLETED_TASKS", 
+	        "ABNORMAL_TASKS", "TERMINATABLE", "HELD_TASKS"]);
+    end if;
+  end if;
+  enable;
+end check_master;
+--S+ CHECK_CURRENT_RENDEZVOUS
+procedure check_current_rendezvous(taskid, exname, cause);
+--
+-- Here we test for the case of an exception which is raised (or 
+-- received) by the called task during a rendezvous and propagate either
+-- a copy of the exception to the entering task, first testing that the 
+-- entering task is still attempting to enter.
+--
+      stmt_list := if taskid = curtask then stsq 
+		   else envstackt(taskid)(height(taskid)).stsqt end if;
+      if #stmt_list > 0 then
+        last_stmt_taskid := stmt_list(#stmt_list) ; 
+        if last_stmt_taskid.opcode = "endrv_" then
+           [-, -, enteringtask] := last_stmt_taskid; 
+           if entering(enteringtask) = taskid then
+              prepend(  [["raise", exname, cause ]], enteringtask);
+              entering lessf:= enteringtask;
+              ready_tasks with:= enteringtask;
+           end if;
+        end if;
+      end if;
+end check_current_rendezvous;
+--S+ CHECK_PENDING_RENDEZVOUS
+procedure check_pending_rendezvous(taskid);
+--
+-- Used by task being aborted to check
+-- if it is waiting for a rendezvous and cancel it.
+-- if it is engaged into a rendezvous, put it into ABNORMAL_TASKS
+--
+  if (exists ent = waiting_tasks(t) | (nonempty(ent))
+    and (exists q = ent(e) | (q /= []
+      and (exists i in {1..#q} | q(i)(1) = taskid )))) then
+    waiting_tasks(t)(e)(i..i) := [];
+  end if;
+  if present(entering(taskid)) then   -- Engaged in a rendezvous
+     abnormal_tasks with:= taskid;
+  end if;
+end check_pending_rendezvous;
+--S+ CHECK_UNSERVICED_RENDEZVOUS
+procedure check_unserviced_rendezvous(taskid);
+--
+-- Used by a task that is terminating or being aborted
+-- to check for tasks waiting on its entry queues which
+-- have not been serviced. If any are found, TASKING_ERROR
+-- is raised in the calling task.
+--
+  e := waiting_tasks(taskid) ? {};
+  if nonempty(e) then
+     for elist = e(ename) | elist /= [] loop
+       for [t, -] in elist loop
+        envstackt(t)(height(t)).stsqt := 
+	    [["raise", "TASKING_ERROR", "called task aborted"]];
+        ready_tasks with:= t;
+        delayed_tasks(t) := om;
+      end loop;
+    end loop;
+    waiting_tasks(taskid) := {};
+  end if;
+   for   called = entering(caller) 
+              | (called = taskid) and (caller notin abnormal_tasks) loop
+    envstackt(caller)(height(caller)).stsqt := 
+	[["raise","TASKING_ERROR","called task aborted"]];
+    ready_tasks with:= caller;
+  end loop;
+end check_unserviced_rendezvous;
+--S+ CREATE_TASK
+procedure create_task(taskid, priority, entryids, t_master, t_taskenv);
+--
+-- Create_task is used to create a task when a task object
+-- declaration has been elaborated.
+--
+  envstackt(taskid) := [ [{}, [], [], [], {}, ""] ];
+  master(taskid) := t_master;
+  taskenv(taskid) := t_taskenv;
+  waiting_tasks(taskid) := {[entryid, []] : entryid in entryids};
+  task_prio(taskid) := priority;
+  task_clocks(taskid) := 0;
+  task_counts(taskid) := 0;
+end create_task;
+--S+ DEPENDANT_TASKS
+procedure dependant_tasks(root);
+--
+--  Does transitive closure of MASTER relationship
+--  for active tasks.
+--
+  d_set := {t in active_tasks |
+              master(t) = root and taskenv(t) = #envstackt(root)};
+   for d in d_set loop
+    d_set +:= dependant_tasks(d);
+  end loop;
+  return d_set;
+end dependant_tasks;
+--S+ DIRECT_DEPENDANT_TASKS
+procedure direct_dependant_tasks(root);
+--
+--  Yields the set of tasks depending directly on the given task
+--
+  d_set := {t in active_tasks |
+              master(t) = root and taskenv(t) = #envstackt(root)};
+  return d_set;
+end direct_dependant_tasks;
+
+--S+ all_level_dependents
+procedure all_level_dependents(root) ;
+
+-- Collect all depedents of a given task, including those that are created
+-- at a nesting level smaller than that of the block currently being exited.
+
+   d_set := {t in active_tasks | master(t) = root };
+    for d in d_set loop
+     d_set +:= all_level_dependents(d);
+   end loop;
+   return d_set;
+end all_level_dependents;
+--S+ all_inner_dependents
+procedure all_inner_dependents(root) ;
+
+-- When checking a master for termination, all its dependents created at the
+-- current nesting level must be examined, as well as their dependents at ALL
+-- levels, because a dependent T1 may have executed a terminate alternative
+-- at a nesting level greater than the level at which one of its own dependents
+-- (say T2), was created. See c94008d.
+ 
+ d_set := direct_dependant_tasks(root) ;
+  for d in d_set loop
+     d_set +:= all_level_dependents(d);
+   end loop;
+   return d_set;
+end all_inner_dependents;
+--S+ INITIALIZE_TASKING
+procedure initialize_tasking;
+--
+-- Called by Init_env during compiler initialization. Creates the 
+-- initial tasking environment.
+--
+  task_prio := { [idle, -1], [maintask, 9] };
+  active_tasks := {idle, maintask};
+  ready_tasks := [idle, maintask];
+  open_entries := {};
+  master := {};
+  delayed_tasks := {};
+  held_tasks := {};
+  entering := {};
+  waiting_tasks := { [idle, {}], [maintask, {}] };
+  activating_subtasks := {};
+  taskenv := {};
+  terminatable := {};
+  terminated_tasks := {};
+  completed_tasks := {};
+  abnormal_tasks := {};
+  delay_timer := 0;
+  curtask := maintask;
+  task_clocks := { [idle, 0], [maintask, 0] };
+  task_counts := { [idle, 0], [maintask, 0] };
+  system_clock := 0;
+--
+--
+end initialize_tasking;
+--S+ KILL
+procedure kill(task);
+--
+-- Actually aborts a task and (recursively) its dependant
+-- Returns a flag indicating if a scheduling action is necessary
+--
+   sched_flag := false;
+   if task in terminated_tasks + abnormal_tasks then 
+      null;
+   elseif task notin active_tasks then -- not yet activated
+     terminated_tasks with:= task;
+   else                                -- already activated
+
+     direct_dep := direct_dependant_tasks(task);
+      for subtask in direct_dep loop -- terminated and abnormal 
+                                          -- tasks not in direct_dep
+        sched_flag := kill(subtask) or sched_flag;
+     end loop;
+
+     if task notin ready_tasks then  -- suspended for some reason
+       delayed_tasks(task) := om;
+       check_pending_rendezvous(task);  -- may set the task to abnormal
+       check_current_rendezvous(task, "TASKING_ERROR", "abort"); 
+       held_tasks less:= task;
+     else
+       lesstup(ready_tasks, task);
+       sched_flag := true;
+     end if;
+
+--    must be done for all abnormal tasks
+
+     check_unserviced_rendezvous(task);
+     active_tasks less:= task;
+     if exists t in direct_dep | t in abnormal_tasks then
+	abnormal_tasks with:= task;
+     end if;
+     if task notin abnormal_tasks then
+	terminated_tasks with:= task;
+        check_master(task);
+     end if;
+     uncreate(task);
+
+   end if;
+   return sched_flag;
+
+end kill;
+procedure lesstup(rw tname, entry);
+--
+-- Produces a tuple without entry
+--
+  assert is_tuple(tname);
+  if exists i in {1..#tname} | tname(i) = entry then
+    tname(i..i) := [];
+  end if;
+end lesstup;
+
+--S+ MAKE_RENDEZVOUS
+procedure make_rendezvous(calling_task, called_task, entryid, rendez_body);
+--
+-- Initiates a rendezvous between two tasks. Used symmetrically by 
+-- entering task or accepting task when they discover a rendezvous
+-- to be possible.
+--
+  disable;
+  entering(calling_task) := called_task;
+  lesstup(ready_tasks, calling_task);
+  enable;
+  [entryname, -] := entryid;
+  [br, b] := rendez_body;
+  entry_object := envstackt(calling_task)(height(calling_task)).emapt(entryname);
+  [-, formals] := entry_object;
+  if curtask = called_task then
+      stsq := b + stsq;
+      push_env ;
+      stsq := br +
+          [["endrv_", entryname, calling_task, task_prio(called_task)]];
+      bind_enter(formals, emap, 
+	         envstackt(calling_task)(height(calling_task)).valstackt);
+  else
+      prepend(b , called_task);
+      envstackt(called_task) with:=
+          [envstackt(called_task)(height(called_task)).emapt, [],[],[],{},""];
+      envstackt(called_task)(height(called_task)).stsqt := br +
+          [["endrv_", entryname, calling_task, task_prio(called_task)]];
+      bind_enter(formals, envstackt(called_task)(height(called_task)).emapt, valstack);
+  end if;
+  task_prio(called_task) max:= task_prio(calling_task); -- RM 9.8
+  disable;
+  lesstup(ready_tasks, called_task);
+  ready_tasks := [called_task] + ready_tasks;
+  enable;
+  schedule;
+end make_rendezvous;
+--S+ READY_DELAYED
+procedure ready_delayed;
+--
+-- Ready any tasks whose delay period is completed.
+--
+  disable;
+   for [d, b] = delayed_tasks(t) | d <= 0 loop
+    open_entries(t) := om;
+    prepend(b , t);
+    ready_tasks with:= t;
+    delayed_tasks(t) := om;
+    if exists e_queue = waiting_tasks(c_task) 
+         | exists t_list = e_queue(e_name)
+             | exists l_elmt in t_list  
+               | l_elmt(1) = t then
+      lesstup(waiting_tasks(c_task)(e_name), l_elmt);
+    end if;
+  end loop;
+  enable;
+end ready_delayed;
+--S+ SCHEDULE
+procedure schedule;
+--
+-- SCHEDULE
+-- --------
+--
+-- Makes a scheduling decision.
+--
+--
+  update_task_clock;
+  disable;
+--
+ --  IDLE is always in READY_TASKS and of lowest priority
+--
+    maxprio := max/[task_prio(t) : t in ready_tasks];
+    assert exists t in ready_tasks | task_prio(t) = maxprio;
+    if t /= curtask then    -- Save current state.
+        if is_tuple(envstackt(curtask)) then 
+	    save_env ;
+        end if;    -- else it is a terminated one,  nothing to save.
+        curtask := t;
+        set_env ;
+    end if;
+    if time_slice /= 0 then
+
+ --    round-robin
+       lesstup(ready_tasks, curtask);
+       ready_tasks with:= curtask;
+    else
+
+ --    fifo
+       null; -- find does a sequential search
+    end if;
+  enable;
+--
+--
+end schedule;
+--S+ TERMINATE_UNACTIVATED
+procedure terminate_unactivated;
+--
+-- Should an exception be raised by the elaboration of a declarative part or 
+-- package specification, then any task that is created (directly or indirectly)
+-- by this elaboration and that is not yet activated becomes terminated and is 
+-- therefore never actviated. [LRM 9.3(4)]
+--
+-- Check for all such tasks in the current environment
+
+ unactivated_tasks_to_be_terminated := range tasks_declared; 
+ 
+   for t_taskenv=taskenv(taskid)  | 
+     master(taskid) = curtask and
+     t_taskenv = height(curtask) and taskid notin active_tasks loop 
+    unactivated_tasks_to_be_terminated with:= taskid; 
+  end loop;  
+  
+   for taskid in unactivated_tasks_to_be_terminated loop  
+    terminated_tasks with:= taskid; 
+    check_unserviced_rendezvous(taskid); -- (RM 11.5) 
+    uncreate(taskid); 
+  end loop; 
+ 
+end terminate_unactivated;
+--S+ UPDATE_TASK_CLOCK
+procedure update_task_clock;
+--
+-- Used to insure accurate task clocks. Adds accumulated time
+-- (and count of statements executed) to software clock entry
+-- for current task. Called before any possible task switch.
+--
+  actual_delay := current_time - last_clock_tick_curtask;
+--
+  task_clocks(curtask) +:= actual_delay;
+  task_counts(curtask) +:= current_stmt_count;
+--
+  last_clock_tick_curtask := current_time;
+  current_stmt_count := 0;
+end update_task_clock;
+--S+ UNCREATE
+procedure uncreate(task);
+--
+-- Reclaims table space used by task being terminated.
+--
+  waiting_tasks(task) := om;
+  open_entries(task) := om;
+  task_prio(task) := om;
+   for t = master(child) 
+              | t = task and taskenv(child) = #(envstackt(task)?{})
+  loop
+    master(child) := om;
+    taskenv(child) := om;
+  end loop;
+  envstackt(task) := om;
+end uncreate;
+--S+ WAIT_SUBTASK
+procedure wait_subtasks;
+--
+-- Checks  to see  if there are  any  tasks which  are subtasks of the 
+-- current  environment which  are still active.  If  so,  the current 
+-- task is placed in hold status to await termination of these subtasks.
+-- The decendants of the current environment are checked to see if they 
+-- may be terminated.The call to wait_subtasks must always  be the last
+-- action performed  in interpreting a  single statement  form, since it
+-- can  cause loss of control ( removal of the task from the ready list).
+-- Usually the  call  to wait_subtasks  is  preceded by an exec statement
+-- which specifies the action to  be taken  after the wait (if any) is 
+-- completed. 
+--
+  if strace >= 5 then 
+    do_dumps(["MASTER", "TASKENV", "ACTIVE_TASKS", "TERMINATED_TASKS",
+               "TERMINATABLE", "HELD_TASKS"]);
+  end if;
+  disable;
+  d_set := dependant_tasks(curtask);
+  if nonempty(d_set) then
+    lesstup(ready_tasks, curtask);
+    held_tasks with:= curtask;
+    if d_set subset terminatable then
+       for d in d_set loop
+        envstackt(d)(height(d)).stsqt := [["terminate"]];
+        open_entries(d) := om;
+        ready_tasks with:= d;
+      end loop;
+      terminatable -:= d_set;
+    end if;
+    if strace >= 5 then 
+      do_dumps(["ACTIVE_TASKS", "TERMINATED_TASKS", "TERMINATABLE",
+                 "HELD_TASKS"]);
+    end if;
+    schedule;
+  end if;
+  enable;
+end wait_subtasks;
+
+--S+ CHECK_CLOCK_INTERRUPT
+procedure check_clock_interrupt;
+--
+-- Called on each cycle thru the interpreter loop to
+-- simulate the effect of a hardware clock interrupt.
+--
+  current_time := cumtime();
+--
+  if current_time >= next_interrupt_time then
+--
+    service_clock;
+--
+  end if;
+--
+end check_clock_interrupt;
+--S+ SERVICE_CLOCK
+procedure service_clock;
+--
+-- This routine would service the hardware clock interrupt if there
+-- were one. It updates the software clocks, ages the delay queue, 
+-- and calls the scheduler if necessary.
+--
+    actual_delay := current_time - last_clock_tick;
+    next_interrupt_time := current_time + clock_tick;
+    last_clock_tick := current_time;
+--
+    system_clock +:= actual_delay;
+--
+    adjust_delays(actual_delay);
+    ready_delayed;
+--
+    if time_slice /= 0 then -- don't allow tasks
+                            -- to run until blocked
+                            -- use time slices instead
+--
+      delay_timer -:= actual_delay;
+--
+ -- We make a scheduling decision if
+ -- the current task has timed out.
+--
+      if delay_timer <= 0 then
+        delay_timer := time_slice;
+        schedule;
+      end if;
+--
+    end if;
+--
+end service_clock;
+--S+ TERMINATE_EXECUTION
+procedure terminate_execution;
+--
+-- Actions to be taken just prior to interpreter returning to its caller.
+--
+  update_task_clock;
+--
+  predef_term;
+--
+ -- Output task clocks and statement counts.
+--
+  if cdebug5 /= 0 or strace > 0 then
+   null;
+   -- to_list("TASK      " + lpad("TASK CLOCKS", 20) + 
+               --lpad("STATEMENT COUNTS", 20));
+     --for [task, mytime] in task_clocks loop
+      --mystmts := task_counts(task);
+      --to_list(rpad(task, 10) + lpad(str(mytime) , 20) + 
+         --lpad(str(mystmts) , 20) );
+    --end loop;
+  end if;
+--
+--
+--
+  to_list(" ");
+  to_list("  Execution complete");
+--
+end terminate_execution;
+
+--S+ START_THE_CLOCK
+procedure start_the_clock;
+--
+-- Initializes the system and task clocks.
+--
+  clock_tick := 500;
+  last_clock_tick := cumtime();
+  last_clock_tick_curtask := last_clock_tick;
+  next_interrupt_time := last_clock_tick; -- force immediate interrupt
+--
+end start_the_clock;
+end int_tasking;

@@ -1,0 +1,1 @@
+--::::::::::--diners.ada--::::::::::WITH Room;PROCEDURE Diners IS BEGIN  Room.Head_Waiter.Open_The_Room;  --LOOP    --DELAY 20.0;  --END LOOP;END Diners;

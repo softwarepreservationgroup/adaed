@@ -1,0 +1,15 @@
+int	stack_count(struct prsstack *);
+void copystack(struct two_pool *, struct two_pool **, int *);
+void dump_stack(struct two_pool *);
+void dump_prssyms(struct two_pool *);
+void dump_prsstack(struct prsstack *);
+void dump_toksyms(char *);
+void convtolower(char *);
+void cand_clear();
+void dump_cand();
+struct prsstack *copytoken(struct prsstack *);
+struct ast *new_node(int );
+void nodefree(struct ast *);
+struct ast **astalloc();
+void astfree(struct ast **);
+char *find_name(struct prsstack *);

@@ -1,0 +1,48 @@
+What is AdaEd?
+--------------
+
+AdaEd is an Ada compiler released under the GNU General Purpose
+Licence (see README file in this archive).  All original sources
+for AdaEd 1.11.0a are available via ftp on cs.nyu.edu.  I have
+provided replacement source files for any files that required
+modification for the Amiga platform.
+
+There has been a port of AdaEd for the Amiga available for some
+time now, however, I was unable to prevent it from having a
+software failure over just about any Ada source file.
+
+This port of AdaEd has been compiled with GCC 2.3.3 and hence
+requires ixemul.library version 39.45 or higher.
+
+Requirements
+------------
+
+The compiler will require approximately 2-3 megs of space on a
+harddisk partition.  I am not sure about minimum memory
+requirements, but I would guess that 3 meg ram will be
+sufficient.
+
+Installation
+------------
+
+1) Copy libs/ixemul.library to your libs: directory
+
+2) Before running AdaEd, you must add the following lines to your
+startup-sequence (or otherwise execute the commands)
+
+     assign ada: dh1:ada   ; Replace dh1: with your device
+     path ada:bin add
+
+3) Set your stack size to AT LEAST 100000 for the shell in which
+you will be running the compiler.  You will run into software
+failures very easily without this step!  (If you have enough
+memory, it is best to add the line "stack 100000" to your
+s:shell-startup file.)
+
+See the file "ada.0" for compiler instructions.  (Use "less" to view
+or install the file in your "man" directory for best results!)
+
+GOOD LUCK!
+
+Dylan Kucera
+djkucera@undergrad.math.uwaterloo.ca

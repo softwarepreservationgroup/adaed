@@ -1,0 +1,24 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adared_.stl,v 1.1 90/12/05 16:15:38 ada Exp $
+--
+package adared;
+
+        ------------------------------------------
+        --                                       -
+        --         A D A  -  A C T I O N         -
+        --                                       -
+        --                                       -
+        --               written by              -
+        --                                       -
+        --              Ada Project              -
+        --           Courant Institute           -
+        --          New York University          -
+        --           251 Mercer Street           -
+        --        New York, New York 10012       -
+        --                                       -
+        ------------------------------------------
+
+  procedure reduce(pno, rhs, l_token, r_token);
+
+end adared;
+

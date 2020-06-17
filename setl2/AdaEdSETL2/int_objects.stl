@@ -1,0 +1,973 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_objects.stl,v 1.1 91/01/02 15:26:05 banner Exp $
+--
+package body int_objects;
+
+  use globals;
+  use int_globals;
+  use int_procs;
+  use int_tasking;
+  use int_util;
+
+--T+ CREATE_COPY
+procedure create_copy(rd arg_val, itype, index_position);
+--
+-- Returns a new IOBJECT whose IVALUE is the same as arg_val.
+-- If arg_val is of an array or record type, then itype is
+-- its type.  This is used to constrain record iobjects created
+-- by this routine. The parameter itype may be om for other types.
+
+int_trace("At proc CREATE_COPY",arg_val);
+int_trace(itype, index_position);
+  if is_literal_ivalue(arg_val) then
+    loc := newat_str();
+    contents(loc) := arg_val;
+    return loc;
+  elseif is_fixed_ivalue(arg_val) then
+    loc := newat_str();
+    contents(loc) := arg_val;
+    return ["fixed_iobject", loc];
+  elseif is_float_ivalue(arg_val) then
+    loc := newat_str();
+    contents(loc) := arg_val;
+    return ["float_iobject", loc];
+  else
+    case arg_val.type_mark 
+--
+      when "task_ivalue" => 
+        loc := newat_str();
+        contents(loc) := arg_val(2);
+        taskname_map(arg_val(2)) := "?";
+        return ["task_iobject", loc];
+--
+      when "label_ivalue" => 
+        loc := newat_str();
+        contents(loc) := arg_val(2..);
+        return ["label_iobject", loc];
+--
+      when "proc_ivalue" => 
+        task_loc := newat_str(); 
+        index_loc := newat_str(); 
+        formals_loc := newat_str();
+        body_loc := newat_str();
+        [-, task, index, formals, body_] := arg_val;
+        contents(task_loc) := task;
+        contents(index_loc) := index;
+        contents(formals_loc) := formals;
+        contents(body_loc) := body_;
+        return ["proc_iobject", 
+          task_loc, index_loc, formals_loc, body_loc];
+--
+      when "access_ivalue" => 
+        loc := newat_str();
+        contents(loc) := arg_val(2);
+        return ["access_iobject", loc];
+--
+      when "array_ivalue" =>                                       
+        [-, val_seq, lowbound, highbound, nullval] := arg_val;
+        index_position ?:= 1;
+	[-, index_type_list, elem_itype] := get_itype(itype);
+        if index_position = #index_type_list then
+           return 
+              ["array_iobject", 
+                [ create_copy(elem, elem_itype, om): elem in val_seq ], 
+                create_copy(lowbound, om, om), 
+                create_copy(highbound, om, om), om, om, nullval];
+        else
+           return 
+              ["array_iobject", 
+                [ create_copy(sub_array, itype, index_position + 1):
+                     sub_array in val_seq],
+                create_copy(lowbound, om, om), 
+                create_copy(highbound, om, om), om, om, nullval];
+        end if;
+--
+      when "record_ivalue" => 
+
+        [-, arg_field_values] := arg_val;
+
+	itype := get_itype(itype);
+
+	if not is_tuple(itype) or itype.type_mark /= "record" then
+	  system_error("CREATE_COPY");
+	  return ["record_iobject", {}];
+	end if;
+
+	-- get the discriminants and form the discr map
+	[-, [-, variant_part], -, disc_list] := itype;
+	dmap := {[d, arg_field_values(d)] : d in disc_list};
+	if nonempty(dmap) then
+	    itype := apply_discr(dmap, itype);
+					-- apply the discrim constr
+	end if;
+
+        -- note that new_objdeclist is a map, but objdeclist is a tuple
+        new_objdeclist := {};
+	[-, [objdeclist, -]] := itype;
+         for [field_name, [field_itype, -]] in objdeclist |
+            field_name in domain arg_field_values and
+            field_name /= "fields_present" loop
+            new_objdeclist(field_name) := 
+               create_copy(arg_field_values(field_name), field_itype,
+			om);
+        end loop;
+
+	if variant_part /= [] then	-- allocate 'fields_present'
+	  loc := newat_str();
+	  contents(loc) := domain new_objdeclist;
+	  new_objdeclist("fields_present") := loc;
+	end if;
+
+	constr_disc_list :=
+             if is_empty(disc_list) then om else disc_list end if;
+        return ["record_iobject", new_objdeclist, constr_disc_list];
+--
+      when "$predef_op" => 
+        return arg_val;
+--
+      otherwise =>
+        system_error("CREATE_COPY");
+	return ["record_iobject", {}];
+--
+      end case;
+  end if;
+end create_copy;
+
+--T+ CREATE_OBJ (Chap.3)
+procedure create_obj( itype_name, default_init, t_master, t_taskenv, obj_name);
+int_trace( "CREATE_OBJ", itype_name);
+int_trace(default_init, t_master);
+int_trace(t_taskenv, obj_name);
+--
+--  The CREATE_OBJ procedure is invoked by the create_obj_ statement of
+--  the interpreter when an object must be created from a type. 
+--  The parameters are as follows:
+--
+--    itype_name     the name of the ITYPE giving the type of the object
+--
+--    default_init   set true if default initializations of record field
+--                   values are required.
+--
+--    t_master       the master task, used for creating task objects. 
+--		    This is usually, but not always CURTASK.
+--
+--    t_taskenv      the task environment to be used for creating task
+--                   objects. This is usually, but not always, #ENVSTACK.
+--
+--    obj_name       The name (user-defined or internal) of the entity
+--		    being created. It is used to keep track of size of objects.
+--		    and to name tasks for debugging purposes. The special
+--		    object 'virtual' denotes variant parts of unconstrained
+--		    records that are not selected by the default discriminant
+--		    values, and must be constructed without performing any
+--		    constraint checks on those discriminant values. 
+--
+--  On completion of execution of the create_obj_ statement, the IOBJECT
+--  which is created is left on VALSTACK, with all necessary entries
+--  made in the CONTENTS map.
+
+-- STORAGE_ERROR is raised in any of the following situations: when the
+-- dynamic storage allocated to a task is exceeded; during the 
+-- evaluation of an allocator, if the space available for the collection
+-- of allocated objects is exhausted; or during the elaboration of a 
+-- declarative item if storage is not sufficient. [LRM 11.1(8)]
+
+    if memory_allocated > max_memory_allocated then
+       exec([["raise", "STORAGE_ERROR", "heap size exceeded"]]);
+       return;
+    end if;
+
+    itype := get_itype(itype_name);
+    repr_value := itype(#itype);
+
+    case itype.type_mark 
+
+--S+ Scalar types
+  -- For all scalar types, all we do is create a new location and
+  -- set its initial value to "UNINITIALIZED" (no value set).
+
+    when "integer", "enum" => 
+      loc := newat_str();
+      contents(loc) := uninitialized;
+      push (loc);
+
+    when "float" => 
+      loc := newat_str();
+      contents(loc) := uninitialized;
+      push( ["float_iobject", loc] );
+
+    when "long_float" => 
+      loc := newat_str();
+      contents(loc) := uninitialized;
+      push( ["float_iobject", loc] );
+
+    when "fixed" => 
+      loc := newat_str();
+      contents(loc) := uninitialized;
+      push( ["fixed_iobject", loc] );
+--S+ Access types
+  -- For access types, initialize to NULL value as per RM 3.8 para. 3
+
+    when "access" => 
+      loc := newat_str();
+      contents(loc) := null_; -- RM 3.8 para. 3
+      push( ["access_iobject", loc] );
+--S+ Task
+  -- Task case. Note that task objects are constants, and most of the
+  -- information comprising them are in tables external to EMAP.
+ 
+    when "task" =>  
+      loc := newat_str();
+      taskid := "$task" + str(loc) ;
+      taskname_map(taskid) := unqualed_name(obj_name);
+      contents(loc) := taskid;
+
+      if default_init then
+         [-, entryids, prio, taskbody] := itype;
+
+         tasks_declared with:= [taskid, taskbody];
+         create_task(taskid, prio, entryids, t_master, t_taskenv);
+         full_obj_name := break(obj_name, "#" );
+         full_taskname_map(taskid) := full_obj_name;
+
+      -- A task type can make reference to itself in it own body, in which case
+      -- the task type denotes the task currently executing the body. At 
+      -- run-time this self-reference requires that a task be able to use a 
+      -- pointer to itself. The marker 'current_task' serves this purpose.
+
+         envstackt(taskid)(height(taskid)).emapt("current_task") := ["task_iobject", loc];
+      end if;
+
+      push( ["task_iobject", loc] );
+--S+ Entry case
+    when "entry" => 
+      [-, formals] := itype;
+      push( ["entry_iobject", formals] );
+--S+ Record
+  -- Record case. The complex case arises with discriminants present.
+  -- What we do in this case is to construct a new environment (using the
+  -- environment stack in the usual manner). This environment is a copy
+  -- of the surrounding environment, except that entries are made for all
+  -- the discriminants of the record, referencing their values (the value
+  -- in EMAP is directly the value of the discriminant). In addition,
+  -- there is a standard entry, under the name 'constr_disc_list' which
+  -- is a copy of the value of the constr_disc_list field in the itype.
+  -- These entries are used in dealing with component arrays and
+  -- structures which are dynamic (i.e. depend on discriminants).
+
+    when "record" => 
+      [-, [objdec_list, variant_part], constr_disc_list, disc_list] 
+                           := itype;
+
+  -- The first step is to deal with the case of a dynamic record, i.e. 
+  -- one which is constrained by one or more of the discriminants of 
+  -- an enclosing record, as indicated by the dynamic indication 
+  -- in constr_disc_list.
+
+      if is_discr_ref (constr_disc_list) then
+        [-, dmap] := constr_disc_list;
+
+  -- First set the value of all the dynamic discriminants from the values
+  -- specified for the discriminants of the enclosing record.
+
+         for [fname, fvalue] in dmap | is_discr_ref (fvalue) loop
+          if ( if obj_name = "virtual" then true else is_ok_discr(fvalue) end if) 
+          then  
+             [-, dname] := fvalue;
+             dmap(fname) := emap(dname);
+          else
+             return;
+          end if;
+        end loop;
+
+  -- If the enclosing record is constrained, then the inner one is also, 
+  -- so this is where we apply the discriminants to obtain the 
+  -- constrained type.
+
+        if obj_name /= "virtual" and present(emap("constr_disc_list")) then
+          itype := apply_discr (dmap,
+  	    ["record", [objdec_list, variant_part], om, disc_list]);
+
+        [-, [objdec_list, variant_part], constr_disc_list, disc_list]
+					:= itype ;
+
+        -- If the outer level is unconstrained, then so is the inner one, so 
+        -- here is where we override the initial default values of the 
+        -- discriminants with the values supplied in the discrimininant
+        -- constraint.
+	-- Note that this duplicates some of the code in APPLY_DISCR. We cannot 
+	-- call it here because the record would appear to be constrained by the
+	-- default values, and all variants would not be elaborated. In a low
+	-- level implementation, variants share storage, and we could invoke
+	-- APPLY_DISCR here as well. 
+
+        else
+           for i in [1..#objdec_list] loop
+             [field_name, [field_itype, field_vexpr]] := objdec_list(i);
+             if field_name in domain dmap then
+		discr_val := dmap(field_name);
+                objdec_list(i) := [field_name, [field_itype,
+                             			["ivalue", discr_val]]];
+
+                -- Now verify that the constraint is compatible with the subtype
+                -- of the discriminant.
+                [-, lbd, ubd] := get_itype(field_itype) ;
+	        if obj_name /= "virtual" 
+		and (discr_val < lbd or discr_val > ubd) then
+	         exec([["raise", "CONSTRAINT_ERROR", 
+						"discriminant constraint"]]);
+                end if;
+
+             end if;
+          end loop;
+        end if;
+      end if;
+  
+  -- If there are discriminants, then we establish the new environment
+
+      if nonempty(disc_list) then
+        push_env;
+        emap("constr_disc_list") := constr_disc_list;
+      end if;
+  
+  -- If there is no default initialization, then we can flatten out the
+  -- variant part (if there is one), so that we include all its fields
+  -- (which in this case will not be initialized in any case).
+
+      if (not default_init) and (variant_part /= []) then
+         [variant_name, altern_list] := variant_part;
+          for [choices, component_list] in altern_list loop
+           objdec_list +:= flatten_record (component_list);
+         end loop;
+	 -- Indicate that no constraint checks  on discriminant references
+	 -- should be performed on these.
+         obj_name := "virtual" ;
+         variant_part := [];
+      end if;
+
+  -- If we have no default initialization, then we just need to create
+  -- the component objects and assemble the result.
+
+      if not default_init then
+        exec ([["create_obj_", field_itype, false, t_master, t_taskenv,
+                               obj_name]
+                : [field_name, [field_itype, field_vexpr]]
+                       in objdec_list] +
+              [["create_obj_r1_", objdec_list, disc_list,
+                       constr_disc_list]]);
+  
+  -- Otherwise if we have default initialization in the non-discriminant
+  -- case, then we first create the component objects, then evaluate the
+  -- default initialization expressions, then perform the initializations
+  -- and finally assemble the result.
+
+      elseif is_empty(disc_list) then
+        exec ([["create_obj_", field_itype, 
+                 is_uninitialized(field_vexpr), 
+                 t_master, t_taskenv, obj_name] 
+                : [field_name, [field_itype, field_vexpr]]
+                       in objdec_list] +
+              [["veval_", field_vexpr]
+                : [field_name, [field_itype, field_vexpr]]
+                       in objdec_list] +
+              [["create_obj_r2_", #objdec_list]] +
+              [["create_obj_r1_", objdec_list, disc_list,
+                       constr_disc_list]]);
+
+  -- Here we have the hard case where we are performing default 
+  -- initializations, and there are discriminants present. The
+  -- first step is to evaluate the discriminants and make the
+  -- entries in EMAP to reflect the discriminant values. Note
+  -- that we must make these one by one, since one discriminant
+  -- could reference the value of a previously initialized one.
+
+      else
+        exec ([["create_obj_r3_", field_name, field_vexpr]
+                : [field_name, [field_itype, field_vexpr]]
+                       in objdec_list | field_name in disc_list] +
+              [["create_obj_r5_", objdec_list, variant_part,
+                                           disc_list, obj_name]]);
+      end if;
+--S+ Array      
+  -- Case of array
+
+    when "array" => 
+
+    [-, index_type_list, elmt_type] := itype;
+
+  --  Even in the case of a multidimensional array, an array_ivalue of 
+  --  array_ivalues is built. 
+  
+   total_elements := 1;
+   total_live_elements := 1;
+   array_structure := [];
+
+    for index_type in index_type_list loop
+
+    [-, lowbound, highbound] := get_itype(index_type);
+
+  -- Deal with the lower bound. We first create the integer location
+  -- which will be used to hold its value. If the bound is static,
+  -- then we set its value in CONTENTS and use this value as the
+  -- lower bound for the created object sequence.
+
+  -- If the bound is dynamic, then we use the dmap parameter to
+  -- obtain the type and value of the corresponding discriminant.
+  -- The array object we construct takes its lower bound from the
+  -- mimimum value of the index type (low end of its subtype range),
+  -- since we must ensure that the constructed object is large enough to
+  -- hold the maximum possible entry. The CONTENTS entry for the
+  -- lower bound is copied from the actual value of the discriminant
+  -- (and is om if there is no initial value).
+
+    if is_discr_ref (lowbound) then
+         [-, lowdiscr, discr_itype, index_base_type] := lowbound;
+         [-, discr_lowbound, -] := get_itype(discr_itype);
+         [-, index_lowbound, index_highbound] := get_itype(index_base_type);
+         actual_lowbound := index_lowbound max discr_lowbound;
+         lowvalue := emap(lowdiscr) ? actual_lowbound;
+    else
+      lowvalue := actual_lowbound := lowbound;
+      lowdiscr := om;
+    end if;
+
+  -- Deal with upper bound in a similar manner, except that we use
+  -- the largest possible value of the index type as the high
+  -- bound for creation of the sequence of objects.
+
+   if is_discr_ref (highbound) then
+      [-, highdiscr, discr_itype, index_base_type] := highbound;
+      [-, -, discr_highbound] := get_itype(discr_itype);
+      [-, index_lowbound, index_highbound] := get_itype(index_base_type);
+      actual_highbound := index_highbound min discr_highbound;
+      highvalue := emap(highdiscr) ? actual_highbound;
+    else
+      highvalue := actual_highbound := highbound;
+      highdiscr := om;
+    end if;
+
+--  If the array is a null array, it is compatible with any type,
+--  if it is not null, and if the bounds are discriminants, they must be
+--  of the index subtype, or else raise constraint_error (in IS_OK_DISCR)
+--  If the object being created is 'virtual' (i.e. a component in  a variant
+--  not selected by the discriminant values) no checks are performed.
+
+    if lowvalue <= highvalue and obj_name /= "virtual" then
+       if is_discr_ref(highbound) then
+           if not(is_ok_discr(highbound)) then return ; end if; 
+           -- The other bound may not be a discriminant, and must be checked also
+           if (not is_discr_ref(lowbound))
+              and (lowbound < index_lowbound or lowbound > index_highbound) 
+            then
+              exec([["raise", "CONSTRAINT_ERROR", "dynamic array bounds"]]) ;
+              return;
+            end if;
+       end if;
+       if is_discr_ref(lowbound) then
+          if  not(is_ok_discr(lowbound)) then return; end if;
+           -- The other bound may not be a discriminant, and must be checked also
+           if (not is_discr_ref(highbound))
+              and (highbound < index_lowbound or highbound > index_highbound) 
+            then
+              exec([["raise", "CONSTRAINT_ERROR", "dynamic array bounds"]]) ;
+              return;
+            end if;
+       end if;
+    end if;
+
+-- We make sure that the number of elements does not exceed the 
+-- maximum we allow.
+ 
+    numelements := (actual_highbound - actual_lowbound + 1) max 0;
+    live_elements := (highvalue - lowvalue + 1 ) max 0;
+    total_live_elements *:= live_elements;
+    total_elements *:= numelements;
+
+    array_structure with := 
+      [actual_lowbound, actual_highbound, lowvalue, highvalue,
+       lowdiscr, highdiscr];
+
+   end loop;
+   
+    if total_elements > 2**15 - 1 then
+       exec([["raise", "STORAGE_ERROR", "array > 2**15 - 1 elements"]]);
+       return;
+    end if;
+
+-- STORAGE_ERROR is raised in any of the following situations: when the
+-- dynamic storage allocated to a task is exceeded; during the 
+-- evaluation of an allocator, if the space available for the collection
+-- of allocated objects is exhausted; or during the elaboration of a 
+-- declarative item if storage is not sufficient. [LRM 11.1(8)]
+
+    if memory_allocated + total_elements > max_memory_allocated then
+       exec([["raise", "STORAGE_ERROR", "heap size exceeded"]]);
+       return;
+    end if;
+
+--  The structure of the array is known, so we can construct the
+--  sequence of statements that will actually create the elements, then
+--  the final array_iobject. Care must be taken not to compute any
+--  initial value for elements that exist, but are not "live", i.e.
+--  do not belong to the array we are building presently.
+--  There is a special case: a null array for which a ghost is
+--  created immediately.
+
+   if total_elements = 0 then
+      aggr := om;
+       while array_structure /= [] loop
+          [-, -, lowvalue, highvalue, -, -] frome array_structure;
+          lowobj := newat_str();
+          contents(lowobj) := lowvalue;
+          highobj := newat_str();
+          contents(highobj) := highvalue;
+          aggr := ["array_iobject", [aggr], lowobj, highobj];
+      end loop;
+      push (aggr + [om, om, "null"]);
+    
+   else -- not a null array
+
+   stmt_list := [["create_obj_", elmt_type, default_init,
+                    t_master, t_taskenv, obj_name ]];
+   stmt_list_without_init := [["create_obj_", elmt_type, false,
+                    t_master, t_taskenv, obj_name ]];
+
+
+    while array_structure /= [] loop
+      [lowbound, highbound, lowvalue, highvalue,
+                 lowdiscr, highdiscr] frome array_structure;
+
+      lowobj := newat_str();
+      contents(lowobj) := lowvalue;
+      highobj := newat_str();
+      contents(highobj) := highvalue;
+
+      new_list := [];
+
+--  nlive is the number of "live" elements, ndead is the number of 'dead'
+--  elements, i.e. elements that may exists later on if the record
+--  which contains this particular array is globally re-assigned.
+--  In any case a 'dead' element receive any initial value, even if
+--  it is a task.
+
+      nlive := (highvalue - lowvalue + 1) max 0;
+      if nlive /= 0 then
+         new_list with:= ["repeat_", nlive, stmt_list];
+      end if;
+      ndead := ((lowbound - lowvalue) max 0)
+              + ((highbound - highvalue) max 0);
+      if ndead /= 0 then
+         new_list with:= ["repeat_", ndead, stmt_list_without_init];
+      end if;
+      numelements := nlive + ndead;
+      stmt_list := new_list with ["create_obj_a_", lowobj, highobj,
+                           lowdiscr, highdiscr, numelements];
+      stmt_list_without_init :=
+         [ ["repeat_", numelements, stmt_list_without_init] ]
+       with ["create_obj_a_", lowobj, highobj,
+                           lowdiscr, highdiscr, numelements];
+            
+   end loop;
+   exec( stmt_list );
+
+   end if;
+--S+ Others
+  -- Case of delayed type definition, which is an error, since the
+  -- definition should have been completed by the time we need it!
+
+    when "delayed" => 
+       system_error("Access before elaboration (private type)");
+ 
+  -- Any other itype passed means something has gone wrong!
+
+    otherwise =>
+       system_error("unknown type " + str(itype) );
+ 
+    end case;
+
+ 
+-- increment counter MEMORY_ALLOCATED which is used to keep track of
+-- heap storage. Only scalar values are increments since arrays and records will
+-- be incremented when storage is requested for there invidiual components.
+-- STORAGE_ERROR is raised when the a request would exceed the maximum size 
+-- cumulative size allowed.
+
+ if itype.type_mark /= "array" or itype.type_mark /= "record" then
+    memory_allocated +:=1;
+ end if;
+
+end create_obj;
+
+--T+ OEVAL: Object evaluation (Chap.4)
+procedure oeval_proc(eval_action);
+int_trace("OEVAL_PROC",eval_action);
+--
+-- 
+-- This procedure is use to process most of the 'oeval_' instruction,
+-- which is used to evaluate OEXPR's to
+-- produce the resulting IOBJECT. These instructions are
+-- never present explicitly in the generated intermediate
+-- code, but are generated dynamically as an expression
+-- is evaluated. The single parameter is the next action
+-- to be performed. General possibilities are subexpressions
+-- to be evaluated and pushed onto VALSTACK, or actions which
+-- process VALSTACK entries.
+
+-- Essentially the steps taken by this procedure correspond
+-- to the steps in a conventional code generator. Only at
+-- the bottom level are actions performed which correspond
+-- to normal run time actions.
+
+-- Control is initially received when an OEXPR is encountered
+-- which must be evaluated, and the initial step is to generate
+-- an 'oeval_' instruction with the expression as its parameter.
+
+--S+ 4.1 Names
+    if is_simple_name(eval_action) then
+-- 
+-- Named Object
+-- 
+--   A string name appearing in a context requiring an OEXPR is
+--   taken to be a domain entry in EMAP, whose corresponding
+--   range element is the referenced object. The reaction is simply 
+--   to get the EMAP value (which must be the desired IOBJECT) and 
+--   stack it.
+
+      object := global_emap(eval_action) ? emap(eval_action);
+
+      if absent(object) then 
+         exec([["raise", "PROGRAM_ERROR",
+           "Access to " + str(eval_action) + " before elaboration"]]);
+      else
+        push( object );
+      end if;
+--
+    elseif not is_operation(eval_action) then
+--
+       system_error("oeval :" + str(eval_action) );
+
+ -- Otherwise we have an operation which is uniquely identified
+ -- (as usual) by its opcode (first element of the tuple).
+
+    else
+      case eval_action.opcode 
+-- 
+-- Quoted IOBJECT
+--
+--   ['iobject', oexpr]
+--
+         when "iobject" =>  
+           [-, oexpr] := eval_action;
+           push( oexpr );
+-- S+ 4.1.1 Indexed components
+--   ['[]', array_oexpr, subscript_vexpr]
+-- 
+--   The array_oexpr is an OEXPR which evaluates to the array IOBJECT,
+--   and subscript_vexpr evaluates to integer or enum IVALUEs which
+--   are the subscript values.  The result is the selected component
+--   IOBJECT.
+-- 
+
+      when "[]" => 
+        [-, array, subscript_list] := eval_action;
+         while subscript_list /= [] loop
+           subscript frome subscript_list; --PK79
+           exec ( [["veval_", subscript],
+                   ["oeval_", ["$subscript"]] ]);
+        end loop;
+        exec( [["oeval_", array]] );
+
+      when "$subscript" => 
+        pop( subscript );
+        pop( array );
+        [-, seq, lowbound, highbound] := array;
+        lowval := contents (lowbound);
+        highval := contents (highbound);
+        if absent(lowval) or absent(highval) then
+          system_error("$subscript");
+        elseif lowval = uninitialized or highval = uninitialized then
+          system_error("$subscript");
+        elseif subscript < lowval or subscript > highval then
+          exec([["raise", "CONSTRAINT_ERROR",
+			"subscript out of range"]]);
+        else
+          push( seq (subscript - lowval + 1) );
+        end if;
+
+--S+ 4.2 Slices 
+--   ['[..]', array_oexpr, slice_texpr]
+-- 
+--   The array_oexpr is an OEXPR which evaluates to the array IOBJECT.
+--   The slice_texpr entry is a TEXPR which evaluates to an ITYPE for
+--   discrete type whose range specifies the slice to be taken. If 
+--   slice_texpr is a constraint operation, then it must be an 
+--   'index_range' constraint.
+-- 
+
+      when "[..]" => 
+        [-, array, slice] := eval_action;
+        exec ( [["oeval_", array],
+                ["teval_", slice],
+                ["oeval_", ["$slice"]] ]);
+
+      when "$slice" => 
+        pop( slice );
+        pop( array );
+        [-, seq, lowbound, highbound] := array;
+        [-, slicelo, slicehi] := slice;
+        lowval := contents (lowbound);
+        highval := contents (highbound);
+
+        if absent(lowval) or absent(highval) then
+
+          system_error("$slice");
+
+        elseif lowval = uninitialized or highval = uninitialized then
+
+          system_error("$slice");
+
+        elseif slicehi < slicelo then -- null slice(special bounds check)
+                                      -- RM 4.1.2 para. 2, 3
+          push(["array_iobject", [], 
+                create_copy(slicelo, om, om),
+		create_copy(slicehi, om, om)] );
+
+        elseif slicelo < lowval or highval < slicehi then
+
+          exec ( [["raise", "CONSTRAINT_ERROR", "out of range"] ]);
+
+        else
+
+          push( ["array_iobject", 
+            	 seq(slicelo - lowval + 1 .. slicehi - lowval + 1),
+            	 create_copy(slicelo, om, om),
+		 create_copy(slicehi, om, om)] );
+
+        end if;
+--S+ 4.1.3 Selected Components (record)
+--   ['.', record_oexpr, fieldname]
+-- 
+--   The record_oexpr is an OEXPR which evaluates to the record IOBJECT.
+--   The fieldname is the name (a SETL string) of the field whose 
+--   corresponding IOBJECT will be the returned result. Note that we must 
+--   check for the field actually existing (may have wrong variant 
+--   present).
+
+      when "." => 
+        [-, record_oexpr, fieldname] := eval_action;
+        exec ( [["oeval_", record_oexpr],
+                ["oeval_", ["$select", fieldname]]]);
+
+      when "$select" => 
+        [-, fieldname] := eval_action;
+        pop( record );
+        [-, objdeclist, -] := record;
+        if present(objdeclist(fieldname)) then
+	  fields := objdeclist("fields_present");
+          if present(fields) then   -- record with unconstrained variants
+
+            if fieldname notin (contents(fields) ? {}) then
+              exec ([["raise", "CONSTRAINT_ERROR",
+                        "field absent"]]);
+            else
+              push( objdeclist(fieldname) );
+            end if;
+
+          else -- no variants or constrained discriminants
+
+            push( objdeclist(fieldname) );
+
+          end if;
+
+        else -- fieldname absent from this object
+
+          exec( [["raise", "CONSTRAINT_ERROR", "field absent"] ]);
+
+        end if;
+--
+--
+-- Constrain A Record Object
+--
+--   ['make_constrained', oexpr, texpr]
+--
+--   Oexpr evaluates to a record IOBJECT, a copy of which, with the 
+--   constr_discr_list set to that of the ITYPE corresponding to the 
+--   texpr, is left on the stack. This is used as part of parameter 
+--   passing, when the formal is constrained, but the actual is 
+--   unconstrained.
+--
+      when "make_constrained" => 
+        [-, oexpr, texpr] := eval_action;
+        exec( [["oeval_", oexpr],
+               ["teval_", texpr],
+               ["oeval_", ["make_constrained_"]] ]);
+--
+      when "make_constrained_" => 
+        pop( itype );
+        pop( iobject );
+        [-, objdeclist] := iobject;
+        [-, -, constr_discr_list] := itype;
+        push( ["record_iobject", objdeclist, constr_discr_list] );
+--S+ 4.1.3 Selected Components (dereference)
+--   ['@', access_vexpr]
+-- 
+--   The access_vexpr entry is a VEXPR which when evaluated returns
+--   an IVALUE of access type (or of a renamed object). The result 
+--   returned is the IOBJECT extracted from this value.
+--
+        when "@" => 
+          [-, name] := eval_action;
+          exec( [["veval_", name],
+                 ["oeval_", ["$@"]] ]);
+--
+        when "$@" => 
+          pop( access_value );
+          if is_access_ivalue(access_value) then
+             [-, iobject] := access_value;
+             if iobject /= null_ then
+                push( iobject );
+             else
+                exec( [["raise", "CONSTRAINT_ERROR", "null access"]] );
+             end if;
+          else
+             system_error("oeval (dereferencing)");
+          end if;
+--S+ 4.7 Qualifications 
+-- Array Index Qualification
+--
+--   ['qual_index', typename, object]
+--
+--   The qual_index form is used to check the bounds of an array object
+--   for conformity to the bounds specified by an array type.The first
+--   parameter is the name of the type, and the second is an expression
+--   for the array to be qualified. This form is used for checking an
+--   actual array parameter against a constrained formal.
+--
+      when "qual_index" => 
+        [-, typename, object] := eval_action;
+        exec( [["oeval_", object],
+               ["teval_", typename],
+               ["oeval_", ["qual_index_"]] ]);
+--
+      when "qual_index_" => 
+        pop( itype );
+        iobject := [top_valstack()];
+        [-, index_list, itypename] := itype;
+
+         while index_list /= [] loop
+          index_itype fromb index_list;
+
+          [-, l_val, u_val] := get_itype(index_itype); 
+
+          [-, iobject, lb, ub ] := iobject(1);
+
+          lbval := contents (lb);
+          ubval := contents (ub);
+
+          if (u_val /= ubval or l_val /= lbval) then -- not same bounds
+            exec([["raise", "CONSTRAINT_ERROR",
+			"incompatible bounds"]]);
+            exit;
+          end if;
+--
+      end loop;
+--
+--     ['qual_discr', typename, o_expr]
+--
+--     The  qual_discr form is used to check a record for conformity to 
+--     the discriminants specified by a record type. The first parameter 
+--     is the name of the type, and the second is an expression for the 
+--     record to be qualified. 
+--
+      when "qual_discr" => 
+        [-, typename, o_expr] := eval_action;
+        exec( [["oeval_", o_expr],
+               ["teval_", typename],
+               ["oeval_", ["qual_discr_"]] ]);
+--
+      when "qual_discr_" => 
+        pop( itype );
+        iobject := top_valstack();
+        [-, objdeclist] := iobject;
+        [-, component_list, constr_disc_list] := itype;
+
+        if is_set(constr_disc_list) then
+					  --  Constrained record type,
+                                          --  ensure that record value 
+                                          --  has same values for 
+                                          --  discriminants.
+
+          [types_objdec_list, -] := component_list;
+
+          if exists f in constr_disc_list, 
+                   [d, [t, v]] in types_objdec_list | 
+                      d = f and contents(objdeclist(f)) /= v(2) then
+             exec( [["raise", "CONSTRAINT_ERROR", "discriminant"] ]);
+          end if;
+        end if;
+--S+ array conversion.
+--   ['convert_array, from_type, to_type]
+--   Array conversion verifies that an array objet is convertible to a given
+--   array type. This instruction is used when the actual in  a call has the
+--   form of an array conversion.
+
+    when "convert_array" => 
+    [-, from_type, to_type] := eval_action;
+      pop(iobject) ;
+      convert_array(iobject, from_type, to_type) ;
+
+    when "set_bounds" => 
+      pop(iobject) ;
+      [-, to_type] := eval_action ;
+      set_bounds(iobject, to_type) ;
+
+--S+ raise
+--   ['raise', exception_name]
+--
+--   Exceptions may be raised within expressions by use of this form.
+--   The raise is simply pushed onto the statement sequence.
+--
+    when "raise" => 
+      exec( [eval_action] );    
+
+--S+ call
+--
+--    a call in an expression can appear (to our knowledge) only in some
+--    weird cases of attributes. An object is built to contain the value
+--    returned by the function call
+--
+   when "call" => 
+      itype frome eval_action;
+      push( itype );
+      exec( [eval_action,
+             ["oeval_", ["call_"]]]);
+   when "call_" => 
+      pop(obj_val);
+      pop(itype);
+      obj_val := create_copy(obj_val, itype, om);
+      push(obj_val);
+
+    otherwise =>
+--
+      system_error("attempt to evaluate unknown object expression " 
+        + str(eval_action) );
+--
+    end case;
+  end if;
+end oeval_proc;
+--S+ IS_OK_DISCR
+procedure is_ok_discr(discr_ref);
+      [-, discr, discr_itype, target_type] := discr_ref;
+      value := emap(discr);
+      if present(value) and present(target_type) then
+         [-, lo, hi] := get_itype(target_type);
+         if (value < lo) or (value > hi) then
+           exec([["raise", "CONSTRAINT_ERROR",
+			"discrim out of bounds"]]);
+           return false;
+         else return true;
+         end if;
+      else return true;
+      end if;
+end is_ok_discr;
+end int_objects;

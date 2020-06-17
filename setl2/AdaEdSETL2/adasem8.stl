@@ -1,0 +1,1549 @@
+--header: adasem8.stl,v 1.30 89/04/18 17:39:39 schonber Exp $
+
+package body adasem8;
+--T+ 8. Visibility Rules  
+--S+ 8.1 Declarative Region
+--S+ 8.2 Scope of Declarations
+--S+ 8.3 Visibility
+--S+ 8.4 Use Clauses
+--S+ Use Clause
+
+use globals;
+use adasem1;
+use adasem2;
+use adasem3;
+use adasem4;
+use adasem5;
+use adasem6;
+use adasem7;
+use adasem9;
+use adasem10;
+use adasem11;
+use adasem12;
+use adasem13;
+use evalstat;
+use adalib;
+use adaio;
+
+procedure use_clause(id_list) ;
+
+sem_trace_proc_entry(3, "Use_Clause");
+
+used := [] ;
+
+for id in id_list loop 
+    if (rnam:=check_old(id)) = "?" then
+        errmsg("undeclared name in USE list ", id, "8.4, 10.1") ;
+    elseif ST(rnam).nature notin {"package", "package_spec"}
+    then
+        errmsg(id," is not the name of a USEable package","8.4") ;
+    else  
+        used with:= rnam ;
+    end if;
+end loop;
+
+used_mods +:= [p in used | p notin used_mods] ;
+
+-- The use clauses appearing in a package specification are declarative
+-- items, visible in the corresponding body. They are saved here.
+
+if ST(current_scope).nature in 
+    ["package_spec", "generic_package_spec", "private_part"] then
+        -- use_declarations(current_scope) +:= used ;
+        ST(declared(current_scope)("$used")).signature +:= used ;
+end if;
+      
+sem_trace_proc_exit(3, "Use_Clause");
+end use_clause;
+
+--S+ find_old 
+procedure find_old(id) ;
+ 
+-- Return unique name of identifier.
+-- Yield error if identifier is undefined.
+-- In the case of long and short integers or floats, indicate that they are
+-- unimplemented rather than 'undefined'.
+
+unimplemented := {"SHORT_INTEGER","LONG_INTEGER","SHORT_FLOAT"} ;
+
+sem_trace_proc_entry(4, "Find_Old");
+ 
+unique_name_ := check_old(id) ;
+if unique_name_ = "?" then
+    if is_tuple(id) and id(1) = "name" then 
+       id := id(2) ; 
+    end if;
+    if id notin unimplemented then
+    -- The identifier is undefined, or not visible. This is an error.
+        name_error(id) ;
+    else
+        errmsg(id," is not supported in current implementation","none");
+    end if;
+    -- insert in current scope, and give it default type.
+    if declared(current_scope)(id) = om then
+        unique_name_ := find_new(if is_identifier(id) then id 
+                        else newat_str() end if);
+        [ST(unique_name_).nature, ST(unique_name_).type_of] := 
+                        ["obj", "any"] ;
+        ST(unique_name_).root_type := unique_name_;
+    end if;
+end if;
+sem_trace_proc_exit(4, "Find_Old");
+return unique_name_ ;
+end find_old;
+
+--S+ name_error
+procedure name_error(id) ;
+sem_trace_proc_entry(5, "Name_Error");
+
+-- Name was not found in environment. This may be because it is undeclared,
+-- or because several imported instances of the name hide each other.
+-- The marker '?' is also returned when a type name is mentioned in
+-- the middle of its own elaboration.
+
+if all_imported_names = {} then
+    if declared(current_scope)(id) = om then
+        errmsg("identifier undeclared or not visible ", id,"3.1") ;
+    else
+        errmsg("Invalid reference to type ", id,"3.3") ;
+    end if;
+else
+    names := +/[ original_name(ST(x).scope_of) + "." + original_name(x) 
+        + " ":  x in all_imported_names ] ;
+    errmsg("Ambiguous identifier. Could be one of: ",names,"8.3, 8.4") ;
+end if;
+
+sem_trace_proc_exit(5, "Name_Error");
+end name_error;
+
+--S+ check_old 
+procedure check_old(name) ;
+sem_trace_proc_entry(3, "Check_Old");
+
+-- This procedure performs name resolution for several syntactic instances 
+-- of -name-. These include identifiers, selected components, array indexing 
+-- and slicing, function calls and attribute expressions. If -name- is an 
+-- identifier and is undeclared, this proc yields the special marker '?' 
+-- which is used by error routines. If -name- is overloaded, the procedure 
+-- returns the set of overloaded names which correspond to -name-. This set
+-- is constructed by scanning first the open scopes, and then examining visible
+-- modules. To facilitate the collection of overloaded names, the procedure
+-- chain_overload, which is called when a procedure specification, or and
+-- enumeration type are processed, collects successive overloads of the same
+-- id together, using the -overloads- field of the symbol table. 
+
+sem_trace(3,"looking for id: " + str(name) ) ; 
+
+if is_tuple(name) then
+    case name(1) 
+
+    when "call?" =>  found := array_or_call(name) ;
+
+    when "." =>      found := find_selected_component(name) ;
+
+    when "name", "string", "STRING" =>  found := check_old(name(2)) ;
+
+    when "'" =>     found := name ; found(3) := find_old(found(3)) ;
+
+    when "@" =>      found := name ; found(2) := find_old(found(2)) ;
+
+    otherwise =>
+        errmsg("Invalid object for name: ", name,"3.2") ;
+        found := "?" ;
+    end case;
+else found := find_simple_name(name) ;
+end if;
+ 
+sem_trace_proc_exit(3, "Check_Old");
+sem_trace(3,"with resulting found name(s): " + str(found) ) ; 
+
+return found ;
+end check_old;
+
+--S+ find_simple_name
+procedure find_simple_name(name) ;
+sem_trace_proc_entry(3, "Find_Simple_Name");
+
+if exists sc = open_scopes(sc_num)  | 
+    (u_name := declared(sc)(name)) /= om then
+    if not can_overload(u_name) then
+        found := u_name ;
+    else
+        names := ST(u_name).overloads ;
+
+        -- Scan open scopes for further overloadings.        
+        for i in [sc_num+1..#open_scopes] loop 
+
+            if (declared(open_scopes(i))(name)) = om then
+                continue;
+            elseif 
+                not can_overload(declared(open_scopes(i))(name)) then
+                return names ; 
+            else
+                names +:= 
+                    {o in ST(declared(open_scopes(i))(name)).overloads |
+                        not (exists n in names |
+                             (same_type(ST(n).type_of, ST(o).type_of) and
+                              same_signature(n, o)))} ;
+            end if;
+        end loop;
+        imported := collect_imported_names(name) ;
+
+        -- Keep only the imported names which are not hidden
+        -- by visible names with the same signature.
+        if is_overloaded(imported) then
+            names +:= { foreign : foreign in imported |
+                not (exists n in names |
+                     same_type(ST(n).type_of,ST(foreign).type_of) and
+                     same_signature(n, foreign))} ;
+        end if;
+
+        found := names ;
+    end if;
+
+elseif (imported := collect_imported_names(name)) /= {} then
+    found :=  imported ;
+ 
+    -- The error recovery routine sends a '' when it can
+    -- recover by token insertion. Return it as is, to avoid
+    -- subsequent spurious messages.
+elseif name = "" then 
+    found := name ;
+else
+    found := "?" ;
+end if;
+ 
+sem_trace_proc_exit(3, "Find_Simple_Name");
+return found ;
+end find_simple_name;
+
+--S+ collect_inported_names 
+procedure collect_imported_names(name) ;
+sem_trace_proc_entry(3, "Collect_Imported_Names");
+
+-- This procedure collects the set of all imported names corresponding
+-- to identifier -name-, which appear in currently visible modules.
+-- An imported identifier is visible if :
+-- a) It is not an overloadable identifier, and it appears in only
+--    one used package.
+-- b) Or, all of its appearances in used packages are overloadable.
+ 
+imported := {} ;
+for used in used_mods | (visible(used)) /= om 
+        and (foreign := visible(used)(name)) /= om  loop 
+    if can_overload(foreign) then
+        imported +:= ST(foreign).overloads ;
+    else
+        if imported /= {} then 
+        -- Mutual hiding. save for subsequent error message.
+            all_imported_names := imported with foreign ;
+            return {} ;     -- Nothing visible
+        else
+            imported := {foreign} ;
+        end if;
+    end if;
+end loop;
+
+sem_trace(3,"Imported names: " + str(imported) );
+
+-- Save imported names in global variable, for possible error message.
+all_imported_names := imported ;
+
+sem_trace_proc_exit(3, "Collect_Imported_Names");
+
+return (if exists fgn in imported | not can_overload(fgn) then
+                (if #imported = 1 then 
+                        fgn 
+                else        -- various visible names hide each other.
+                        {} 
+                end if)
+        else            -- All occurrences are overloadable. 
+                imported    
+        end if) ;
+
+end collect_imported_names;
+
+--S+ array_or_call
+procedure array_or_call(name) ;
+ 
+-- This procedure resolves the construct 
+--   name aggregate
+-- The meaning of this construct is one of the following :
+--       a) Array reference.
+--       b) Procedure call.
+--       c) Entry invocation.
+--       d) Conversion expression.
+sem_trace_proc_entry(3, "Array_or_Call");
+ 
+[-,obj_name,arg_list] := name ;
+
+-- Find unique name of object (procedure, array, etc).
+obj_name := find_old(obj_name) ;
+if obj_name = "?" then
+    -- error message emitted already by find_old.
+    return name ;
+end if;
+
+--H+ Procedure or function call
+if is_overloaded(obj_name) then
+    -- Must be a procedure or function call.
+    call_name := [obj_name] + arg_list;
+    -- The nature of at least one of the overloaded instances must be
+    -- callable. This is checked by the type resolution routines. An
+    -- unpleasant syntactic ambiguity appears if parameterless functions
+    -- that return an array type appear in obj_name. In this case the
+    -- expression must be reformatted as an indexing on the result of a
+    -- function call. If both parameterless and parametered functions
+    -- are present, then the tree itself is ambiguous, and both parsings
+    -- must be carried, to be resolved by the type resolution routines.
+
+    if {f in obj_name | 
+	    parameterless_callable(f) 
+        and (is_array(ST(f).type_of)
+             or (is_access(ST(f).type_of) 
+                and is_array(ST(ST(f).type_of).designated_type))) }  /= {}
+    then
+        np_call := index_or_slice([obj_name], arg_list) ;
+
+        if np_call(1) = "[..]" then
+        -- no ambiguity: it must be a slice.
+            call_name := np_call ;
+        else
+            call_name := ["call_or_index", obj_name, arg_list] ;
+        end if;
+    end if;
+
+    sem_trace_proc_exit(3, "Array_or_call");
+    return call_name ;
+--H+ Conversion
+elseif is_identifier(obj_name) and is_type(obj_name) then
+    -- Case of a conversion.
+
+    if #arg_list = 1 then
+        arg := arg_list(1) ;
+        if is_tuple(arg) and arg(1) = "choice_list" then
+            arg := ["aggregate", [arg]] ;   
+        end if;
+    else    -- (invalid) conversion of an aggregate (caught later)
+        arg := ["aggregate"] + arg_list ;
+    end if;
+    sem_trace_proc_exit(3, "Array_or_call");
+    return ["convert", obj_name, arg] ;
+
+else
+--H+ Object or Expression
+    -- Object or expression. Either an array expression or an attribute.
+
+    oprator := obj_name(1) ;
+
+    sem_trace_proc_exit(3, "Array_or_call");
+    if oprator = "'" then      -- Predefined attribute.
+    -- Right argument of attribute is first element of
+    -- argument list. 
+        obj_name(4) := arg_list(1) ;
+        return obj_name ;
+    else            -- Indexed name or slice.
+        return index_or_slice(obj_name, arg_list) ;
+    end if;
+end if;
+end array_or_call;
+
+--S+ parameterless_callable
+procedure parameterless_callable(f) ;
+
+-- Assert that f is a parameterless function, or that default values
+-- exist for all its parameters and it can be called without arguments.
+
+return  ST(f) /= om and  -- to eliminate implicit predefined operators
+	ST(f).nature in  {"function", "function_spec"} and 
+        (forall formal in ST(f).signature | ST(formal).default_expr /= [] );
+
+end parameterless_callable;
+--S+ index_or_slice
+procedure index_or_slice(obj_name, arg_list) ;
+ 
+-- A slice is not always recognizable sintactically from an
+-- indexing expression. v(arg) is a slice in 3 cases:
+--       a) arg is a range : L..R
+--       b) arg is of the form V'RANGE
+--       c) arg is a type mark, possibly with a range constraint.
+
+if #arg_list = 1 and is_tuple(arg := arg_list(1))
+then
+    if arg(1) = "subtype" then
+        [-, type_mark, constraint] := arg ;
+        return ["[..]",obj_name,["subtype", type_mark, constraint]] ;
+       
+    elseif arg(1) = "range" then
+        return [ "[..]", obj_name, ["subtype",[], arg]] ;
+     
+    elseif arg(1) = "name" and is_tuple(e := find_old(arg))
+        and is_range_attribute(e) then
+        return [ "[..]", obj_name, e] ;
+
+    elseif arg(1)="name" and is_identifier(mark:=find_old(arg)) 
+        and is_type(mark) then
+        return ["[..]", obj_name, mark] ;
+    else        -- single index operation.
+        return ["[]", obj_name, [arg] ] ;
+    end if;
+
+else            -- multiple indexing operation.
+    return [ "[]", obj_name, arg_list] ;
+
+end if;
+
+end index_or_slice;
+--S+ Find_Selected_component
+
+procedure find_selected_component(name) ;
+
+-- Resolve a selected component. The prefix may be an expression, in 
+-- which case name resolution and type resolution must be done together.
+-- IF the selected component is an expanded name, the prefix is a package
+-- or an enclosing scope, and the expanded name is resolved fully here.
+
+sem_trace_proc_entry(3, "Find_Selected_Component");
+[-, prefix_id, selector] := name ;
+ 
+prefix := find_old(prefix_id) ;
+if prefix = "?" then   -- Undeclared name. Error message already emitted
+    sem_trace_proc_exit(3, "Find_Selected_Component");
+    return [] ;
+end if;
+
+if is_identifier(prefix) then
+    prefix_type := ST(prefix).type_of ;
+    if is_appropriate_for_record(prefix_type) then
+    -- Type-checking will verify that the selector denotes a discriminant
+    -- or component of the corresponding record or value.
+        sem_trace_proc_exit(3, "Find_Selected_Component");
+        return [ ".", prefix, selector] ;
+
+    -- if the selector is an entry name, return it as selected component.
+    -- The context is an entry call or the prefix of attribute COUNT.
+    -- Full resolution is done in find_entry_name.
+
+    elseif (is_appropriate_for_task(prefix_type) and is_access(prefix_type))
+         or ((e := (declared(prefix_type) ? {})(selector)) /= om
+              and ST(e).nature in {"entry", "entry_family"}) then
+        sem_trace_proc_exit(3, "Find_Selected_Component");
+        return [ ".", prefix, selector] ;
+
+    elseif selector = "@" and is_access(prefix_type) then
+        sem_trace_proc_exit(3, "Find_Selected_Component");
+        return ["@", prefix] ;
+    
+    -- Other forms of selected components are expanded names.
+
+    elseif prefix in open_scopes and ST(prefix).nature /= "void" then 
+        -- prefix denotes an enclosing loop, block, or task, i.e. an
+        -- enclosing construct that is not a subprogram or accept.
+        return trace_and_return(3, "Find_Selected_Component",
+               find_expanded_name(prefix, selector, prefix_id));
+    elseif ST(prefix).nature in ["package_spec", "package"] then
+        return trace_and_return(3, "Find_Selected_Component",
+	       find_expanded_name(prefix,  selector, prefix_id));
+    else			 -- Various error cases.
+        if prefix = "any" then
+	    -- Object was undeclared, and error message emitted already.
+            null;
+        elseif ST(prefix).nature = "void" then
+            errmsg("premature usage of ",prefix_id, "8.3(16)");
+        else errmsg(selector + " not declared in ",
+                      prefix_id, "4.1.3, 8.3") ;
+        end if;
+        sem_trace_proc_exit(3, "Find_Selected_Component");
+        return "any_id" ;
+    end if;
+
+elseif is_overloaded(prefix) then
+    -- It can be an enclosing subprogram or accept statement. 
+    -- it can also be a call to a parameterless function that yields 
+    -- a record value.
+
+    if exists subp in prefix | subp in open_scopes then 
+        if #[n in prefix | n in open_scopes] > 1 then
+            errmsg("ambiguous expanded name", "", "4.1.3(18)") ;
+            sem_trace_proc_exit(3, "Find_Selected_Component");
+            return [] ;
+        else
+            return trace_and_return(3, "Find_Selected_Component",
+                   find_expanded_name(subp,  selector, prefix_id));
+        end if;
+
+    -- If no interpretation as an expanded name is possible, it must be
+    -- a selected component of a record returned by a function call.
+    elseif exists proc_name in prefix |
+        parameterless_callable(proc_name) then
+        sem_trace_proc_exit(3, "Find_Selected_Component");
+        return [".", [prefix], selector] ;        
+
+    else errmsg("Ambiguous name in selected component: ", 
+                     prefix_id,"4.1.3") ;
+        sem_trace_proc_exit(3, "Find_Selected_Component");
+        return [] ;
+    end if;
+else        
+    -- If the prefix is not a simple name (overloaded or not), it must
+    -- be an expression whose type is appropriate for a record or access type.
+    -- Its full resolution requires type resolution as well. Nothing else is
+    -- done here.
+    sem_trace_proc_exit(3, "Find_Selected_Component");
+    return [".", prefix, selector] ;
+end if;
+sem_trace_proc_exit(3, "Find_Selected_Component");
+end find_selected_component;
+
+procedure is_appropriate_for_record(t) ;
+return 
+   is_record(t) 
+or (is_access(t) and is_record(ST(t).designated_type)) ;
+end is_appropriate_for_record;
+
+procedure is_appropriate_for_task(t) ;
+return is_task_type(t) 
+    or (is_access(t) and is_task_type(ST(t).designated_type)) ;
+end is_appropriate_for_task;
+
+procedure find_expanded_name(prefix, selector, prefix_id) ;
+
+-- Resolve an expanded name whose prefix denotes a package or an enclosing
+-- construct. 
+
+-- If prefix refers to a renamed package, we can access only those entities
+-- declared in its visible part. If we are currently compiling the package
+-- spec, these are found in declared (not visible). 
+
+if not is_identifier(prefix_id) then
+  -- in case of nested package reference, the third component will be the simple
+  -- name of the scope we are looking at.
+     prefix_id := prefix_id(3);
+end if;
+
+if ST(prefix).nature in ["package_spec","package","private_part"] and 
+			prefix_id /= original_name(prefix) then
+     -- prefix refers to a renamed package
+     if in_visible_part(prefix) then
+	  declarations := declared(prefix);
+     else declarations := visible(prefix);
+     end if;
+elseif prefix in open_scopes then
+     declarations := declared(prefix);
+else declarations := visible(prefix);
+end if;
+
+if  (entity := declarations(selector)) /= om then
+    -- If the entity is overloaded, collect its local occurences.
+    return all_declarations(entity, prefix, selector) ;
+
+elseif has_implicit_operator(selector, declarations) then
+    -- It can still  be an implicitly defined operator obtained by derivation 
+    -- of a predefined type within the given construct. 
+        return {prefix + "." + selector} ;
+else 
+     errmsg(selector + "not declared in (the visible part of) ", 
+                 original_name(prefix),"4.1.3") ;
+     return [] ;
+end if;
+end find_expanded_name;
+
+procedure all_declarations(entity, prefix, selector) ;
+-- Collect all declarations that overload and entity declared in a given
+-- construct. If the entity is not overloadable it is returned as is. Other-
+-- wise the local overloading must also be collected.
+-- This is complicated by the possible presence of implicit operators, which are 
+-- created by the derivation of predefined types, but are not inserted explicitly
+-- in the symbol table of the declarative part where they occur.
+
+sem_trace_proc_entry(3, "All_Declarations");
+
+if can_overload(entity) then
+    nams := ST(entity).overloads ; 
+    if selector in op_designators and ST(entity).scope_of /= "STANDARD#0"
+    then
+       -- Include implicitly defined operator, if they are not hidden
+       -- by an explicit declaration in the scope. To determine whether
+       -- it is hidden, compare it with the signature of the user-defined
+       -- operator, just as for the resolution of renamings.
+
+       predef_op := declared("STANDARD#0")(selector) ;
+       if forall subp in nams |
+            (op_matches_spec(predef_op, 
+            [ST(f).type_of : f in ST(subp).signature], ST(subp).type_of) 
+								= om)
+       then
+           -- None of the user-defined operators match predefined one.
+           -- Include predefined op. in special format used by routine
+           -- result_types (q.v.). 
+           nams with:= prefix + "." + selector ;
+       end if;
+     end if;
+    sem_trace_proc_exit(3, "All_Declarations");
+    return nams ;
+else
+    sem_trace_proc_exit(3, "All_Declarations");
+    return entity ;
+end if;
+end all_declarations;
+
+procedure has_implicit_operator(selector, declarations);
+
+-- A declarative part contains an implicit declaration of an operator
+-- if it has a declaration of a type derived from a predefined numeric
+-- or enumeration type, or from some array type. The existence of this
+-- routine is an artifact of implementation: a more straightforward choice
+-- would be to make all derived operators explicit in the symbol table.
+
+ case selector 
+    when "not","and", "or", "xor" => 
+      return exists [-,t] in declarations | 
+	     (is_type(t) 
+         and (ST(t).root_type = "BOOLEAN"
+              or (is_array(t) and ST(component_type(t)).root_type = "BOOLEAN"))) ;
+
+    when "=", "/=" => 
+      return exists [-,t] in declarations | (is_type(t) and
+         not is_limited_type(t))  ;
+
+    when "<", "<=", ">=", ">" => 
+      return exists [-,t] in declarations | 
+	     (is_type(t) 
+	 and (is_scalar_type(t) 
+              or (is_array(t) and is_discrete_type(component_type(t)))));
+
+    when "+", "-", "*", "/","**", "abs", "mod", "rem" => 
+      return exists [-,t] in declarations | (is_type(t) 
+      and is_numeric_type(t)) ;
+
+    when "&" => 
+      return exists [-,t] in declarations | (is_type(t) and
+      is_array(t)) ;
+
+    otherwise => return false ;
+end case; 
+end has_implicit_operator;
+
+--S+ find_new 
+procedure find_new(name) ;
+sem_trace_proc_entry(4, "Find_New");
+ 
+-- Insert new name in symbol table of current scope. Check
+-- against duplications.
+ 
+-- IF error token was seen ('') , return undeclared marker.
+    if name = "" then 
+       sem_trace_proc_exit(4, "Find_New");
+       return  "any_id" ; 
+    end if;
+ 
+    -- add new name to current scope declarations.
+    -- generate a unique identifier for it.
+ 
+    unique_nam := name_prefix + name + newat_str();
+ 
+       -- Insert new name in DECLARED table for current scope
+ 
+    if (declared(current_scope)(name)) /= om then
+    -- The name has been seen already. This is acceptable 
+    -- if it was inserted after  some previous  error, in
+    -- which case its type is 'any'.
+
+    if ST(declared(current_scope)(name)).type_of = "any" then
+        sem_trace_proc_exit(4, "Find_New");
+        return declared(current_scope)(name);
+    else
+        errmsg("duplicate identifier: ", name,"8.3") ;
+    end if;
+    else
+    declared(current_scope)( name) := unique_nam ;
+    end if;
+    -- Initialize symbol table entry. The nature of the new entity
+    -- is 'void' until the end of its declaration.
+
+    ST(unique_nam)  := ["void", "none", [], "", current_scope, om] ;
+    sem_trace_proc_exit(4, "Find_New");
+    return unique_nam ;
+end find_new;
+
+procedure check_void(id) ;
+
+-- Verify that within a procedure specification no use is made of the
+-- procedure identifier under any guise. This cannot be automatically
+-- caught by the name resolution routines.
+
+if original_name(current_scope) = id and 
+   ST(current_scope).nature = "void" then
+    errmsg("premature usage of ", id, "8.3(16)");
+end if;
+end check_void;
+--S+ New_Aggregate_or_Access
+--$$ OBSOLETE
+procedure new_aggregate_or_access(marker, type_mark) ;
+return ;
+end new_aggregate_or_access;
+
+procedure maybe_private_dependent(type_mark) ;
+-- If a composite type has an incomplete private component,  or an access type
+-- an incomplete designated type, link it to the set  of private dependents of 
+-- the corresponding ancestor.
+maybe_priv := if ST(type_mark).nature = "access" 
+   then base_type(ST(type_mark).designated_type)
+   else type_mark end if;
+
+if ((pr := private_ancestor(maybe_priv)) /= om 
+    and pr /= "any"
+    and ST(pr).scope_of in open_scopes)   	-- i.e. type is still incomplete.
+    or
+    (ST(type_mark).nature = "access" 
+	and ST(pr := maybe_priv).type_of = "incomplete")
+then
+    ST(pr).private_dependents with:= type_mark;
+end if;
+end maybe_private_dependent;
+
+--S+ original_name 
+procedure original_name(unique_nam) ;
+
+-- This procedure strips the prefix and suffix of a generated name, to
+-- recover the original source name. Is is used when looking for a
+-- compilation stub, and for error messages.
+
+if is_overloaded(unique_nam) then
+    unique_nam := arb unique_nam ;
+end if;
+if not is_string(unique_nam) then 
+   return "?"; 
+end if;
+ 
+old_name := unique_nam ;
+while ((old := sbreak(old_name,".")) /= om) loop 
+    old_name := old_name(2..) ;
+    if old(#old) = "'" then        -- Special case literal
+        return "'.'";         -- '.' 
+    end if;
+end loop;
+
+old := sbreak(old_name,"#") ;
+
+return  if old = om then old_name
+    elseif old_name(2) = "'" then "'#'"  -- and also '#'
+    else old end if;
+end original_name;
+  
+--S+ 8.5 Renaming Declarations
+--S+ rename_exception 
+procedure rename_exception(new_id, old_obj) ; 
+
+old := find_old(old_obj) ;
+if not is_identifier(old) then
+     errmsg("cannot rename entity as exception ", "", "8.5") ;
+elseif ST(old).nature /= "exception" then
+     errmsg(original_name(old) , " is not an exception", "8.5") ;
+else
+     declared(current_scope)(new_id) := old ;
+end if;
+return [] ;
+end rename_exception;
+--S+ rename_package
+procedure rename_package(new_id, old_obj) ;
+ 
+old := find_old(old_obj) ;
+if not is_identifier(old) then
+     errmsg("cannot rename entity as package ", "", "8.5") ;
+elseif ST(old).nature notin ["package", "package_spec", "generic_package",
+			  "generic_package_spec", "private_part"]
+then
+     errmsg(original_name(old) , " is not a package", "8.5") ;
+else
+    -- entities in the renamed package are accessible through the new name. 
+    declared(current_scope)(new_id) := old ;
+end if;
+return [] ;
+end rename_package; 
+--S+ rename_procedure
+procedure rename_procedure(new_specs, old_obj) ;
+
+[-, id, formals, -] := new_specs ;
+old_procs := find_old(old_obj) ;
+
+if is_overloaded(old_procs) then
+    [old1, renamed_sig] := renamed(old_procs, formals, "none") ;
+
+elseif is_tuple(old_procs) and old_procs(1) in {".","[]"}  then
+    [old1, renamed_sig] := renamed_entry(old_procs, formals) ;
+
+else
+    errmsg("Object cannot be renamed as procedure.","","8.5") ;
+    return [] ;
+end if;
+
+if old1 = om then   -- No subprogram or entry matches the specs.
+    return [] ;
+else
+    -- A renaming declaration provides the subprogram specification
+    -- and the body as well.
+    new_proc := chain_overloads(id, ["procedure_spec","none",formals]);
+
+    -- The constraints on the formals are those of the renamed entity, not
+    -- those given in the formal part of the renaming declaration.
+    for oldf = renamed_sig(i) loop 
+	newf := ST(new_proc).signature(i) ;
+        ST(newf).type_of := ST(oldf).type_of ;
+    end loop;
+
+    ST(new_proc).nature := "procedure" ;     -- no further body needed .
+
+    if is_identifier(old1) then -- Procedure renames procedure
+         ST(new_proc).alias := ST(old1).alias ? old1 ;
+         return [] ;
+    else            			-- Procedure renames task entry.
+    return 
+        [entry_as_procedure(new_proc, build_signature(new_proc),old1)] ;
+    end if;
+end if;
+end rename_procedure;
+--S+ rename_function
+
+procedure rename_function(new_specs, old_obj) ;
+[-, id, formals, ret] := new_specs ;
+old_fun := find_old(old_obj) ;
+
+-- If the renaming introduces an operator, verify that it has the right
+-- number of parameters.
+check_new_op(id, formals, ret);
+
+if is_overloaded(old_fun) then
+    [old1, renamed_sig] := renamed(old_fun, formals, ret) ;
+
+    if old1 = om then return [] ;	-- no subprogram matches the specs.
+    else
+         -- a call to the new function is a call to the renamed one.
+	 parent_subp := ST(old1).alias ? old1 ;
+	 new_fun := chain_overloads(id, 
+			["function_spec", ret, formals, parent_subp]);
+         ST(new_fun).nature := "function" ;
+
+         if id = "=" then
+              if original_name(old1) /= "=" then
+                    errmsg("renaming with = can only rename ",
+                    "an equality operator", "6.7") ;
+
+              elseif #formals /= 2 then 
+                null; -- error in definition
+              else
+               -- The implicitly defined inequality operator, just
+               -- introduced, renames another inequality.
+
+                assert exists ne in 
+                    ST(declared(ST(old1).scope_of)("/=")).overloads |
+                     same_signature(old1, ne) ;
+	 	new_ne := chain_overloads("/=", 
+			["function_spec", ret, formals, ne]);
+         	ST(new_ne).nature := "function" ;
+
+              end if;
+          end if;
+          if ST(old1).nature /= "op" then
+          -- Function renaming function(spec). No code is emitted, 
+             return [] ;
+          else
+             return [["renames", new_fun, old1]];
+          end if;
+    end if;
+else
+    -- If old_fun is an expression, it must be an attribute.
+
+    if old_fun(1) = "'" then 
+        [-, attr, typ] := old_fun ;
+        old1 := old_fun ;
+    else
+        errmsg("Object cannot be renamed as function.","","8.5") ;
+        return [] ;
+    end if;
+
+    if #formals /= 1 then           
+        errmsg("function renaming and attribute must have ",
+        "a single formal", "8.5") ;
+        return [] ;
+    end if;
+    -- The type returned by the function, and the type of its argument,
+    -- are taken from the attribute, and not from the specification.
+    [[n, m, t, e, decl_tree]] := formals ;
+    [new_ret, a_type] := valid_function_attribute(attr, typ, ret,t);
+
+    -- Recheck default expression with correct type (see renamed).
+    [[id_list, -, -, opt_init, -]] := decl_tree ;
+    check_type(a_type, opt_init) ;
+
+    formals := [[n, m, a_type, e]] ;   
+    new_fun := chain_overloads(id, 
+				["function_spec", new_ret, formals]);
+    ST(new_fun).nature := "function" ;
+    return [renamed_attribute(new_fun, formals, old1)] ;
+end if;
+end rename_function;
+--S+ rename_object
+procedure rename_object(new_id, type_mark, old_obj) ; 
+    -- Object renaming.
+    typ := find_old(type_mark) ;
+    if not is_type(typ) then
+        errmsg("invalid type_mark in RENAMES clause: ","","8.5") ;
+        return [] ;
+    end if;
+    out_context := true ;      -- Subcomponents of out parameters
+    old_expr := check_type(typ, find_old(old_obj)) ;
+    out_context := false ;     -- are certainly renamable.
+
+    if is_tuple(old_expr) and old_expr(1) in qualifiers then
+        -- Constraints implied by the type mark of the clause are ignored
+        old_expr := old_expr(3) ;
+    end if;
+
+    if illegal_discriminant_dependence( old_expr ) then
+        errmsg("existence of object "+ str(new_id) ,
+           " depends on a discriminant ", "8.5");
+        return [];
+
+    else
+    -- It is tempting to say that if a simple object is being renamed, 
+    -- the new one has the same unique name. This simple optimization 
+    -- must however be delayed to allow conformance checks, as a renamed
+    -- entity does not conform to the old name.         
+        new_obj := find_new(new_id) ;
+
+        [nat, -] := check_nat_type(old_expr);
+        [ST(new_obj).nature,ST(new_obj).type_of, ST(new_obj).signature]
+            := [nat, typ, old_expr]  ;
+        return [["renames", new_obj, old_expr]] ;
+    end if;
+ 
+end rename_object;
+
+--S+ illegal_discriminant_dependence
+procedure illegal_discriminant_dependence ( expn ) ;
+
+sem_trace_proc_entry(4, "illegal_discriminant_dependence");
+sem_trace(4, "expn: " + str(expn) ) ;
+
+--   The expression is first flattened :
+   expn := linearize ( expn ) ;
+
+   first fromb expn ;
+   if expn = [] then 
+      return false;
+   end if;
+   prefix_type := ST(first).type_of ;
+
+   -- Special rules apply when renaming a subcomponent of a generic in out
+   -- parameter or a formal in out parameter. Determine first whether the
+   -- variable whose subcomponent is being renamed is one of these, or is
+   -- a variable whose type is unconstrained. If so, the subcomponent being 
+   -- renamed may depend on the corresponding discriminant list.
+
+   if is_record(prefix_type) and can_constrain(prefix_type) 
+   and (ST(first).nature = "generic_inout" 
+        or ((ST(first).nature = "inout") = 
+		(ST(discriminant_list(prefix_type)(1)).default_expr /= om)))
+   then
+      discr := discriminant_list (prefix_type) ; 
+   else
+      -- If the prefix is not a record, or if the record is constrained, the 
+      -- values of the discriminants are fixed and no illegal dependence can
+      -- arise at this level.
+      discr := [] ;
+   end if;
+
+   while (expn?[]) /= []  loop 
+
+      op_name fromb expn ;
+      if op_name = "." then 
+         selector fromb expn ;
+         comp_type := ST(selector).type_of ;
+      elseif op_name = "[]" then
+         comp_type := component_type(prefix_type) ;
+      else
+         -- other operations cannot yield variables that depend on discriminants.
+         sem_trace_proc_exit(4, "Is_Discriminant_Dependent");
+         return false ; 
+      end if;
+
+      -- A subcomponent depends on a discriminant if it is declared in the
+      -- variant part of an unconstrained record.
+      if discr /= [] and 
+         not (exists [ -,n,- ] in ST (prefix_type).signature.invariant_part
+	      | n = selector) 
+      then
+            sem_trace_proc_exit(4, "Is_Discriminant_Dependent");
+            return true;
+      end if;
+
+      -- Otherwise a component depends on discriminants if its subtype 
+      -- definition depends on a discriminant.
+      -- For an access type, the constraint to be checked is that of the
+      -- designated type.
+
+      if is_access(comp_type) then
+         comp_type := ST(comp_type).designated_type ;
+      end if;
+
+      if is_record(comp_type) then 
+         if ST(comp_type).nature = "subtype" then
+            -- Examine its discriminant constraint.
+            [-, discr_map] := ST(comp_type).signature ;
+            for [d_name, d_val] in discr_map loop 
+	       while d_val(1) = "qual_range" loop 
+		    d_val := d_val(3);
+	       end loop;
+               if (d_val(1) ="discr_ref") and (d_val(2) in discr)  
+                   then 
+                       sem_trace_proc_exit(4, "Is_Discriminant_Dependent");
+                       return true ;
+               end if;
+            end loop;
+         end if;
+         -- Check subcomponents of current component.
+         prefix_type := comp_type ;
+
+     elseif is_array(comp_type) then
+         -- Examine all index constraints.
+         bounds := [] ;
+         for i in index_types(comp_type) loop 
+             [ -, low, high] := ST(i).signature ;
+             bounds +:= [low, high] ;
+         end loop;
+         if exists bound in bounds | is_tuple(bound) 
+            and ( bound(1) ="discr_ref") and (bound(2) in discr)  
+         then 
+             sem_trace_proc_exit(4, "Is_Discriminant_Dependent");
+             return true ;
+         end if;
+
+         if op_name  = "[]" then 
+            prefix_type := component_type(comp_type) ;
+         else
+            -- a slice yields the same array type.
+            prefix_type := comp_type ;
+         end if;
+
+     -- Other subcomponents cannot depend on discriminants. 
+     else
+         sem_trace_proc_exit(4, "Is_Discriminant_Dependent");
+         return false ;
+     end if;
+
+     if is_record(prefix_type) and is_unconstrained(prefix_type) then
+          -- subcomponent may still depend on discriminants of this component.
+          discr := discriminant_list (prefix_type) ; 
+     else
+          discr := [] ;
+     end if;
+
+   end loop;
+   -- If no dependence has been signalled so far, 
+   sem_trace_proc_exit(4, "Is_Discriminant_Dependent");
+   return false ; 
+
+end illegal_discriminant_dependence;
+
+
+--S+  linearize
+procedure linearize ( expn );
+   
+--   Recursive function used by 'illegal_discriminant_dependence' to
+--   flatten its argument. The grammar of interest for expn is :
+--       expn ::= identifier
+--             |  '.' rec_expr selector
+--             |  '[]' arr_expr index
+--             |  '[..]' arr_expr slice
+--             |  '@' expr
+--             |  'call' identifier
+
+   if is_identifier ( expn ) then
+      return [ expn ] ;
+   else
+      [ op_name, exp1, exp2 ] := expn ;
+      case op_name 
+         when "." => 
+            return linearize(exp1)+[op_name, exp2] ;
+
+         when "[]","[..]","@","call" => 
+            return linearize(exp1)+[op_name];
+      otherwise =>
+         return [];
+      end case;
+   end if;
+
+end linearize;
+--S+ renamed
+procedure renamed(subprogs, formals, ret) ;
+sem_trace_proc_entry(3, "Renamed");
+
+-- Find the subprogram in the overloaded set -subprog- which matches
+-- the specification given in a renames clause or in a generic 
+-- instantiation.
+sem_trace(0,"Renaming prog with signature " + str(formals) + str(ret) ) ;
+
+found := {} ;
+
+for subp in subprogs loop 
+
+    sem_trace(0,"try renaming with "+ subp) ;
+    if (ST(subp) = om and "." in subp) or	 -- Case of P."+"
+        ST(subp).nature = "op" then
+         o := op_matches_spec(subp, [t: [-,-,t] in formals], ret);
+         if o /= om then 
+            found with:= o ; 
+        end if;
+    else
+        old_sig := ST(subp).signature ;
+        if #old_sig /= #formals or
+            base_type(ret) /= base_type(ST(subp).type_of) 
+        then
+            continue;
+        else
+	    continue_outer_loop := false;
+            for o_f = old_sig(i) loop 
+                [-, -, new_t,-] := formals(i) ;
+                if not same_type(ST(o_f).type_of, new_t)  then 
+	           continue_outer_loop := true;
+                   exit;
+                end if;
+            end loop;
+	    if continue_outer_loop then
+	       continue;
+	    end if;
+            found with:= subp ;
+        end if;
+
+    end if;
+end loop;
+
+if #found > 1 then
+    if exists subp in found | ST(subp).nature /= "op" 
+      and ST(subp).scope_of in open_scopes then
+        found := {subp in found | ST(subp).nature /= "op"} ;
+    elseif exists subp in found | ST(subp).nature = "op" then
+        found := {subp} ;
+    end if;
+end if;
+
+if #found = 1 then 
+    found := arb found ;
+    renamed_sig := ST(found).signature;
+    check_modes(formals, renamed_sig);
+
+    -- The signature of the renamed entity is not affected by the renaming.
+    -- A consequence is that the types of its formals must be used to resolve
+    -- default parameters introduced by the renaming (see B85013c). As the
+    -- defaults have been type-checked already, we use the original syntax
+    -- tree to recover them, and perform the type-checking again (redundantly).
+    -- The defaults are known to be type-correct, so that only well-formedness
+    -- rules that depend on constrained/unconstrained types need to be 
+    -- rechecked. In fact, it's only criteria on array aggregates that need 
+    -- rechecking.
+
+    -- If the renamed entity is an operator, its signature is empty (it
+    -- never used in type checking). Instead, we recheck the defaults against 
+    -- the base types of the formals. (This only matters for concatenation).
+
+    if ST(found).nature = "op" then
+	renamed_types := [base_type(t): [-,-,t] in formals] ;
+    else
+	renamed_types := [ST(f).type_of: f in renamed_sig] ;
+    end if;
+
+    if #renamed_types > 0 then
+        decl_tree := formals.formal_decl_tree(5) ;
+        defaults := [] ;
+        for [id_list, -, -, opt_init, -] in decl_tree loop 
+	    defaults +:= #id_list * [opt_init] ;
+        end loop;
+        for t = renamed_types(i) | is_array(t) loop 
+           check_type(t, defaults(i));
+        end loop; 
+    end if;
+
+    if is_identifier(found) and ST(found).nature = "entry" then
+        -- Renaming of entry within a task. Give full name of
+        -- entry as qualified expression.
+        found := [".", ST(found).scope_of, found] ;
+    end if;
+
+    sem_trace(0,"renaming succesful with " + str(found) ) ;
+    sem_trace_proc_exit(3, "Renamed");
+    return [found, renamed_sig] ;
+
+elseif #found >1 then
+    errmsg("ambiguous subprogram name: ",
+        original_name(arb subprogs), "8.5,12.3.6") ;
+else
+    errmsg("No match for subprogam specification ","","8.5,12.3.6") ;
+end if;
+sem_trace_proc_exit(3, "Renamed");
+return [] ;
+end renamed;
+
+--S+ check_modes
+procedure check_modes(formals, sig) ;
+
+for f = sig(i) loop 
+    if ST(f).nature /= formals(i)(2) then
+        errmsg("parameter modes do not match","","8.5(8)") ;
+    end if;
+end loop;
+end check_modes;
+--S+ op_matches_spec
+procedure op_matches_spec(op_nam, f_types, ret) ;
+
+-- Determine whether a predefined operator matches a given subprogram
+-- specification. Called for renamings and for name resolution of 
+-- selected components whose selector is an operator designator.
+-- The matching is analogous to the type-checking of an expression. We 
+-- construct a skeletal argument list out of the types of formals, and 
+-- use result-types(q.v) to find the specific operator being renamed.
+
+sem_trace_proc_entry(4, "Op_Matches_Spec");
+
+if #f_types < 1 or #f_types> 2 then 
+    sem_trace_proc_exit(4, "Op_Matches_Spec");
+    return om ;
+
+else
+    arg_list := [ [om, {t}] : t in f_types] ;
+    [[ops,-], types] := result_types({op_nam}, arg_list) ;
+
+    if #(ops?[]) = 1 and 
+	(exists t in types | compatible_types(t,ret)) then            
+        sem_trace_proc_exit(4, "Op_Matches_Spec");
+        return arb ops ;
+    else
+        sem_trace_proc_exit(4, "Op_Matches_Spec");
+        return om ;
+    end if;
+end if;
+sem_trace_proc_exit(4, "Op_Matches_Spec");
+end op_matches_spec;
+--S+ valid_function_attribute
+procedure valid_function_attribute(attr, typ, ret, t);
+
+-- Verify that a function that renames an attribute has the correct
+-- parameter and result type profile. typ is the prefix of the attribute,
+-- t and ret are the specs of the function.
+
+if not is_type(typ) then
+    errmsg("prefix of renamed attribute must be a type", "", "8.5");
+    return ["any", "any"] ;
+end if;
+
+case attr 
+
+    when "SUCC", "PRED" => 
+        a_type := ret_type := typ ;
+
+    when "IMAGE" => 
+        a_type := typ ;
+        ret_type := "STRING" ;
+
+    when "VALUE" => 
+        a_type := "STRING" ;
+        ret_type := typ ;
+
+    otherwise =>
+        errmsg("attribute " + attr, " cannot be renamed as a function",
+            "8.5") ;
+        a_type := ret_type := "any" ;
+end case;
+
+if base_type(ret) /= base_type(ret_type) 
+    or base_type(a_type) /= base_type(t) then
+     errmsg("function specification does not match renamed attribute",
+                "", "8.5") ;
+    a_type := ret_type := "any" ;
+end if;
+
+return [ret_type, a_type] ;
+
+end valid_function_attribute;
+--S+ renamed_attribute
+procedure renamed_attribute(new_fun, formals, attr_exp) ;
+
+sem_trace_proc_entry(4, "Renamed_Attribute");
+
+-- Called when renaming an attribute as a function,or instantiating a
+-- generic subprogram parameter as a function. We construct a function
+-- body whose single statement returns the specified attribute. Ideally
+-- the pragma INLINE should be attached to these renamed functions.
+-- The return type of the function is already known to match the first
+-- argument of the attribute.
+
+[[name, md, ft, o_i]] := formals ;
+ft := base_type(ft) ;           -- Only base type matters
+formals := [[name, md, ft, o_i]] ;
+
+[-, attr, typ] := attr_exp ;
+if attr in base_attributes then
+    -- the type returned is the base type of the indicated one.
+    typ := base_type(typ) ;
+end if;
+-- Second parameter of attribute is the formal of the function.
+attr_exp := ["'", attr, typ, name] ;
+
+sem_trace_proc_exit(4, "Renamed_Attribute");
+return ["function", new_fun, formals,
+        [ [], [["return", new_fun, 0, attr_exp]], [] ] ];
+
+end renamed_attribute;
+
+--S+ renamed_entry
+procedure renamed_entry(entry_expr, formals) ; 
+sem_trace_proc_entry(4, "Renamed_Entry");
+
+-- A procedure is being renamed with an expression. This can only be the
+-- renaming of an entry or a member of an entry family. 
+
+full_name := find_entry_name(entry_expr) ;
+
+if full_name = [] then        -- Invalid entry name or expression
+    sem_trace_proc_exit(4, "Renamed_Entry");
+    return [] ; 
+else
+    [task1, entries, indx] := full_name ;
+end if;
+
+found := {} ;
+for e in entries loop 
+    sig := ST(e).signature ;
+    if #sig /= #formals then
+         continue; 
+    end if;
+
+    continue_outer_loop := false;
+    for f = sig(i) loop 
+        [-, -, new_typ] := formals(i) ;
+        if not same_type(ST(f).type_of, new_typ) then
+		continue_outer_loop := false;
+		exit;
+        end if;
+    end loop;
+    if continue_outer_loop then
+       continue;
+    end if;
+
+    found with := e ;
+end loop;
+
+if #found /= 1 then
+    errmsg("ambiguous or invalid entry name in renaming","","8.5") ;
+    sem_trace_proc_exit(4, "Renamed_Entry");
+    return [] ;
+else
+    -- Use entry name to complete resolution of task name.
+    e_name := arb found ;
+    task_name := complete_task_name(task1, ST(ST(e_name).scope_of).type_of) ;
+    renamed_sig := ST(e_name).signature ;
+    check_modes(formals, renamed_sig) ;
+end if;
+
+if indx /= om then
+    if ST(e_name).nature = "entry" then
+    errmsg("Invalid index on entry name (not entry family)", "","9.5") ;
+    else
+    -- entry name is indexed expression. Check type of index.
+        i_type := index_type(ST(e_name).type_of) ;
+        e_name := ["[]", e_name, [check_type(i_type, indx)]] ;
+    end if;
+
+elseif ST(e_name).nature = "entry_family" then
+    errmsg("Cannot rename entry family as a whole","","9.5") ;
+end if;
+
+sem_trace_proc_exit(4, "Renamed_Entry");
+return [[".", task_name, e_name], renamed_sig] ;
+end renamed_entry;
+
+--S+ entry_as_procedure
+procedure entry_as_procedure(proc_name, formals, entry_expr) ;
+
+-- For a procedure that renames an entry, we emit a procedure definition
+-- whose body is an entry call. Eventually this should be an inline proc.
+
+-- The calling parameters on the entry are the names of the formals of 
+-- the procedure being constructed.
+
+arg_list := [["bind", t, t, n] : [n, m, t, d]  in formals] ;
+
+[-, task, entry_name] := entry_expr ;
+ecall_stat  := ["ecall", task, entry_name, arg_list] ;
+
+proc_body := [ [], [ecall_stat, ["return", proc_name, 0]], [] ] ;
+
+return ["procedure", proc_name, formals, proc_body] ;
+
+end entry_as_procedure;
+--S+ check_nat_type
+procedure check_nat_type(expn) ;
+
+-- Obtain the nature and the actual type of of a renamed  expression,
+-- and verify that it designates an object.
+
+const 
+   object_natures := ["constant", "generic_in", "generic_inout", 
+		      "in", "inout", "loop_var", "out", "obj"]; 
+
+if is_identifier(expn) then 
+    [nat, t, -, -, -] := ST(expn) ;
+    if nat notin object_natures then
+        errmsg("Renamed entity must be an object","", "8.5") ;
+    end if;
+    return [nat,t] ;
+
+else
+    [opn, exp1, exp2] := expn ;
+
+    case opn 
+
+    when "[]" => 
+       -- The nature of an indexed component is the same as the
+       -- nature of the array object itself.
+        [nat, t] := check_nat_type(exp1) ;
+        return [nat, component_type(t)] ;
+
+    when "[..]" => 
+       -- The nature of the slice is that of the array object.
+        return check_nat_type(exp1);
+
+    when "." =>  
+        [nrec, -]     := check_nat_type(exp1) ;
+        [nfield, t,-, -, -] := ST(exp2) ;     -- attributes of selector
+
+       -- IF selector is a discriminant, the new entity must be
+       -- treated as such.  Otherwise the  nature of the record
+       -- object (constant, formal, etc.) determines that of the
+       -- new entity.
+
+        nat := if  nfield = "discriminant" then nfield else nrec end if;
+        return [nat, t] ;
+
+     when "@" =>  
+       -- A dereferenced pointer always yields an object.
+        [nat, t] := check_nat_type(exp1) ;
+        return ["obj", ST(t).designated_type] ;
+
+     when "call" =>  
+       -- The function being called must yield an access type.   
+        t := ST(exp1).type_of ;
+        if not is_access(t) then
+                errmsg("Renamed entity must be an object","", "8.5") ;
+        end if;
+
+        return ["obj", t] ;
+
+      when "ivalue" => 
+        return ["constant", "any"] ;
+
+      otherwise =>            -- error somewhere.
+        return ["obj", "any"] ;
+      end case;
+end if;
+
+end check_nat_type;     
+--S+ newscope 
+procedure newscope(new_name) ;
+sem_trace_proc_entry(2, "Newscope");
+ 
+-- This procedure is invoked when a new lexical scope is entered. 
+-- Lexical scopes include package specifications, package bodies ,
+-- subprogram bodies and entry bodies (ACCEPT statements). In addition
+-- record and task declarations and private parts are treated as scopes.
+-- In each case, the environment of the previous scope is stacked
+-- and the symbol table for the new scope is initialized. 
+ 
+sem_trace(2,"new scope: " + str(new_name) );
+sem_trace(2,"nature of new scope: "  + str(ST(new_name).nature) );
+scope_st with:= [current_scope, name_prefix, open_scopes, 
+		used_mods, vis_mods, suffix];
+current_scope := new_name ;
+ 
+declared(current_scope) ?:= {} ;
+
+visible(current_scope) ?:= {} ;
+ 
+open_scopes := [current_scope] + open_scopes ;
+suffix := newat_str();        -- For the formation of unique names
+
+end newscope;
+  
+--S+ popscope
+procedure popscope() ;
+sem_trace_proc_entry(2, "Popscope");
+ 
+-- Ths procedure is called on exit from a completed lexical scope.
+-- Eventually, it should contain various housekeeping functions
+-- relating to symbol table statistics and space recovery. For now
+-- it simply restores the environment of the enclosing scope.
+
+-- As each scope is closed, a symbol table dump may be done, controled
+-- by the value of cdebug2:
+--
+--     cdebug2 = 2  :  show entries for current scope without signature
+--     cdebug2 > 2  :  show entries for current scope with signature 
+--     cdebug2 > 6  :  show entries for all user defined scopes
+--     cdebug2 = 9  :  show entries for all declared scopes 
+ 
+if cdebug2 > 1 then
+    for scop in 
+        (if cdebug2 = 9 then domain declared 
+        elseif cdebug2 > 6 then domain(declared) - 
+                ({"STANDARD#0","UNMENTIONABLE#0","ASCII"} + 
+                {x(2) : x in predef_units})
+        else {current_scope}     
+        end if)  loop
+
+        if declared(scop) /= {} then
+            show_scope_info(scop);
+        else 
+            sem_trace(2, "no identifiers declared in scope:" + str(scop) );
+        end if;
+    end loop;
+end if;
+
+[current_scope, name_prefix, open_scopes, 
+ used_mods, vis_mods, suffix] frome scope_st ;
+ 
+sem_trace(2,"return to scope: " + str(current_scope) ) ;
+sem_trace_proc_exit(2, "Popscope");
+end popscope;
+ 
+procedure show_scope_info(scop);
+        sig_flag := (cdebug2 > 2) and
+                (exists [item, u_name] in declared(scop) | 
+                 ST(u_name).signature /= om);
+        to_errfile("Symbol table entries for declared of scope: "+scop+":","");
+        to_errfile(rpad("Id", 15) + rpad("Unique name", 20) +
+            rpad("Nature", 15) + rpad("Type", 20) +  rpad("Alias", 15),"");
+
+        for [item, u_name] in declared(scop)  loop 
+                line := rpad(item ? "", 14);
+                line := rpad(line + " " + u_name ? "", 34);
+                line := rpad(line + " " + ST(u_name).nature ? "", 49);
+                line := rpad(line + " " +
+                    if is_string(ST(u_name).type_of) then ST(u_name).type_of
+                      else str(ST(u_name).type_of) end if, 69);
+                line := line + " " + str(ST(u_name).alias) ;
+                to_errfile(line,"");
+
+                if ST(u_name).scope_of /= scop then	
+                   to_errfile("   Scope_of : " +  str(ST(u_name).scope_of),"");
+                end if;
+                if ST(u_name).overloads /= om then	
+                   to_errfile("   Overloads: " +  str(ST(u_name).overloads),"");
+                end if;
+                if sig_flag and ST(u_name).signature /= om then
+                    to_errfile("   Signature: ","");
+                    pretty_print(errfile,  ST(u_name).signature);
+                end if;
+        end loop;
+end show_scope_info;
+
+end adasem8;

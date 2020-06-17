@@ -1,0 +1,2312 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_main.stl,v 1.1 91/01/02 15:25:58 banner Exp $
+--
+package body int_main;
+--T+ ADA INTERPRETER PROCEDURE
+
+  use int_expr;
+  use int_globals;
+  use int_objects;
+  use int_procs;
+  use int_tasking;
+  use int_types;
+  use int_util;
+  use predefs;
+  use adaio;
+  use globals;
+  use adaarith;
+  use callout_package;
+
+var
+  stm;
+
+procedure interp;
+--
+-- The input consists of three objects. The  first is a sequence (tuple) of
+-- unit bodies. The second  object is  the (string) name of the procedure
+-- which is the  main program. This procedure must have  a null parameter
+-- list. The third is the priority of the main program if there is one.
+-- These objects are in the global variables AIS_CODE, AIS_MAIN, and
+-- AIS_PRIO which are created by the binder.
+--
+--
+-- The  initial  set of environment  stacks contains entries for the
+-- maintask and a pseudo-task called idle. Since  the  main program
+-- executes at the outer level, there are no stacked environments for it.
+-- This is created during compiler initalization by INIT_ENV .
+--
+--
+-- The  initial  environment  for the maintask contains  the entries for   
+-- the  standard environment and the environment for Text_io (which is 
+-- potentially available to all programs). These environments are 
+-- provided by the routine INIT_ENV during compiler initialization.
+-- The entries into this initial  environment are inherited by
+-- any other tasks which are created by the  main task.
+--
+-- The initial value stack is empty, since  entries are only made on this
+-- stack to hold temporary values during the course of execution.
+-- 
+-- The initial  statement sequence  consists  of the list of units 
+-- supplied by the binder  with  a finish statement added, thus 
+-- forming a valid task body. This  task, called MAINTASK, will be 
+-- initiated.  Execution of the finish statement will stop execution, 
+-- even if  there are still some tasks not dependant on the main 
+-- program that  may execute. In any case, execution stops when 
+-- there can be no  other activity but the idle task. 
+--
+--
+--
+
+
+    envstackt(maintask)(height(maintask)).stsqt := 
+ 	 if ais_main /= "" and ais_code /= [] then
+		[["block", 
+			  [ ais_code,
+			    [ ["call", ais_main, []],
+			      ["end"]
+			    ],
+			    []
+			  ]],
+			["finish_"]
+		       ]
+
+  	else				-- used for interpreter initialization.
+
+		ais_code + [["terminate"]]
+
+       end if;
+
+  task_prio(maintask) := ais_prio(1) ? undef_prio;
+
+  initialize_predef();
+
+  initialize_debug_info;
+  set_env ;
+
+  start_the_clock;
+
+-- A few "locations" are defined during initialization. Up the location
+-- counter to start above these predefined values.
+
+for i in [1..10] loop  junk := newat_str(); end loop;
+
+--
+--
+-- INTERPRETER LOOP    
+-- ----------------
+--
+--  The interpreter loop runs until a finish statement is executed.
+--  A finish statement performs termination procedures and returns to
+--  the caller of the interpreter. This statement is either
+--  one placed in the original statement sequence after a call
+--  to a main program, or executed by the idle task when it discovers
+--  that there are no ready or delayed tasks.
+--
+    while true loop
+--
+--
+--  The following invariant should hold:
+--   assert #ACTIVE_TASKS =
+--  a task may ready
+--    #READY_TASKS +
+--  or may have open accepts or be delayed or be terminatable
+--    #(domain OPEN_ENTRIES + domain DELAYED_TASKS + TERMINATABLE +
+--  or may be waiting on an entry queue
+--    { T : exists Q in (range(+/(range WAITING_TASKS))) | T in Q }) +
+--  or may be making an accepted entry call
+--    #ENTERING +
+--  or may be waiting for subtasks to complete their activation
+--    #(domain ACTIVATING_SUBTASKS) +
+--  or may be waiting for sub-tasks to terminate
+--    #HELD_TASKS;
+--
+--
+-- Called on each cycle thru the interpreter loop to
+-- simulate the effect of a hardware clock interrupt.
+--
+  current_time := cumtime();
+  if current_time >= next_interrupt_time then
+    service_clock;
+  end if;
+--
+  stm fromb stsq; -- we always execute the statement at the head of STSQ
+--
+--
+-- Increment statement counts.
+--
+  --if is_ais_stmt() then 
+    --stmtcount +:= 1; 
+  --end if;
+  --current_stmt_count +:= 1;
+--
+if debugging then 
+   debugging_checks_1; 
+end if;
+--
+-- execute_one_stmt returns TRUE when it is finished otherwise it return FALSE
+
+  if execute_one_stmt() then
+     return;
+  end if;
+--
+if debugging then 
+   debugging_checks_2;
+end if;
+--
+end loop;
+end interp;
+
+--T+ INTERPRETER INSTRUCTIONS
+procedure execute_one_stmt;
+
+--  The instructions recognized by the interpreter are of two kinds:
+--  AIS statements and generated statements. The AIS statements are
+--  the intermediate code produced by the front end and supplied to
+--  the interpreter in AIS_MAIN. The generated statements are produced
+--  by the interpreter in the course of executing the AIS statements.
+--  They are placed at the head of STSQ and then executed themselves.
+--  Thus the interpreter treats STSQ as a stack of intructions. The
+--  generated statements may be recognized by the underline ( _ )
+--  which always forms the last character of their name.
+--
+--  The names of the AIS statements are usually the same as that of
+--  a non_terminal in the Ada grammar, of which the AIS statement is
+--  a translation. Their form is that of a tuple, in which the first
+--  entry is the name, and any parameters needed are the subsequent
+--  entries. The form of generated statements is the same, and their
+--  names are usually formed from the AIS statement of which they are 
+--  an intermediate stage in execution by adjoining an underline. 
+--  Some generated statements (e.g. 'oeval_') do not have any AIS 
+--  counterpart, but are used as part of the execution sequence of 
+--  certain AIS statements.
+  
+--  The statements are divided according to the chapters of the Ada
+--  Reference Manual
+
+case stm.opcode 
+--S+ Internal Utility Instructions
+-- ['push_', value]
+--
+--   This is a subsidiary operation used to push a value onto the stack
+--   in the middle of an exec sequence. It can be regarded as a deferred
+--   push, since VALSTACK is not affected until the push is executed.
+--
+  when "push_" => 
+    [-, value] := stm;
+    push( value );
+--
+--  ['pop_', value]
+--
+--    This is a subsidiary statement used to discard the top of the stack
+--
+   when "pop_" => 
+     pop ( junk );
+--
+--   ['repeat_', ntimes, stmt_list]
+--
+--   This is a subsidiary statement used for multidimensional array 
+--   creation, to avoid filling the exec stack to quickly.
+--   stmt_list is executed ntimes times
+
+  when "repeat_" => 
+    [-, ntimes, stmt_list] := stm;
+    exec( [] +/ [ stmt_list : i in [1..ntimes]] );
+--T+ Chapter 3. DECLARATIONS AND TYPES
+--S+ 3.2.1 Object declarations
+-- ['constant', nam, type_name, exprv]
+--
+--   The constant statement is used to make an entry for a constant in
+--   EMAP, corresponding to a constant declaration in the source.
+--   exprv is an expression for its value. The front end ensures that no 
+--   assignment is made to this object after initialization. 
+
+  when "constant" => 
+    [-, name, type_name, init_expr] := stm;
+    exec ( [["veval_", init_expr],  -- assume explicit qualification here
+            ["constant_", name, type_name] ]);
+--
+  when "constant_" => 
+    [-, name, type_name] := stm;		
+    type_disr := get_itype(type_name);
+    pop( init_value );
+    if is_constrained_type(type_disr) then
+        exec([["create_obj_", type_disr, false, curtask, height(curtask),
+			name],
+              ["set_obj_", name, init_value] ]);
+    else
+        emap(name) := create_copy(init_value, type_disr, om);
+    end if;
+
+-- ['object', name, type_name, init_expr]
+--
+-- The  object  statement  is  used to create  an IOBJECT given an ITYPE.
+-- Type_name  designates the ITYPE of the object to be created. Init_expr
+-- is an  expression for  a possible  initial value. If  not present, the
+-- object may be created with a default init value, if there is one.
+--
+
+  when "object", "obj" => 
+    [-, name, type_name, init_expr] := stm;
+
+    if present(init_expr) then
+      exec( [["veval_", init_expr],
+             ["object_", name, type_name, false]] );
+    else
+      exec( [["object_", name, type_name, true ]] );
+    end if;
+--
+  when "object_" => 
+    [-, name, type_name, default_init] := stm;	
+    type_disr := get_itype(type_name);
+    object_representation(name) := representation(name);
+    if default_init then
+       init_value := om;
+    else
+       pop( init_value );
+    end if;
+      exec( [
+        ["create_obj_", type_disr, default_init, curtask, height(curtask),
+			name],
+        ["set_obj_", name, init_value] ]);
+--
+--  ['create_obj_', itype_name, default_init, t_master, t_taskenv, name]
+--
+--  The create_obj_ statement is generated when an object must be
+--  created from a type. The parameters are as follows:
+--
+--    itype_name     the name of the ITYPE giving the type of the object
+--
+--    default_init   set true if default initializations of record field
+--                   values are required.
+--
+--    t_master       the master task, used for creating task objects. 
+--		    This is usually, but not always CURTASK.
+--
+--    t_taskenv      the task environment to be used for creating task
+--                   objects. This is usually, but not always, #ENVSTACK.
+--
+--    obj_name       The name (user-defined or internal) of the entity
+--		    being created. It is used to keep track of size of objects.
+--		    and to name tasks for debugging purposes. The special
+--		    object 'virtual' denotes variant parts of unconstrained
+--		    records that are not selected by the default discriminant
+--		    values, and must be constructed without performing any
+--		    constraint checks on those discriminant values. 
+--
+--  On completion of execution of the create_obj_ statement, the IOBJECT
+--  which is created is left on VALSTACK, with all necessary entries
+--  made in the CONTENTS map.
+
+  when "create_obj_" => 
+    [-, itype_name, default_init,
+       t_master, t_taskenv, obj_name ] := stm;
+    create_obj( itype_name, default_init,
+                t_master, t_taskenv, obj_name );
+
+--  ['create_obj_r1_', objdec_list, disc_list, constr_disc_list]
+-- 
+--  This is the subsidiary statement used to create a record iobject
+--  from a sequence of component iobjects stored on VALSTACK. It is
+--  used in the case where default initializations are not performed.
+--
+   when "create_obj_r1_" => 
+     [-, objdec_list, disc_list, constr_disc_list] := stm;
+  
+  -- Strip the created component objects off the stack
+
+     obj := valstack (#valstack - #objdec_list + 1 ..);
+     valstack (#valstack - #objdec_list + 1 ..) := [];
+
+  -- Build the object list for the resulting record object
+
+     objlist := {};
+      for i in [1 .. #obj] loop
+       [field_name, [field_itype, field_vexpr]] := objdec_list(i);
+       field_iobject := obj(i);
+       objlist(field_name) := field_iobject;
+
+  -- If the record is constrained, the values of the discriminant
+  -- are ready in the field_vexpr (although we are not initializing)
+       if present(constr_disc_list) and 
+			field_name in constr_disc_list then
+          [-, discr_value] := field_vexpr;
+          contents(field_iobject) := discr_value;
+       end if;
+     end loop;
+
+  -- If discriminants are present and the record is not constrained,
+  -- then add a dummy field indicating no fields are actually present
+  -- (remember that this is the case where we are not initializing)
+
+     if nonempty(disc_list) and absent(constr_disc_list) then
+       special_object := newat_str();
+       contents(special_object) := {};
+       objlist("fields_present") := special_object;
+     end if;
+
+  -- Return the resulting object and pop the environment stack if we
+  -- have discriminants to remove the dummy scope for variant values.
+
+     if nonempty(disc_list) then
+        save_td := tasks_declared;
+        pop_env; 
+        tasks_declared +:= save_td;
+     end if;
+     push(["record_iobject", objlist, constr_disc_list]);
+
+--  ['create_obj_r2_', numobj]
+--
+--  This is a subsidiary statement used in the creation of records to
+--  peform default initializations. The top of the stack contains the
+--  sequence of objects, followed by the sequence of default values.
+  
+   when "create_obj_r2_" => 
+     [-, numobj] := stm;
+     default_values := valstack(#valstack - numobj + 1 ..);
+     valstack(#valstack - numobj + 1 ..) := [];
+     obj := valstack(#valstack - numobj + 1..);
+      for i in [1..numobj] | default_values(i) /= uninitialized loop
+       setval(obj(i), default_values(i), om);
+     end loop;
+
+--  ['create_obj_r3_', field_name, field_vexpr]
+--  ['create_obj_r4_', field_name]
+--
+--  These two statement forms are used to initialize the value of a
+--  discriminant in EMAP when building a record with discriminants.
+
+   when "create_obj_r3_" => 
+     [-, field_name, field_vexpr] := stm;
+     exec( [["veval_", field_vexpr], 
+            ["create_obj_r4_", field_name]]);
+
+   when "create_obj_r4_" => 
+     [-, field_name] := stm;
+     pop( expr_value );
+     emap(field_name) := expr_value;
+
+--  ['create_obj_r5_', objdec_list, variant_part, disc_list]
+--
+--  This is a subsidiary statement used in building a record with
+--  discriminants and default initializations. At this stage, all
+--  the entries for the discriminant values are made in EMAP.
+  
+  when "create_obj_r5_" => 
+    [-, objdec_list, variant_part, disc_list, obj_name] := stm;
+
+  -- What we want to do now is to build two lists, one of fields which
+  -- are to be initialized (init_list) and the other of fields which
+  -- are not to be initialized (no_initlist) since they represent
+  -- fields in variants not selected by the initial discriminant values.
+
+     init_list := objdec_list;
+     noinit_list := [];
+
+      while variant_part /= [] loop
+       [variant_name, altern_list] := variant_part;
+       variant_value := emap(variant_name);
+  
+  -- Find the variant which is to be used and withdraw it from
+  -- the altern_list
+  
+       if
+          (exists component_list = altern_list (choices) |
+             choices /= {"others"} and contains ( choices, variant_value))
+       or
+          present(component_list := altern_list(choices := {"others"}))
+       then
+          altern_list ( choices ) := om;
+       else
+          system_error("create_obj_r5_");
+       end if;
+
+  -- The variant which is used does get initialized
+
+       [objdec_list, variant_part] := component_list;
+       init_list +:= objdec_list;
+             
+  -- All other variants do not get initialized
+
+        for [choices, component_list] in altern_list loop
+         noinit_list +:= flatten_record (component_list);
+       end loop;
+     end loop;
+
+  -- At this stage we have all the fields which need initializing, so
+  -- we first create the objects which are to be initialized, then
+  -- evaluate the corresponding default initializations, then we
+  -- perform the initializations, then we create all the other objects,
+  -- and finally we can assemble the result.
+
+     exec (
+      [["create_obj_", field_type, is_uninitialized(field_vexpr),
+                       t_master, t_taskenv, obj_name] 
+            : [field_name, [field_type, field_vexpr]] in init_list] +
+      [["veval_", field_vexpr]
+            : [field_name, [field_type, field_vexpr]] in init_list
+               | field_name notin disc_list] +
+      [["create_obj_r2_", #init_list - #disc_list]] +
+      [["create_obj_", field_type, false, t_master, t_taskenv, "virtual"]
+            : [field_name, [field_type, field_vexpr]] in noinit_list] +
+      [["create_obj_r6_", init_list, noinit_list, disc_list]] );
+
+--  ['create_obj_r6_', init_list, noinit_list, disc_list]
+--
+--  This is a subsidiary statement used to finalize the construction
+--  of a record iobject with discriminants where default initialization
+--  is performed. At this stage, all initialization is complete, except
+--  that the objects corresponding to discriminant values have not been
+--  initialized.
+
+  when "create_obj_r6_" => 
+    [-, init_list, noinit_list, disc_list] := stm;
+
+  -- First get all the created component objects off VALSTACK
+
+    noinit_obj := valstack(#valstack - #noinit_list + 1 ..);
+    valstack(#valstack - #noinit_list + 1 ..) := [];
+    init_obj := valstack(#valstack - #init_list + 1 ..);
+    valstack(#valstack - #init_list + 1 ..) := [];
+
+  -- Perform initializations of all the discriminant objects
+  -- using the values which create_obj_r4_ saved in EMAP earlier on.
+  -- we must retrieve them in the same order we evaluated them
+    disc_list := [ field_name : [field_name, -] in init_list
+                   | field_name in disc_list];
+     for i in [1 .. #disc_list] loop
+      setval(init_obj(i), emap(disc_list(i)), om);
+    end loop;
+
+  -- Now build the resulting objdeclist for the iobject
+
+    objdeclist := {};
+
+     for i in [1 .. #init_list] loop
+       [field_name, [field_itype, field_vexpr]] := init_list(i);
+       objdeclist(field_name) := init_obj(i);
+    end loop;    
+
+     for i in [1 .. #noinit_list] loop
+       [field_name, [field_itype, field_vexpr]] := noinit_list(i);
+       objdeclist(field_name) := noinit_obj(i);
+    end loop;    
+
+  -- If the record is constrained, we just build the record iobject
+  -- indicating the appropriate list of constrained discriminants.
+  -- Return the resulting object and pop the environment stack, as we
+  -- have discriminants, to remove the dummy scope for variant values.
+
+    constr_disc_list := emap("constr_disc_list");
+    save_td := tasks_declared;
+    pop_env;
+    tasks_declared +:= save_td;
+    if present(constr_disc_list) then
+      push( ["record_iobject", objdeclist, constr_disc_list] );
+
+  -- Otherwise we build a dynamic record iobject, noting that the set
+  -- of fields which we initialized corresponds to the set of fields
+  -- which are to be marked present in the 'fields_present' entry.
+
+    else
+      loc := newat_str();
+      objdeclist("fields_present") := loc;
+      contents(loc) := 
+         {field_name : [field_name, [field_itype, field_vexpr]] 
+                           in init_list};
+      push( ["record_iobject", objdeclist] );
+    end if;
+
+--  ['create_obj_a_', lowobj, highobj, lowdiscr, highdiscr, numelmts]
+--
+--  This is a subsidiary statement used by create_obj_ to actually
+--  create an array object after all the component objects have been
+--  created and placed on the value stack in sequence. All that it
+--  does is to replace the sequence of created iobjects for the elements
+--  on VALSTACK with a single entry which is the iobject for the array.
+
+  when "create_obj_a_" => 
+    [-, lowobj, highobj, lowdiscr, highdiscr, numelmts] := stm;
+    if numelmts = 0 then
+       push(["array_iobject", [], lowobj, highobj, lowdiscr,highdiscr]);
+    else
+       seq := valstack (#valstack - numelmts + 1 ..);
+       valstack (#valstack - numelmts + 1 ..) :=
+          [["array_iobject", seq, lowobj, highobj, lowdiscr, highdiscr]];  
+    end if;
+
+--  ['set_obj_', name, init_value]
+--
+--  This statement is typically generated following a 'create_obj_'
+--  statement at the outer level to associate the created object
+--  which is on the top of VALSTACK with the given name. If the
+--  init_value parameter is present, then it is a value which is
+--  to be assigned to the newly created object
+--
+  when "set_obj_" => 
+    [-, name, init_value] := stm;
+    pop( new_obj );
+    emap (name) := new_obj;
+    if present(init_value) then
+      setval (new_obj, init_value, om);
+    end if;
+--S+ Representation
+-- ['repr', type_name, repr_expr]
+--
+  when "repr" => 
+    [-, repr_expr] := stm;
+    for [type_name, repr_value] in repr_expr loop 
+	representation(type_name) := repr_value;
+	--
+	-- Check to see of there is an entry for item in the GLOBAL_EMAP and if 
+	-- so add the representation information at the end of the ITYPE 
+	-- contained in the GLOBAL_EMAP.
+	--
+	if present(type_itype := global_emap(type_name)) then
+           if repr_value.opcode = "delta" then
+               [-, lbd, ubd, small, delta, siz] := repr_value ;
+               type_itype := ["fixed", lbd(2), ubd(2), small(2), delta(2), siz];
+	   else
+	       type_itype(#type_itype + 1) := repr_value;
+	   end if;
+	   global_emap(type_name) := type_itype;
+	--
+	-- Check to see if there is an entry for item in the EMAP and if
+	-- so add the representation information at the end of the ITYPE
+	-- contained in the EMAP.
+	--
+	elseif present(type_itype := emap(type_name)) then
+
+           if repr_value.opcode = "delta" then
+               [-, lbd, ubd, small, delta, siz] := repr_value ;
+               type_itype := ["fixed", lbd(2), ubd(2), small(2), delta(2), siz];
+	   else
+	       type_itype(#type_itype + 1) := repr_value;
+	   end if;
+	   emap(type_name) := type_itype;
+        else
+	   -- Ignore representation of type not in EMAP.
+	     null;
+	end if;
+    end loop; 
+
+--S+ 3.3.1 Type declarations
+-- ['type', type_name, type_expr]
+--
+-- A type statement makes an EMAP entry for a type.
+-- Type_expr is a texpr which evaluates to the ITYPE 
+-- to be bound to type_name.
+--
+  when "type" => 
+    [-, type_name, type_expr] := stm;
+    exec( [["teval_", type_expr],
+           ["type_", type_name] ] );
+ 
+  when "type_" => 
+    [-, type_name] := stm;
+    pop( type_val );
+--
+--   After type_name has been elaborated, we can complete the elaboration
+--   of its delayed types: subtypes and types whose components is type_name.
+
+    [delay_flag, delayed_stm] := emap(type_name) ? [];
+    if delay_flag = "delayed" then
+       exec(delayed_stm ? []);
+    end if;
+--
+-- Setting type value in environement:
+    emap(type_name) := type_val;
+--
+-- ['delayed_type', type_name, type_expr, parent_type ]
+--
+-- This is a type whose elaboration has to be delayed until some other parent
+-- is elaborated, usually a private  or incomplete type, or another delayed type.
+-- The delayed type is chained to the EMAP of the parent type.
+-- However, if the type_expr is a discriminant constraint, the discriminants may 
+-- have to be evaluated before the full type declaration.
+-- (see c37211c).
+
+  when "delayed_type" => 
+    [-, type_name, type_expr, parent_type ] := stm;
+    [-, delayed_stm] := emap(parent_type) ? [[], []];
+    emap(parent_type) := ["delayed", delayed_stm with
+           ["type", type_name, type_expr ] ];
+    emap(type_name) := ["delayed", []];
+    if type_expr.opcode = "subtype" then
+        -- Discriminant constraints may be evaluable.
+	teval_proc(type_expr) ;
+    end if;
+
+-- 
+-- ['teval_', type_expr]
+--
+-- The 'teval_' instruction is used to evaluate TEXPR's to produce the
+-- ITYPE for the corresponding type value. TEXPR's appear as the operand
+-- of the TYPE statement, which places an ITYPE value in EMAP, and
+-- also in general expression contexts (e.g. the range for the in
+-- operator).
+-- 
+-- 
+--
+--
+  when "teval_" => 
+    [-, type_expr] := stm;
+-- 
+-- Named ITYPE
+-- 
+--   string_name
+-- 
+--   In any context where an ITYPE is expected to appear, the use
+--   of a string name refers to a domain element of EMAP, whose
+--   current corresponding range element is the referenced ITYPE.
+--   This is required for handling mutually recursive types, and
+--   is permitted in any context. The GET_ITYPE procedure can be used
+--   to effect the necessary dereferencing to obtain the actual
+--   value of a named ITYPE.
+-- 
+    if is_simple_name(type_expr) then
+      push( get_itype(type_expr) );
+    else
+--
+--  Most type evaluation processing is done in procedure TEVAL_PROC
+--
+      teval_proc(type_expr);
+    end if;
+--T+ Chapter 4. NAMES AND EXPRESSIONS
+--S+ 4.1 Names
+-- ['oeval_', eval_action]
+-- 
+-- The 'oeval_' instruction is used to evaluate OEXPR's to
+-- produce the resulting IOBJECT. These instructions are
+-- never present explicitly in the generated intermediate
+-- code, but are generated dynamically as an expression
+-- is evaluated. The single parameter is the next action
+-- to be performed. General possibilities are subexpressions
+-- to be evaluated and pushed onto VALSTACK, or actions which
+-- process VALSTACK entries.
+
+-- Essentially the steps taken by this procedure correspond
+-- to the steps in a conventional code generator. Only at
+-- the bottom level are actions performed which correspond
+-- to normal run time actions.
+
+-- Control is initially received when an OEXPR is encountered
+-- which must be evaluated, and the initial step is to generate
+-- an 'oeval_' instruction with the expression as its parameter.
+
+  when "oeval_" => 
+    [-, eval_action] := stm;
+    oeval_proc(eval_action);
+--S+ 4.4 Expressions
+-- ['veval_', eval_expr]
+--
+-- The 'veval_' instruction is used to evaluate VEXPR'S to
+-- produce the resulting IVALUE. These instructions are never
+-- present explictly in the intermediate code, but are generated
+-- dynamically as an expression is evaluated. The single parameter
+-- is the next action to be performed.
+--
+  when "veval_" => 
+    [-, eval_expr] := stm;
+--
+    if is_literal_ivalue(eval_expr) then
+-- 
+-- A convenience feature allows literal integer and enumeration type 
+-- IVALUE's (which are simply SETL integers) to be represented as 
+-- themselves in VEXPR's (since an integer value would otherwise be an 
+-- invalid VEXPR, no confusion arises). Thus 4 and ['ivalue', 4] are 
+-- equivalent in a VEXPR context. Similarly float IVALUE's can 
+-- also appear for themselves, but any more complicated values must
+-- be quoted using 'ivalue'.
+-- 
+      push( eval_expr );
+--
+    elseif is_simple_name(eval_expr) then
+--
+-- Named Object
+--
+      object := global_emap(eval_expr) ? emap(eval_expr);
+      if absent(object) then
+         exec([["raise", "PROGRAM_ERROR",
+           "Access to " + str(eval_expr) + " before elaboration"]]);
+      else
+        value := i_value(object);
+        if value = uninitialized 
+          or (is_tuple(value) and value(2) = uninitialized) then
+          exec([["raise", "PROGRAM_ERROR", "uninitialized object"]]);
+        else
+          push( value );
+        end if;
+      end if;
+--
+    elseif not is_operation(eval_expr) then
+--
+      system_error("ill-formed expression " + str(eval_expr) );
+--
+    else
+--
+-- All other VEXPR's are evaluated by VEVAL_PROC (q.v.)
+--
+      veval_proc(eval_expr);
+
+    end if;
+--
+-- 
+-- ['opfix_', opname]
+--
+-- The  opfix_ operation is generated as part  of the sequence used to
+-- evaluate expressions in the case of the fixed point multiplication and 
+-- division.  The two  operands and their types
+-- have already been  evaluated and dereferenced and are on the top
+-- of VALSTACK. Opname is the name of the operation to be performed.
+--
+  when "opfix_" => 
+    [-, opname] := stm;
+    opfix(opname);
+--
+-- 
+-- ['opbinary_', opname]
+--
+-- The  opbinary_ operation is generated as part  of the sequence used to
+-- evaluate expressions.  The two  operands  have already been  evaluated
+-- and dereferenced and are on the top of VALSTACK. Opname is the name of
+-- the operation to be performed.
+--
+  when "opbinary_" => 
+    [-, opname] := stm;
+    opbinary(opname);
+--
+-- ['opunary_', opname]
+--
+-- The  opunary_  operation  is used to evaluate   unary  operators in  a
+-- similar manner to opbinary_.
+--
+  when "opunary_" => 
+    [-, opname] := stm;
+    opunary(opname);
+--T+ Chapter 5. STATEMENTS
+-- ['null']
+--
+-- Acts as a no_op.
+--
+  when "null" => 
+    null;
+--S+ 5.1 Labels
+--       ['labdef', label_name]
+--
+--       In ADA itself, no label declarations are required, a label is
+--       declared implicitly by its occurence on a statement. In the 
+--       language processed by the interpreter, label declarations are  
+--       required, and have the form shown above.
+--
+--       Labdef captures the current environment (which is the one to be
+--       restored  when the goto occurs) by remembering the current 
+--       environment nesting depth  (i.e. the length of ENVSTACK) and  
+--       also captures the statement sequence to be executed when the 
+--       goto is executed. Both of these values are stored in the EMAP 
+--       entry for the label.
+--
+        when "labdef" => 
+          [-, lname] := stm;
+          if exists i in [1..#stsq] | stsq(i) = ["label", lname] then
+            emap(lname) := create_copy(
+                 ["label_ivalue", height(curtask), stsq(i + 1..)], om, om);
+          else
+            system_error(" missing label statement for " + str(lname) );
+          end if;
+
+-- ['label', lname]
+--
+-- The label statement is a dummy statement which has no effect when
+-- executed. It is a declaration of the form:
+--     ['labdef', lname] 
+-- which actually defines a label. The label statement serves to mark the
+-- position of the label whose name is lname for the labdef declaration.
+--
+  when "label" => 
+    null;
+--S+ 5.2 Assignment
+-- [':=', name, exprv]
+--
+-- This statement represents an  assignment . Name is an oexpr for the  
+-- left hand side and exprv is a vexpr for the right hand side.
+--
+  when ":=" => 
+    [-, name, exprv] := stm;
+    exec( [["oeval_", name],
+           ["veval_", exprv],
+           ["assign_"]         ]);
+
+  when "assign_" => 
+    pop( rhs_ );
+    pop( lhs_ );
+    setval(lhs_, rhs_, om);
+
+--
+--  Special assignment for slices: just for cases like: 
+--        T(U..V) := (others => X);
+--  in order to avoid having the range evaluated twice.
+-- 
+   when "[..]:=" => 
+    [-, type_name, type_expr, obj_name, v_expr] := stm;
+    exec( [[":=", ["[..]", obj_name, type_name], v_expr]] );
+    if is_tuple(type_expr) then
+      exec([["type", type_name, type_expr]]);
+    end if;
+
+-- For access components that are contrained by discriminants, the 
+-- discriminants cannot be obtained from the component itself. They must
+-- be retrieved from the enclosing record and placed in the environment in
+-- order to apply constraints correctly (see C37010b). After executing the
+-- assignment the environment stack is restored.
+
+  when "acc:=" => 
+   [-, prefix, selector, disc_list, exprv] := stm ;
+   push_env ;
+   exec([ ["oeval_", prefix], 
+          ["push_discr",  disc_list],
+          ["oeval_", ["$select", selector]],
+          ["veval_", exprv],
+          ["assign_"],
+          ["end_"]]);
+
+   when "push_discr" => 
+    [-, disc_list] := stm ;
+    [-, comp_list, -] := record_iobject := top_valstack() ;
+    for d in disc_list loop 
+	emap(d) := contents(comp_list(d)) ;
+    end loop;
+
+--S+ 5.3 If statement
+-- ['if', cslist, elsebody]
+--
+-- The if instruction contains a tuple of condition-body pairs in cslist,
+-- of the form [cond, body], where cond is a boolean valued vexpr, and
+-- body is the sequence of statements to be executed if that condition is
+-- true. If an else part is present, then elsebody is the sequence for 
+-- the else, otherwise elsebody is omitted.
+--
+-- If evaluates each condition in turn and places the body corrisponding
+-- to it at the head of the statement sequence if it is true. Note that
+-- no condition is evaluated unless the preceeding ones are false (as
+-- required by RM 5.3 para. 2). If none of the conditions are true, and
+-- there is an elsebody, then it is executed.
+--
+  when "if" => 
+    [-, cslist, elsebody] := stm;
+    if cslist /= [] then
+      [cond, body_] fromb cslist;
+      exec( [["veval_", cond],
+             ["if_", body_, [["if", cslist, elsebody]] ]] );
+    elseif present(elsebody) then
+      exec(elsebody);
+    end if;
+--
+-- ['if_', truebody, falsebody]
+--
+-- The if_ operation  is used  as part of the evaluation sequence for all
+-- operations  which conditionally modify the  flow of  control. It tests
+-- the  top  value on  VALSTACK  (which must be either true or false) and
+-- executes the appropriate body depending on which value is stacked.
+--
+  when "if_" => 
+    [-, truebody, falsebody] := stm;
+    pop( value );
+    if boolean_true = value then
+      exec (truebody);
+    else
+      exec (falsebody);
+    end if;
+--S+ 5.4 Case statement
+-- ['case', exprv, alist, othersblock]
+--
+-- The alternatives  of  a  case statement  are   represented  as  pairs,
+-- [alts, body] where alts is a set consisting of discrete values, or 
+-- ranges of values (represented as ['range', lbd, ubd]) for the branch, 
+-- and body is the corresponding statement sequence. Exprv is the 
+-- expression whose value determines which alternative will be executed.
+-- Othersblock is the statement sequence that will be executed if none
+-- of the alternatives match exprv.
+--
+  when "case" => 
+    [-, exprv, alist, othersblock] := stm;
+    exec ( [["veval_", exprv],
+            ["case_", alist, othersblock]] );
+ 
+  when "case_" => 
+    [-, alist, othersblock] := stm;
+    pop( value );
+    if exists [alts, body_] in alist | contains(alts, value) then
+      exec(body_);
+    else
+      exec(othersblock);
+    end if;
+--S+ 5.5 Loop statement
+-- ['loop', body]
+-- ['loop', body, label_name]
+--
+-- The loop instruction works by duplicating the body  of the  loop ahead
+-- of itself  each time the loop is executed. Note that any loop which is
+-- the object of  an  exit  instruction must  be labeled.
+--
+  when "loop" => 
+    [-, body_, label_name] := stm;
+    if present(label_name) then
+       emap(label_name) := create_copy(
+                 ["label_ivalue", height(curtask), stsq], om, om);
+    end if;
+    exec(body_ with stm);
+
+-- ['while', whilecond, body]
+-- ['while', whilecond, body, label_name]
+--
+-- The while statement   represents a  while loop and  is similar  to the
+-- loop statement except that a condition is present. Whilecond is a
+-- boolean vexpr, and body is a sequence of statements which is to be
+-- executed as long as the condition is true.
+--
+  when "while" => 
+    [-, whilecond, body_, label_name] := stm;
+    if present(label_name) then
+       emap(label_name) := create_copy(
+                 ["label_ivalue", height(curtask), stsq], om, om);
+    end if;
+    exec( [["veval_", whilecond],
+           ["if_", body_ with stm, [] ]] );
+
+-- ['for', var_name, range_name, range_def, stmt_list, label_name]
+-- ['forrev', var_name, range_name, range_def, stmt_list, label_name]
+--
+-- These statements implement the for statement by converting it into a
+-- loop. An object is created for the control variable, but a new 
+-- scope is not created. The front end ensures that the control variable
+-- name is unique within the current scope, and no task creations or
+-- exception handlers depend on the loop, so a new scope is not
+-- necessary. var_name is the name of the control variable, range_def
+-- is a texpr for the (sub)type of the loop's range, and stmt_list is the
+-- statement sequence of the loop. Label_name is present in the case of 
+-- an exit statement in the loop. The 'for' statement is used for a loop 
+-- in increasing order, and 'forrev' for decreasing order. 
+--
+  when "for", "forrev" => 
+    [for_kind, var_name, range_name, range_def, stmt_list, label_name]
+                                                             := stm;
+    if present(label_name) then
+        emap(label_name) := create_copy(
+                 ["label_ivalue", height(curtask), stsq], om, om);
+    end if;
+    exec( [[ for_kind + "_", var_name, range_name, stmt_list]] );
+    if (range_def ? []) /= [] then
+       exec([["type", range_name, range_def]]);
+    end if;
+
+--
+  when "for_" => 
+    [-, var_name, range_name, stmt_list] := stm;
+    [-, lbd, ubd] := get_itype( range_name );
+    if ubd >= lbd then
+       exec( [["object", var_name, range_name, lbd],
+              ["loop", stmt_list + [["for_end_", var_name, ubd ]] ]
+             ]    );
+    end if;
+--
+when "for_end_" => 
+    [-, var_name, ubd] := stm;  
+    var_value := contents(emap(var_name));
+    if var_value >= ubd then
+       stsq := stsq(2..);
+    else
+       contents(emap(var_name)) := var_value + 1;
+    end if;
+--
+  when "forrev_" => 
+    [-, var_name, range_name, stmt_list] := stm;
+    [-, lbd, ubd] := get_itype( range_name );
+    if ubd >= lbd then
+       exec( [["object", var_name, range_name, ubd],
+              ["loop", stmt_list + [["forrev_end_", var_name, lbd ]] ]
+             ]    );
+    end if;
+--
+when "forrev_end_" => 
+    [-, var_name, lbd] := stm;  
+    var_value := contents(emap(var_name));
+    if var_value <= lbd then
+       stsq := stsq(2..);
+    else
+       contents(emap(var_name)) := var_value - 1;
+    end if;
+--S+ 5.6 Block statement
+-- ['block', body]
+--
+--   The block  instruction is  used to  represent  a  declare,  begin, end
+--   sequence in the   source program.   The body is  terminated by  an end
+--   instruction.
+--
+  when "block" => 
+    [-, body_] := stm;
+    [decls, stmts, hndlr] := body_;
+    push_env;
+    stsq := decls + hndlr + [["activate_"]] +  stmts; -- RM 9.3
+
+-- ['end']
+--
+--   The end instruction  is used at the end of a block body to restore 
+--   the outer environment on terminating the block.
+--
+  when "end" => 
+    exec( [["end_"]] );
+    wait_subtasks;
+ 
+  when "end_" => 
+    pop_env;
+--S+ 5.7 Exit statement
+-- ['exit', loop_name ]
+-- ['exit', loop_name, when_cond]
+--
+-- An  exit  instruction is  used to exit a loop. It is just like a goto 
+-- except that  the statement following the label (the loop statement) 
+-- is skipped before proceeding with execution. loop_name is the name of
+-- a label object, and when_cond (if present) is a vexpr which evaluates
+-- to a boolean value, which determines if the exit is to be performed.
+--
+  when "exit" => 
+    [-, loop_name, when_cond] := stm;
+ 
+    if present(when_cond) then
+      exec( [["veval_", when_cond],
+             ["if_", [["veval_", loop_name], ["exit_"]], [] ]] );
+    else
+      exec( [["veval_", loop_name],
+             ["exit_"] ]);
+    end if;
+--
+  when "exit_" => 
+    pop( label_value );
+    [-, envindex, new_stsq]  := label_value;
+    if height(curtask) > envindex then
+      exec( [["exit__", label_value]] );
+      wait_subtasks;
+    else
+      stsq := new_stsq;
+    end if;
+-- 
+  when "exit__" => 
+    [-, label_value] := stm;
+    pop_env;
+    push( label_value );
+    exec( [["exit_"]] );
+--S+ 5.8 Return statement
+-- ['return', procname, nesting_depth, rexpr]
+--
+-- The return statement  uses  VALSTACK  to rewrite the values of out and
+-- inout parameters. It also deals with the  returned value of a function
+-- or value returning procedure. Procname is the name of the procedure
+-- being returned from. Nesting_depth is the static number of blocks in
+-- which the return is embedded. Rexpr is an expression for the return
+-- value (if any).
+
+  when "return" => 
+    [-, procname, nesting_depth, rexpr] := stm;
+    if absent(rexpr) then
+      exec( [["oeval_", procname],
+             ["return_", nesting_depth, false]] );
+    else
+      exec( [["oeval_", procname],
+             ["veval_", rexpr],
+ 	     ["return_", nesting_depth, true]]);
+    end if;
+    wait_subtasks;
+ 
+  when "return_" => 
+    [-, nesting_depth, valflg] := stm;
+    if valflg then 
+      pop( rval );
+    else
+      rval := om;
+    end if;
+    pop( proc_obj );
+    if nesting_depth /= 0 then  -- return from inner block of procedure
+      exec( [["return__", proc_obj, nesting_depth, rval]] );
+    else                      -- return from outermost scope of procedure
+      [-, -, -, formals_loc, -] := proc_obj;
+      pop_env;
+      bind_exit(i_value(formals_loc), valstack);
+      if valflg then 
+         push( rval ); 
+      end if;
+    end if;
+--
+  when "return__" =>   --  pops stack to get to outermost scope of procedure
+    [-, proc_obj, nesting_depth, rval] := stm;
+    pop_env;
+    push( proc_obj );
+    if present(rval) then
+      push( rval );
+      valflg := true;
+    else
+      valflg := false;
+    end if;
+    exec( [["return_", nesting_depth - 1, valflg]] );
+
+
+-- ['entry_return', entry_name, nesting_depth]
+--
+--  entry return is similar to a return, but used within an accept 
+--  statement
+--
+  when "entry_return" => 
+    [-, entry_name, nesting_depth] := stm;
+      exec( [["oeval_", entry_name],
+             ["entry_return_", nesting_depth]] );
+ 
+  when "entry_return_" => 
+    [-, nesting_depth] := stm;
+    pop( entry_obj );
+    if nesting_depth /= 0 then  -- return from inner block of accept
+       exec( [["entry_return__", entry_obj, nesting_depth]] );
+       wait_subtasks;
+    else 
+       stsq := stsq(#stsq..); -- last statement is 'endrv_'
+    end if;
+--
+  when "entry_return__" =>   --  pops stack to get to outermost scope of accept
+    [-, entry_obj, nesting_depth] := stm;
+    pop_env;
+    push( entry_obj );
+    exec( [["entry_return_", nesting_depth - 1]] );
+--S+ 5.9 Goto statement
+-- ['goto', lname]
+--
+-- Goto works by   restoring the  environment to that  of the  label, and
+-- then   setting  the statement  sequence   to execute  the  appropriate
+-- statements starting  with  the one  which is  labelled. The IVALUE of
+-- the label contains  the information for  both steps. This entry is
+-- established  by  the labdef  statement. which should be  
+-- examined for further details of how gotos are handled. Lname is the
+-- name of the label IOBJECT.
+--
+  when "goto" => 
+    [-, lname] := stm;
+    exec( [["veval_", lname],
+           ["goto_"]] );
+--
+  when "goto_" => 
+    pop( label_value );
+    [-, envindex, new_stsq]  := label_value;
+    if height(curtask) > envindex then
+      exec( [["goto__", label_value]] );
+      wait_subtasks;
+    else
+      stsq := new_stsq;
+    end if;
+-- 
+  when "goto__" => 
+    [-, label_value] := stm;
+    pop_env;
+    push( label_value );
+    exec( [["goto_"]] );
+--T+ Chapter 6. SUBPROGRAMS
+--S+ 6.1 Subprogram declaration
+-- ['procedure', name, formals, body]
+-- ['function', name, formals, body]
+--
+--       This instruction creates an IVALUE, then an IOBJECT, for a 
+--       procedure or a function. In the case
+--       of a procedure whose body has been created using the predef 
+--       pragma, this procedure is really a name for a predefined 
+--       operation and an entry starting ['$predef_op', ....  is returned
+--       instead of a procedure IVALUE.
+--
+--       Formals is a list of triples:
+--
+--          [formalname, pmode, itype] 
+--
+--       where formalname is the name of the formal, pmode is 'in', 
+--       'inout', or 'out', and itype is the type of the formal. Body is 
+--       the declarations, statement list, and exception handler of the
+--       procedure. 
+--
+--       If the body is absent, this represents just a procedure or
+--       function specification, and is not processed by the interpreter.
+--
+      when "procedure", "function" => 
+          [-, name, formals, body_] := stm;
+       if present(body_) then
+          [decls, stmts, hndlr] := body_;
+          if stmts(1).opcode = ("predef_") then 
+
+ -- This is an optimization that recognizes non_generic predefined
+ -- procedures during compiler initialization (i.e. when INIT_ENV
+ -- is called) and instantiations of generic predefined procedures 
+ -- during normal execution, and loads their definitions
+ -- into EMAP with the tag '$predef_op' . The 'call' operation takes
+ -- advantage of this information to avoid an unnecessary scope change.
+
+            [-, op_name, actuals] := stmts(1);
+            if #actuals > #formals then -- type parameters
+               for i in [#formals + 1..#actuals] loop
+                formals with:= [actuals(i), "in", "$type"];
+              end loop;
+            end if;
+            emap(name) := ["$predef_op", op_name, formals];
+
+          else -- normal procedure
+
+            proc_body := decls + hndlr + [["activate_"]] + stmts;
+            emap(name) := create_copy (
+           ["proc_ivalue", curtask, height(curtask), formals, proc_body], om,
+					om);
+
+          end if;
+       end if;
+--S+ 6.4 Subprogram call
+-- ['call', procname, actuals]
+--
+--   The  call  instruction is  used  for procedure  call statements in 
+--   the source  program,  and  is  also  generated during   the  
+--   evaluation of expressions  containing  function calls. In the  
+--   latter cases, the called function will stack  the result on 
+--   VALSTACK. A call statement may also be generated for a  predefined 
+--   operator in a generic, an attribute that has been renamed, or a 
+--   call to predef. In these cases, the call generates an 'veval_'
+--   statement or a 'predef_' statement. They can be distingushed from 
+--   an ordinary procedure call because their entry in EMAP is a tuple
+--   whose first component is '$operator', '''', or '$predef_op'.
+--
+  when "call" => 
+    [-, procname, actuals] := stm;
+    exec( [["oeval_", procname],
+           ["call_", actuals, procname] ]);
+--
+  when "call_" => 
+    [-, actuals, procname] := stm;
+    pop( object );
+
+    if is_proc_iobject(object) then -- normal procedure call
+      [-, -, -, formals_loc, -] := object;
+      elaborate_call(actuals, i_value(formals_loc), 
+         ["call__", object, procname] );
+
+    elseif object.type_mark = "$predef_op" then -- predefined operation
+      [-, op_name, formals] := object;
+      exec( [["predef_", op_name, actuals, formals] ]);
+
+    elseif object.type_mark = "$operator" then  
+      -- Call to function that renames predefined operator.
+      -- Unpack the actuals, which carry type information for subprogram
+      -- calls but not for predefined operators.
+      actuals := [a: [-, atyp, ftyp, a] in actuals]; 
+      [-, op_name] := object;
+      exec( [["veval_", [op_name] + actuals ]]);
+
+    elseif object.type_mark = "'" then     -- renamed attribute
+      exec( [["veval_", object + actuals]] );
+
+    else
+      system_error("call");
+    end if;
+--
+   when "call__" => 
+      [-, object, procname] := stm;
+      [-, task, index, formals, body_] := i_value(object);
+      old_valstack := valstack;
+
+-- STORAGE_ERROR is raised during the execution of a subprogram call 
+-- if storage is not sufficient. [LRM 11.1(8)]
+
+      if height(curtask) > max_envstack_size then
+         exec([["raise", "STORAGE_ERROR", "stack size exceeded"]]);
+      else
+         push_env;
+         emap := envstackt(task)(index)(1);
+         stsq := body_;
+         proc_name := procname; -- for debugging purposes
+         bind_enter(formals, emap, old_valstack);
+      end if;
+
+--
+-- ['predef_', operation, actuals, formals]
+--
+-- A 'predef_' statement is generated whenever a  call is made to 
+-- one of the (predefined)  procedures  in  the  packages TEXT_IO,
+-- CALENDER, etc. Operation determines which of the predefined 
+-- procedures was called. Actuals is a list of expressions which 
+-- yield values for the formal parameters to the procedure denoted 
+-- by operation.
+--
+  when "predef_" =>  
+    [-, operation, actuals, formals] := stm;
+    elaborate_call(actuals, formals, ["predef__", operation]);
+--
+    when "predef__" => 
+      [-, operation] := stm;
+      predef(operation);
+
+-- ['bind', name, oexpr]
+--
+--   Bind is used in the parameter evaluation sequence for out or in out
+--   parameters to find and save the IOBJECT (identity) of the parameter.
+--   Name is the name of a temporary in which the IOBJECT corresponding
+--   to oexpr is saved.
+--
+    when "bind" => 
+      [-, name, oexpr] := stm;
+      exec( [["oeval_", oexpr],
+             ["bind_", name] ]);
+--
+    when "bind_" => 
+      [-, name] := stm;
+      pop( iobject );
+      emap(name) := iobject;
+--T+ Chapter 7. PACKAGES
+--   ['package', package_name, decls]
+--
+--   A package may contain task declarations. These are activated in the
+--   package body, which may come later in the current declarative part.
+--   The tasks declared so far are saved on the stack, and the tasks declared
+--   in the package are attached to the EMAP entry, and retrieved when executing
+--   the package body.
+--
+   when "package" => 
+    [-, package_name, decls] := stm;
+    push(tasks_declared) ;
+    tasks_declared := {} ;
+    exec ( decls with ["package_", package_name] );
+--
+--
+--    ['package_body', package_name, [decls, stmts, hndlr]]
+--
+--    The execution of a package body includes the activation of tasks declared
+--    in the package specification. If no body for the package is supplied,
+--    a dummy body is generated for purposes of task activation. (9.3(5))
+--    The tasks declared in the package specification are retrieved from the
+--    environment, and the tasks declared in the body are added to them; all 
+--    of them are activated after installing the exception handler, as with 
+--    other frames.
+
+  when "package_body" => 
+    [-, package_name, blk] := stm;
+    push(tasks_declared) ;
+    tasks_declared := emap(package_name) ? global_emap(package_name)
+					 ? {};
+    exec( [["package_body__", package_name]] );
+    if blk = [] then                -- dummy package body
+      if nonempty(tasks_declared) then
+         exec( [["activate_"]] );
+      end if;
+    else                            -- real package body
+      [decls, stmts, hndlr] := blk;
+      exec( decls + [["package_body_", stmts, hndlr]]);
+    end if;
+--
+--   After executing the package declaration, save
+--   tasks declared therein, which will be activated in the package body. 
+--
+  when "package_" => 
+    [-, package_name] := stm;
+    emap(package_name) := tasks_declared;
+    pop(tasks_declared) ;
+
+--  Tasks declared in packages depend on some outside master and not on the
+--  package itself. Nevertheless, they are activated after the begin of the
+--  corresponding package body, and an exception during activation can be
+--  handled in the handler of the package. This is modelled by elaborating the
+--  declarations in the enclosing frame to establish the proper dependency, and 
+--  then executing the body of the package as a block without declarations. The 
+--  tasks to be activated are then found in the enclosing frame, and have to be
+--  linked to the current current one in order to be activated.
+
+   when "package_body_" => 
+      [-, stmts, hndlr] := stm ;
+      t := tasks_declared;
+      push_env ;
+      tasks_declared := t ;
+     stsq := hndlr + [["activate_"]] + stmts ;
+
+
+--  At end of execution of package body, restore tasks declared of enclosing 
+--  frame, which was replaced temporarily by those of body.
+
+  when "package_body__" => 
+    pop(tasks_declared) ;
+
+--T+ Chapter 8. VISIBILITY RULES
+--S+ 8.5 Renaming declarations
+-- ['renames', newname, oldnameexpr]
+--
+-- The renames statement appears in the object  program only for the case
+-- of variables (where  it  may  effect  partial evaluation).  The  other
+-- cases of renaming are simply name resolution issues. Newname is the
+-- new name which is to be made equivalent to the iobject to which 
+-- oldnameexpr evalutates.
+--
+  when "renames" => 
+    [-, newname, oldnameexpr] := stm;
+    exec( [["oeval_", oldnameexpr],
+           ["renames_", newname] ]);
+ 
+  when "renames_" => 
+    [-, newname] := stm;
+    pop( oldname );
+    emap(newname) := oldname;
+--T+ Chapter 9. TASKS
+--S+ 9.1 Task specifications and task bodies
+-- ['current_task', name]
+--
+--   Puts name in the current environment and sets it to the current_task
+--   iobject (that is, the one executing the 'current_task' instruction).
+--   This instruction is generated at the top of each task body, to allow,
+--   within the body of task type T (including within task bodies nested
+--   within T), references to the current task object of type T using the type
+--   name T (LRM 9.?).  These references are converted by the front end to
+--   references to a unique internal variable (whose name is supplied to this
+--   instruction) for each task t and which contains t itself as value.
+--
+  when "current_task" => 
+    [-, name] := stm;
+    emap(name) := emap("current_task");
+
+-- ['task_body', type_name, body]
+--
+-- Task_body picks up the body that corresponds to a task type
+-- and stores it in the EMAP entry reserved for it. Task_bodys
+-- are defined separately from the rest of a task type specification
+-- due to difficulties with binding separately compiled specifications
+-- and bodies. The task body statement must appear in the bound AIS code
+-- after the task type declaration and before the end of the first
+-- declaration list in which an object of that type is declared.
+--
+  when "task_body" => 
+    [-, type_name, body_] := stm;
+    exec([["teval_", type_name],
+          ["task_body_", body_]]);
+--
+  when "task_body_" => 
+    [-, body_] := stm;
+    pop( type_desc );
+    [-, -, -, taskbody] := type_desc;
+    emap(taskbody) := body_;
+--S+ 9.3 Task execution - Task activation
+-- ['activate_']
+--
+--   The activate_ statement is placed at the end of delaration lists
+--   by block and proc statements, and called by VEVAL for allocators. It
+--   calls ACTIVATE_TASK to do the activation of any task objects 
+--   declared in the current scope. The names of these tasks are in 
+--   TASKS_DECLARED (but we discard those which have been aborted since
+--   their elaboation). Then the current task is put to sleep, waiting
+--   for all its subtasks to complete their activation.
+--
+  when "activate_" => 
+    if strace >= 5 then 
+       do_dumps(["TASKS_DECLARED"]); 
+    end if;
+
+    tasks_declared := { [taskid, taskbody] in tasks_declared
+                          | taskid notin terminated_tasks   };
+    if nonempty(tasks_declared) then
+       disable;
+         activating_subtasks(curtask) := {};
+          for task in tasks_declared loop
+             activate_task(task);
+         end loop;
+-- If an exception is raised in ACTIVATE_TASK so that no task is
+-- to be activated, we do not give up control
+         if nonempty(activating_subtasks(curtask)) then
+            lesstup(ready_tasks, curtask);
+         end if;
+         tasks_declared := {};
+       enable;
+       schedule;
+    end if;
+
+
+--    ['signal_', parent_task, status]
+--
+--    When a dependant task has completed its activation, it reports to
+--    the parent task, and continue its execution. The special_handler 
+--    used during activation is discarded.
+--
+--    When a dependant task has raised an exception during its activation
+--    it reports to its parent, but raises a TASKING_ERROR exception in
+--    its parent environment, and is immediately terminated.
+--
+  when "signal_" => 
+      [-, parent_task, status] := stm;
+      case status 
+      when "error" => 
+         envstackt(parent_task)(height(parent_task)).stsqt :=
+            [["raise", "TASKING_ERROR", "exception during activation"]];
+         lesstup(ready_tasks, curtask);
+         active_tasks     less:= curtask;
+         check_unserviced_rendezvous(curtask);
+         terminated_tasks with:= curtask;
+         uncreate(curtask);
+         check_master(curtask);
+      when "ok" => 
+         handler := []; 
+      end case;
+      activating_subtasks(parent_task) less:= curtask;
+      if is_empty( activating_subtasks(parent_task) ) then
+         if parent_task notin terminated_tasks then
+            ready_tasks with:= parent_task;
+         end if;
+         activating_subtasks(parent_task) := om;
+      end if;
+      schedule;
+--S+ 9.4 Task dependence - Task termination
+-- ['terminate']
+--
+-- The  terminate statement is the last statement of a task body. It 
+-- terminates the current task.
+--
+  when "terminate" => 
+    exec( [["terminate_"]] );
+    completed_tasks with:= curtask;
+    wait_subtasks;
+ 
+  when "terminate_" => 
+    disable;
+      lesstup(ready_tasks, curtask);
+      active_tasks    less:= curtask;
+      completed_tasks less:= curtask;
+      check_unserviced_rendezvous(curtask); -- (RM 11.5, 11.5(b) )
+      terminated_tasks with:= curtask;
+      uncreate(curtask);
+      check_master(curtask);
+    enable;
+    schedule;
+
+-- ['finish_']
+--
+--   The finish_ statement unconditionally ends execution. It is placed
+--   in  the  statement sequence after the call to a main program, and
+--   issued by a finish check statement when execution can no longer
+--   continue. 
+--
+  when "finish_" => 
+    terminate_execution;
+    return true;
+--
+-- ['finish_check_']
+--
+--   The finish_check_ instruction is executed only by the IDLE task.
+--   The IDLE task is executed only when there are no other ready tasks.
+--   If in addition, there are no delayed tasks, then there is no 
+--   possible way a user task can ever be executed, and we are deadlocked.
+--
+  when "finish_check_" => 
+    disable;
+    if ready_tasks = [idle] and is_empty(delayed_tasks) then
+      to_list("  System deadlock ");
+      dump_tasking_info(errfile);
+      dump_tasking_info(lisfile);
+      exec( [ ["finish_"] ]);
+    end if;
+    enable;
+--S+ 9.5 Entries, entry calls and accept statements
+-- ['ecall', taskexpr, entryexpr, actuals]
+--
+--   The  ecall statement  is used for a call on an  entry (ADA itself does
+--   not distinguish  procedure and entry calls,  but   the  distinction is
+--   made clearly at this level.) Taskexpr evaluates to the name of the
+--   task to be entered, and entryexpr evaluates to the entry. Actuals 
+--   is a list of expressions for the parameters (as in procedure calls).
+--
+  when "ecall" => 
+    [-, taskexpr, entryexpr, actuals] := stm;
+    exec( [["veval_", taskexpr],
+           ["ecall_", actuals] ]);
+    push_entryid(entryexpr);
+ 
+  when "ecall_" => 
+    [-, actuals] := stm;
+    pop( task );
+    pop( index );
+    pop( entry );
+    [tag, taskid] := task;
+    entryid := [entry, index];
+    [-, formals] := emap(entry);
+    elaborate_call(actuals, formals, ["ecall__", entryid, taskid]);
+--
+  when "ecall__" => 
+    [-, entryid, taskid] := stm;
+    disable;
+      if taskid in terminated_tasks + completed_tasks + abnormal_tasks
+      then 
+-- RM 9.5, 11.5
+--
+        enable;
+        exec( [ ["raise", "TASKING_ERROR", "task terminated"] ]);
+--
+      elseif present(entry_map := open_entries(taskid))
+               and nonempty(rendez_bodies := entry_map{entryid}) 
+      then -- immediate rendezvous possible
+
+-- Close the open entries in the called_task, cancel any delay, and take
+-- it out of the set of terminatable tasks.
+
+        open_entries(taskid) := om;
+        delayed_tasks(taskid) := om;
+        terminatable less:= taskid;
+        enable;
+        make_rendezvous(curtask, taskid, entryid, arb rendez_bodies);
+--
+      else --  wait for call to be serviced
+--
+        lesstup(ready_tasks, curtask);
+        waiting_tasks(taskid)(entryid) with:= [curtask, []];
+        schedule;
+        enable;
+--
+      end if;
+--
+--
+-- ['endrv_', entry, enteringtask, orig_prio]
+--
+--   The endrv_ (end  rendezvous) operation is executed on completion of
+--   execution of the block associated with an  entry to terminate the
+--   rendezvous action. It is placed in the statement sequence by
+--   MAKE_RENDEZVOUS (q.v.) . Entry is the entry, enteringtask the 
+--   calling task, and orig_prio the priority of the task accepting the
+--   entry call (which may have been increased in order to run the rendezvous
+--   at the priority required by the RM 9.8).
+--   
+--
+  when "endrv_" => 
+    [-, entry, enteringtask, orig_prio] := stm;
+    if enteringtask in abnormal_tasks then   -- caller might have
+                                             -- been aborted (RM 9.10)
+      abnormal_tasks   less:= enteringtask;
+      terminated_tasks with:= enteringtask;
+      entering        lessf:= enteringtask;
+      check_master(enteringtask);
+      mast := master(enteringtask);
+       while mast in abnormal_tasks loop
+	 if present(entering(mast)) or 
+           (exists t in direct_dependant_tasks(mast)|t in abnormal_tasks)
+	 then
+	    exit;
+	 else
+	    abnormal_tasks   less:= mast;
+	    terminated_tasks with:= mast;
+	    check_master(mast);
+	 end if;
+	 mast := master(mast);
+      end loop;
+    else
+      [-, formals] := emap(entry); 
+      bind_exit(formals, envstackt(enteringtask)(height(enteringtask)).valstackt);
+      disable;
+        ready_tasks with:= enteringtask;
+        entering lessf:= enteringtask;
+      enable;
+    end if;
+    task_prio(curtask) := orig_prio;
+    exec( [ ["end_"] ]);
+    schedule;
+
+-- ['accept', entryname, blk] 
+--
+--   This statement is used only for accepts not part of a selective 
+--   wait statement (q.v.) . Entryname is the name of the entry for 
+--   which a rendezvous is to be accepted, and blk is the list of 
+--   statements to be executed during the rendezvous.
+--
+  when "accept" => 
+    [-, entryname, blk] := stm;
+    exec( [ ["accept_", blk] ]);
+    push_entryid(entryname);
+--
+--
+  when "accept_" => 
+    [-, blk] := stm;
+    pop(index);
+    pop(entry);
+    entryid := [entry, index];
+    rendez_body := [blk, []];
+    disable;
+--
+      e_call fromb waiting_tasks(curtask)(entryid);
+      if present(e_call) then  --  immediate rendezvous
+--
+        [caller, stmsq] := e_call;
+        prepend(stmsq, caller);
+        delayed_tasks(caller) := om;
+        terminatable less:= caller;
+        enable;
+        make_rendezvous(caller, curtask, entryid, rendez_body);
+--
+      else  --  must wait for request
+--
+        open_entries(curtask) := {[entryid, rendez_body]};
+        lesstup(ready_tasks, curtask);
+        enable;
+        schedule;
+      end if;
+--S+ 9.6 Delay statement
+-- ['delay', delayval]
+--
+--   The  delay  statement simply  unreadies the current task and makes the
+--   appropriate  entry in the delay  list. Note that  this processing only
+--   applies to  delay  statements outside a select,  for which it is never
+--   necessary to enter a  non-null  body in the delay list (select handles
+--   the other case itself). Delayval is the duration of the delay.
+--
+  when "delay" => 
+    [-, delayval] := stm;
+    exec( [["veval_", delayval],
+           ["delay_"] ]);
+ 
+  when "delay_" => 
+    pop(delay);
+    delayval := convert_duration(delay);
+    if delayval > 0 then -- a delay <= 0 has no effect (RM 9.6)
+      disable;
+        delayed_tasks(curtask) := [delayval, []];
+        lesstup(ready_tasks, curtask);
+      enable;
+      schedule;
+    end if;
+--S+ 9.7.1 Selective wait
+-- ['selective_wait, select_list, else_body]
+--
+--   Select_list is a set of components of four types:
+--
+--     ['accept', entryname, rvous_block, after_block]
+--
+--     ['delay', delay_expr, delay_block]
+--
+--     ['guard', guard_expr, guarded_statement]
+--
+--     ['terminate']
+--
+--   The 'accept' and 'delay' components have the same form as the 
+--   statements of those names. In the 'guard' component, guarded_statement 
+--   is either an accept, a delay, or a terminate.
+--
+--   The second parameter to selective_wait is the else_body, which is 
+--   omitted if it is absent in the source code.
+--
+ --   The first  step in the processing of selective_wait is to evaluate 
+ --   guards and entryname or delay_expr for accept or delay statements.
+--
+--
+  when "selective_wait" => 
+    [-, select_list, else_body] := stm;
+    exec( [["selective_wait_", #select_list, else_body] ]);
+     for s in select_list loop
+      if s.opcode = "guard" then  -- Evaluate guards first - RM 9.7.1 
+        [-, guard_expr, stmt] := s;
+        exec( [["veval_", guard_expr],
+               ["if_",
+                [["select_true_guard_", stmt]],
+                [["select_false_guard_"]]      ]] );
+      else
+        exec([["select_true_guard_", s]]); -- open alternative if no guard
+      end if;
+    end loop;
+-- 
+  when "select_true_guard_" => 
+    [-, stmt] := stm;
+    case stmt.opcode  
+         -- RM 9.7.1 requires entryname or delay to be 
+         -- evaluated immediatly after guard
+--
+      when "accept" => 
+        [-, entryexpr, r_block, a_block] := stmt;
+        exec( [["select_accept_", r_block, a_block]] );
+        push_entryid(entryexpr);
+--
+      when "delay" => 
+        [-, delay_expr, delay_block] := stmt;
+        exec( [["veval_", delay_expr],
+               ["select_delay_", delay_block]] );
+--
+      when "terminate" => 
+        push( ["terminate"] );
+--
+    end case;
+--
+  when "select_false_guard_" => 
+    push( ["false_guard"] ); -- a place holder on VALSTACK
+--
+  when "select_accept_" => 
+    [-, r_block, a_block] := stm;
+    pop( index );
+    pop( entry );
+    entryid := [entry, index];
+    push( ["accept", entryid, r_block, a_block] );
+--
+  when "select_delay_" => 
+    [-, d_block] := stm;
+    pop( delay );
+    delayval := convert_duration(delay);
+    push( ["delay", delayval, d_block] );
+--
+   when "selective_wait_" => 
+--
+ --  When all the members of select_list have been evaluated
+ --  we decide what action to take
+--
+     [-, num_alts, else_body] := stm;
+     can_terminate := false;
+     delays := {};
+     accepts := {};
+     num_closed := 0;
+      for i in {1..num_alts} loop -- accumulate evaluated alternates
+                                 -- of the various classes from VALSTACK
+       pop( alt );
+       case alt.opcode 
+--
+         when "false_guard" => 
+           num_closed +:= 1;
+--
+         when "terminate" => 
+           can_terminate := true;
+--
+         when "delay" => 
+           [-, delayval, d_block] := alt;
+           delays with:= [delayval, d_block];
+--
+         when "accept" => 
+           [-, entryid, r_block, a_block] := alt;
+           accepts with:= [entryid, [r_block, a_block]];
+--
+       end case;
+     end loop;
+--
+     disable;
+       sched_flag := false;
+       if num_closed = num_alts then -- no open alternates so 
+                                     -- RM 9.7.1 (9, 11) applies
+         enable;
+         if present(else_body) then 
+           stsq := else_body + stsq;
+         else
+           exec( [["raise", "PROGRAM_ERROR", "no open alternative"]] );
+         end if;
+--
+       elseif nonempty(possible_rvous := {ent in 
+					(domain waiting_tasks(curtask))
+				      * (domain accepts)
+			   | waiting_tasks(curtask)(ent) /= []})
+       then -- immediate rendezvous RM 9.7.1 (6)
+--
+	 --entryid := case select_mode 
+                      --when "FAIR" => random (possible_rvous)
+                      --when "ARB"  => arb (possible_rvous)
+                      --otherwise   => om
+                    --end case;
+         entryid := arb (possible_rvous);
+	 [caller, stmsq] fromb waiting_tasks(curtask)(entryid);
+         prepend(stmsq, caller);
+	 rendez_body := arb accepts{entryid};
+         delayed_tasks(caller) := om;
+         terminatable less:= caller;
+         enable;
+         make_rendezvous(caller, curtask, entryid, rendez_body);
+--
+       elseif present(else_body) then -- 9.7.1 (e) applies due to fact
+				      -- that else part precludes presence
+				      -- of delay or terminate
+	 stsq := else_body + stsq;
+--
+       else -- wait until open alternate can be selected
+--
+	 if nonempty(delays) then -- use least delay - RM 9.7.1 note
+	   mindelay := min/{d : [d, b] in delays};
+	   assert exists [d, b] in delays | d = mindelay;
+           if d > 0 then 
+             delayed_tasks(curtask) := [d, b];
+             lesstup(ready_tasks, curtask);
+             open_entries(curtask) := accepts; -- might be empty
+             sched_flag := true;
+           else -- non-positive delay can be chosen without task switch
+             stsq := b + stsq;
+           end if;
+	 elseif can_terminate then
+           lesstup(ready_tasks, curtask);
+           open_entries(curtask) := accepts; -- might be empty
+           terminatable with:= curtask;
+           check_master(curtask);
+           sched_flag := true;
+         else -- only accepts open
+           lesstup(ready_tasks, curtask);
+           open_entries(curtask) := accepts;
+           sched_flag := true;
+	 end if;
+	 enable;
+         if sched_flag then schedule; end if; 
+--
+       end if;
+--S+ 9.7.2 Conditional entry call
+-- ['conditional_entry_call', entry_call, stmsq, else_body]
+--
+--   Entry_call has the same form as an 'ecall' statement (q.v.),
+--   stmsq is a list of statements to be executed after the rendezvous
+--   requested in the entry_call, and else_body is a list of statements
+--   to be executed if that rendezvous can not immediatly take place.
+--
+  when "conditional_entry_call" => 
+    [-, entry_call, stmsq, else_body] := stm;
+
+--   Note that conditional entry call is the same as a timed entry call
+--   with a delay of zero.
+
+    exec( [["timed_entry_call", entry_call, stmsq, 
+		["delay", ["ivalue", fix_fri(0, delay_small)]], 
+             else_body] ] );
+--S+ 9.7.3 Timed entry calls
+-- ['timed_entry_call', entry_call, stmsq1, delay_stmt, stmsq2] 
+--
+--   Entry_call has the same form as an 'ecall' statement (q.v.),
+--   stmsq1 is a list of statements to be executed should the rendezvous
+--   requested take place within the duration specified by the 
+--   delay_stmt, and stmsq2 is a list of statements to be executed if
+--   the rendezvous does not take place.
+--
+when "timed_entry_call" => 
+    [-, entry_call, stmsq1, delay_stmt, stmsq2] := stm;
+    [-, taskexpr, entryexpr, actuals] := entry_call;
+    [-, delay_expr] := delay_stmt;
+    exec( [["veval_", taskexpr],
+           ["timed_entry_call_", actuals, stmsq1, delay_expr, stmsq2]]);
+    push_entryid(entryexpr);
+--
+  when "timed_entry_call_" => 
+    [-, actuals, stmsq1, delay_expr, stmsq2] := stm;
+    pop( task );
+    pop( index );
+    pop( entry );
+    [tag, taskid] := task;
+    entryid := [entry, index];
+    [-, formals] := emap(entry);
+    [pre_stmt, post_stmt] := param_eval(actuals, formals) ;
+    exec (pre_stmt with ["timed_entry_call__", delay_expr, entryid, 
+		taskid, post_stmt + stmsq1, stmsq2]);
+--
+  when "timed_entry_call__" => 
+    [-, delay_expr, entryid, taskid, stmsq1, stmsq2] := stm;
+    exec( [["veval_", delay_expr],
+           ["timed_entry_call___", entryid, taskid, stmsq1, stmsq2]] );
+
+  when "timed_entry_call___" => 
+    [-, entryid, taskid, stmsq1, stmsq2] := stm;
+    pop( delay );
+    delayval := convert_duration(delay);
+    disable;
+
+      if taskid in terminated_tasks + completed_tasks + abnormal_tasks
+      then 
+--
+        enable;
+        exec( [["raise", "TASKING_ERROR", "task terminated"]] );
+--
+      elseif present(entry_map := open_entries(taskid)) 
+             and nonempty(rendez_bodies := entry_map{entryid})
+      then --  immediate rendezvous 
+
+-- Close the open entries in the called_task, cancel any delay, and take
+-- it out of the set of terminatable tasks.
+
+        open_entries(taskid) := om;
+        delayed_tasks(taskid) := om;
+        terminatable less:= taskid;
+        enable;
+        stsq := stmsq1 + stsq;
+        make_rendezvous(curtask, taskid, entryid, arb rendez_bodies);
+--
+      elseif delayval > 0 then --  wait for rendezvous or for delay to time out
+--
+        lesstup(ready_tasks, curtask);
+        waiting_tasks(taskid)(entryid) with:= [curtask, stmsq1];
+        delayed_tasks(curtask) := [delayval, stmsq2];
+        enable;
+        schedule;
+--
+      else -- delayval <= 0 - choose delay alternative immediatly
+           -- (note that timed entry call with zero delay is equivalent
+           -- to conditional entry call )
+        enable; 
+        stsq := stmsq2 + stsq;
+--
+      end if;
+--S+ 9.8 Priorities
+-- ['set_priority']
+--
+-- Produced by the front end as a result of pragma priority.
+-- Any in legitimate positions will be taken care of by the
+-- binder or the front end. Until necessary checks added,
+-- these will be treated as no_ops here.
+--
+  when "set_priority" => 
+    null;
+--S+ 9.10 Abort statement
+-- ['abort', tasknames] 
+--
+--   Tasknames is a list (tuple) of tasks to be aborted.
+--
+  when "abort" => 
+    [-, tasknames] := stm;
+    exec( [ ["abort_", #tasknames] ]);
+     for exprt in tasknames loop
+      exec( [ ["veval_", exprt] ]);
+    end loop;
+ 
+  when "abort_" => 
+    [-, numabort] := stm;
+    sched_flag := false;
+    to_abort := {};
+     for i in [1..numabort] loop   -- must pop all tasks first as we
+      pop( [tag,taskid] );              -- may abort ourself, and thus 
+      to_abort with:= taskid;           -- lose the stack !!
+    end loop;
+     for task in to_abort loop
+      disable;
+      -- following statement IS NOT equivalent to: sched_flag or:= ...
+      sched_flag := kill(task) or sched_flag;        
+      enable;
+    end loop;
+    if sched_flag then schedule; end if; 
+--T+ Chapter 11. EXCEPTIONS
+--S+ 11.1 exception declaration
+    when "exception_decl" =>             
+        null;
+
+--S+ 11.2 Exception handlers
+-- ['exception', whenlist]
+--
+--   The exception statement  is used for exception handlers.
+--   Execution of this statement places the whenlist in the HANDLER
+--   slot in the top of ENVSTACK. The raise  statement provides the  
+--   only  method  of executing the  body  of  an  exception  handler.
+--   The format  of  the whenlist  is a tuple of pairs 
+--   [exnames, handler],  where  exnames  is a  set of  exception 
+--   names and  handler is the corresponding  body.  The name 'others'
+--   is used for the  when others handler fielding any unfielded
+--   exceptions. 
+--
+  when "exception" => 
+    [-, whenlist] := stm;
+    handler := whenlist;
+--S+ 11.3 Raise statement
+-- ['raise', exname, cause, place]
+--
+-- The raise statement raises an  exception and is used both for explicit
+-- raise   statements   which  appear  in   the source   program  and for
+-- exceptions encountered during execution. Exname is the name of the 
+-- exception. Place should be omitted (OM) in raise statements generated 
+-- by the front end. It is used by the interpreter to pass information
+-- about the task name, procedure name, statement (and nesting level 
+-- if the debug switch is on) at which an exception is raised
+-- for use in the case that a message must be issued when there is no 
+-- handler supplied. Cause is the reason for the exception being raised.
+--
+-- Raise searches the HANDLER slot at the top of ENVSTACK for a handler
+-- matching exname. If one is found, it is substituted for the current
+-- statement sequence. Otherwise, the scope stack is popped, and the
+-- search is made again. If we are at the outermost scope, then a message
+-- is issued, and the task is terminated.
+--
+  when "raise" => 
+    [-, exname, cause, place] := stm;
+    if present(exname) then
+      emap("$last_exception") := exname;
+    else
+      exname := emap("$last_exception");
+    end if;
+    cause := cause ? "";
+    place := place ? err_place();
+    if is_simple_name(exname) then
+      terminate_unactivated;
+      if handler /= [] and (exists [exnames, stm_list] in handler |
+                (exname in exnames or "others" in exnames)) then
+        stsq := stm_list;
+        handler := [];  --  RM 11.4.1 (f)
+      else  -- no local handler 
+            --   - use handler in (dynamically) enclosing scope
+
+        -- The information collected here is used in DUMP_TASKING_INFO  
+        -- for debugging purposes explained in that procedure :
+        tasks_with_raised_exc with:= [ curtask, exname, place ];
+        check_current_rendezvous(curtask, exname, cause);
+        stsq := [["raise_", exname, cause, place ]];
+        wait_subtasks;
+      end if;
+    else
+      pop_env;
+      system_error("raise");
+    end if;
+ 
+  when "raise_" => 
+    [-, exname, cause, place] := stm;
+    if height(curtask) <= 1 then
+
+      print("*** Exception " + unqualed_name(exname) +
+              if cause = "static" then
+                 " (detected at compile-time)"
+              elseif cause = "" then
+                 ""
+              else
+                 " (" + cause + ")" end if +
+              " raised in " + place);
+      print("*** No handler, task is terminated");
+      if curtask = maintask then
+        exec( [["finish_"]] );
+      else
+        exec( [["terminate"]]);
+      end if;
+    else
+      pop_env;
+      exec( [["raise", exname, cause, place]] );
+    end if;
+--T+ Chapter 13. IMPLEMENTATION DEPENDENCIES
+--S+ 13.1 Representation clauses
+-- ['access_size_repr', access_type, access_size]
+--
+  when "access_size_repr" => 
+    null;
+--
+-- ['enum_size_repr', type_name, lower_bound, upper_bound, enum_map]
+--
+--   The enumeration representation clause is used to change the internal
+--   integer code values associated with the literal names of the 
+--   enumeration type. 
+--
+  when "enum_size_repr" => 
+    [-, typename, lbd, ubd, enum_map] := stm;
+    emap(typename) := ["enum", lbd, ubd, enum_map];
+--
+-- ['size_repr', typename, size_value]
+--
+  when "size_repr" => 
+    null;
+-- 
+-- ['task_size_repr', task_type, task_size]
+--
+  when "task_size_repr" => 
+    null;
+--S+ 13.8 Machine code insertions
+-- ['code', expr]
+--
+-- This is the Ada code statement.  It is ignored in this implementation.
+--
+  when "code" => 
+    null;
+--
+-- ['pragma', name, arg_list]
+--
+-- The pragma command allows interpreter support of pragmas.
+-- Name is the name of the pragma, and arg_list is a list of
+-- arguments (if any). If no run time support is provided for
+-- a given pragma, then this statement acts as a no-op.
+--
+when "pragma" => 
+    [-, name, arg_list] := stm;
+    case name 
+--
+-- Pragmas supported are:
+--
+--
+--   ['pragma', 'EDUMP']
+--
+--   The edump (environment dump)  provides a standardized dump of 
+--   STSQ, EMAP, and CONTENTS for debugging the Ada interpreter .
+--
+        when "EDUMP" => 
+	  to_list(curtask + " **** environment dump begin ****");
+          do_dumps(["STSQ", "EMAP", "CONTENTS"]);
+	  to_list("**** environment dump end ****");
+--
+--   ['pragma', 'TDUMP']
+-- 
+--   The tdump provides a standardized dump of tables internal to the 
+--   io packages.
+--
+       when "TDUMP" => 
+          predef("dump");
+--
+--   ['pragma', 'TRACE_ON']
+--
+--   Turns on full statement trace of the task within which it is found.
+--
+      when "TRACE_ON" => 
+	  traced_tasks with:= curtask;
+--
+--   ['pragma', 'TRACE_OFF']
+--
+--   Turns off statement trace of the task in which it is found.
+--
+--   Note that neither of these pragmas effect traces controlled
+--   by the /trace parameter of the ADA command.
+--
+      when "TRACE_OFF" => 
+	  traced_tasks less:= curtask;
+--
+--    ['pragma', 'DUMP', table_list]
+--
+--    Dumps the internal interpreter tables named in the table_list.
+--
+      when "DUMP" => 
+          do_dumps(arg_list);
+--
+--    ['pragma', 'TRACE_TABLES_ON', table_list]
+--
+--    Causes the internal interpreter tables named in the table_list
+--    to be dumped after each instruction in the task in which it is
+--    found is executed.
+--
+      when "TRACE_TABLES_ON" => 
+          traced_tables(curtask) := arg_list;
+--
+--    ['pragma', 'TRACE_TABLES_OFF']
+--
+--    Stops any table tracing that may have been selected for the task
+--    in which it is found.
+--
+--    Note that neither of the above two pragmas effect any table tracing
+--    that may have been selected as a result of the /trace parameter of
+--    the ADA command.
+--
+      when "TRACE_TABLES_OFF" => 
+          traced_tables(curtask) := om;
+--
+      when "DEBUG" => 
+          exec( [["pragma", "$DEBUG", #arg_list]] );
+           for arg in arg_list loop
+            exec( [["veval_", arg]] );
+          end loop;
+--
+      when "$DEBUG" => 
+           for i in [1..arg_list] loop
+            pop( value );
+            to_list( str(value) );
+          end loop;               
+--
+    end case;
+--
+-- ['stmt', first_token ]
+--
+--  Updates the current source statement number kept by the interpreter
+--  for use in error messages or trace output. If the relevant compiler
+--  option was not selected, then these statements will not be present
+--  in the AIS code.
+--
+  when "stmt" => 
+    [-, line_number] := stm;
+    emap("line_number") := line_number;
+--
+--
+ -- trap for unknown AIS statements
+--
+  otherwise =>
+     system_error("unknown stmt : " + str(stm) );
+--
+ -- End of main Case statement for statement types
+--
+--
+end case;
+return false;
+end execute_one_stmt;
+end int_main;

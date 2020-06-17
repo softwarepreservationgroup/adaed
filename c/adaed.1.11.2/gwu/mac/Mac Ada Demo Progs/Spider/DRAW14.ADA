@@ -1,0 +1,1 @@
+WITH Spider; Use Spider;PROCEDURE Drawing14 IS BEGIN Reset; Red;Step;Step;Step;Step;Black;Turn;Step;Turn;Turn;Green;Step;Step;Step;Quit;END Drawing14;

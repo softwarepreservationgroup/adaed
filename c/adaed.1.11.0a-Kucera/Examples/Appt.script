@@ -1,0 +1,2 @@
+adacomp -nl Appt -b Appt
+adaexec Appt

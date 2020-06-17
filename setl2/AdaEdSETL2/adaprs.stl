@@ -1,0 +1,1875 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adaprs.stl,v 1.1 90/12/05 16:15:27 ada Exp $
+--
+package body adaprs;
+
+   use globals;
+   use adalex;
+   use adared;
+   use adaio;
+   use parse_tables;
+
+const 
+    opsys_unix := 1, 	-- for UNIX 
+
+    opsys_vms := 2,  	-- for VMS
+
+-- Error recovery parameters:
+
+    min_len := 1,
+    max_look_ahead := 25,
+
+--
+-- Initialize the maps used for error recovery and parsing
+--
+
+    token_value_des	-- error recovery tokens for the lexical classes
+	   := {["identifier", "any"],
+	       ["numeric_literal", "0"],
+	       ["character_literal", "\"?\""],
+	       ["string_literal", "\"\""]},
+
+    preferred_for := {
+		[":=", "="],	-- For := used instead of = in an expr
+		["=", ":="],	-- For = used instead of := in assignmnt
+		[".", ".."],
+		["IS", ":="],
+		[":=", "IS"],
+		["IS", "OF"],
+		["OF", "IS"],
+		["identifier", "PROCEDURE"],
+		["TYPE", "SUBTYPE"],
+		["SUBTYPE", "TYPE"],
+		["DO", "LOOP"],
+		["FOR", "LOOP"],
+		[";", "LOOP"],
+		["numeric_literal", "identifier"]
+				-- For 1.100 instead of 1 .. 100 in index
+			},
+
+    always_preferred := { "identifier", ";", "," },
+
+    beacons :=
+	     { "BEGIN", "DO", "ELSE", "ELSIF", "END", "FOR", "FUNCTION",
+	       "IF", "LOOP", "PACKAGE", "PROCEDURE", "TASK", "THEN",
+	       "WHILE", ";", "RETURN", "IS"},
+	
+    openers :=
+	     { "subprogram_specification", "TASK", "PACKAGE",
+		"(", "IF", "ARRAY",
+	       "SELECT", "ELSIF", "BEGIN",
+	       "CASE", "LOOP", "ELSE", "RECORD" },
+	
+    closer_map := {
+		["subprogram_specification", {1, 2}],
+		["TASK", {1, 2}],
+		["PACKAGE", {1, 2}],
+		["(", {3, 13}],
+		["IF", {4}],
+		["SELECT", {5}],
+		["ELSIF", {4}],
+		["BEGIN", {2}],
+		["CASE", {6, 9, 10}],
+		["LOOP", {7}],
+		["ELSE", {4}],
+		["RECORD", {8}],
+		["ARRAY", {11, 12}]
+				},
+
+    closers := [                
+		[";","END",";","NULL","BEGIN"], 
+		[";", "END"], 
+		[")"], 
+		[";", "IF", "END"], 
+		[";", "SELECT", "END"], 
+		[";", "CASE", "END"], 
+		[";", "LOOP", "END"], 
+		[";", "RECORD", "END"],
+		["IS"],
+		["WHEN", "IS"],
+		["OF"],
+		["identifier", "OF"],
+		[";", ")"]
+			],
+
+    closer_message := {
+	     [["IS"], "\"IS\" inserted to match \"CASE\""],
+	     [["WHEN", "IS"], "\"IS WHEN\" inserted to match \"CASE\""],
+	     [["OF"], "\"OF\" inserted to match \"ARRAY\""],
+	     [["identifier", "OF"], 
+		"\"OF IDENTIFIER\" inserted to match \"ARRAY\""],
+	     [[")"], "\")\" inserted to match \"(\""],
+	     [[";", ")"], "\");\" inserted to match \"(\""],
+	     [[";","END"],
+    		"\"END;\" inserted to match current scope opened"],
+	     [[";","END",";","NULL","BEGIN"],
+    		"statement part missing for unit starting"],
+	     [[";","CASE","END"],
+    		" \"END CASE;\" inserted to match \"CASE\""],
+	     [[";","IF","END"],
+    		" \"END IF;\" inserted to match \"IF\""],
+	     [[";","SELECT","END"],
+		" \"END SELECT;\" inserted to match \"SELECT\""],
+	     [[";","RECORD","END"],
+		" \"END RECORD;\" inserted to match \"RECORD\""],
+	     [[";","LOOP","END"],
+    		" \"END LOOP;\" inserted to match \"LOOP\""]},
+
+    
+error_msgs := { 
+		["compilation", "Bad compilation"],
+		["declarative_part", "Bad declaration"],
+		["{statement}", "Bad statement"],
+		["exception_handler_list", "Bad exception handler"],
+		["{|exception_choice}", "Bad exception choice"],
+		["{;parameter_specification}",
+                 "Bad parameter declaration"],
+		["{generic_parameter_declaration}",
+                 "Bad generic formal"],
+		["{,component_association}",
+                 "Bad component declaration"],
+		["{,index_subtype_definition}",
+                 "Bad index specification"],
+		["{;discriminant_specification}",
+			"Bad discriminant declaration"],
+		["{entry_declaration}", "Bad entry declaration"],
+		["{|choice}", "Bad choice"],
+		["simple_expression", "Bad term"],
+		["term", "Bad factor"],
+		["condition", "Bad condition in if statement"],
+		["{case_statement_alternative}",
+                 "Bad case alternative"],
+		["{OR__select_alternative}",
+                 "Bad select alternative"] 
+					};
+var
+
+    action_tokens,	-- Tuple of action tokens for each state
+			-- (excludes default actions)
+    shift_states;	-- Map from nonterminals to set of states
+			-- to which a shift on the nonterminal is
+			-- defined
+
+
+-- Error recovery maps with tokens represented by their NOSYM values.
+
+var
+    error_msg_syms,
+    check_dist_syms,
+    preferred_for_syms,
+    always_preferred_syms,
+    never_delete_syms,
+    beacon_syms,
+    closer_message_syms,
+    closer_map_syms,
+    closer_syms,
+    opener_syms;
+	
+var
+    prs_stack,		-- Parse stack for LRPARSE
+    sta_stack,		-- State stack for LRPARSE
+    state_stack,	-- copy of STA_STACK for PRSERR
+    error_token,	-- token at which the error is detected
+    tokens,		-- input token sequence
+    toksyms;		-- symbol numbers of tokens
+
+var
+    prevtok,
+    poss_tok,		-- set of possible action tokens for error 
+			-- recovery
+    candidates,		-- the error correction candidates for a trial
+    max_check,		-- maximum progress into forward context by error
+			-- candidate
+    prserr_loc,		-- range of the error 
+    backuptoks,		-- number of tokens backed up in PRSERR
+    closer_toksyms,	-- closer token sequence for scope recovery
+    open_seq,		-- positions of openers in parse stack
+    err_msgs;		-- the error message
+
+
+procedure top(x);
+   return x(#x);
+end top;
+
+procedure find_name(x);
+   if is_token(x) then 
+      return name_list(x(2)) ;
+   else 
+      return name_list(x(1)) ;
+   end if;
+end find_name;
+
+procedure next_token;
+   prevtok frome tokens;
+   if tokens = [] then 
+      tokens := [gettok()];
+   end if;
+end next_token;
+
+procedure nexttok;
+   return tokens(#tokens - 1);
+end nexttok;
+
+procedure curtok;		-- curtok is always at the top of the token seq
+    -- top(tokens)
+    return tokens(#tokens);
+end curtok;
+
+procedure is_token(x);
+    return (x(1) <= eoft_sym);
+end is_token;
+
+procedure is_opener(x);
+    return (x(1) in opener_syms);
+end is_opener;
+
+procedure is_terminal(t);
+    return (t <= eoft_sym);
+end is_terminal;
+
+procedure is_reserved(t);
+    return (t > 0 and t <= reserved_syms);
+end is_reserved;
+
+procedure is_operator(t);
+    return (t > char_sym and t < eoft_sym);
+end is_operator;
+
+procedure sec_check;	-- used in secondary recovery parse check
+    return (check_dist_syms(curtok()(1)) ? min_len);
+end sec_check;
+
+procedure l_span(x);
+    if is_token(x) then
+	return x;
+    else
+	return x(3);
+    end if;
+end l_span;
+
+procedure r_span(x);
+    if is_token(x) then
+	return x;
+    else
+	return x(4);
+    end if;
+end r_span;
+
+procedure quote(tv);
+    if token_value_des(tv) = om then
+	return "\"";
+    else
+	return "";
+    end if;
+end quote;
+
+-- The procedure ACTION finds the shift or reduce action if one is present.
+-- It returns zero if no action is defined.
+-- An action is a state number (shift) or a reduce rule given by 
+-- rule number + NUM_STATES.
+--
+
+procedure action(s, a);
+ 
+  var x, y, z;
+
+	x := (s)*num_inputs + (a);		-- The hash function
+    	z := x mod table_size + 1;
+    	y := action_table1(z);
+	--print("s=",s);
+	--print("a=",a);
+	--print("x=",x);
+	--print("z=",z);
+	--print("y=",y);
+    	if y = 0 then
+	    return default(s);			-- no entry present
+        elseif y < num_actions then		-- single entry
+	    v := action_table2(z);
+	    return if x = v then y else default(s) end if;
+    	else					-- indirect entry
+	    v := y - num_actions;
+	    until z = 0  loop 			-- test for end of chain
+	    	z := action_table2(v +:= 1);
+	        if z = x then 
+                   return action_table1(v); 
+                end if;
+	    end loop;	     
+	    return default(s);
+        end if;
+end action;
+
+
+procedure lrparse;
+--
+-- This is the LALR(1) parser that uses the ACTION_TABLEs and the
+-- DEFAULT map produced by the parser generator to produce the
+-- the source program syntax tree in PRS_STACK.  
+-- The state and input are hashed to obtain an index into ACTION_TABLE1.
+-- The procedure ACTION yields the action for a given state-input pair.
+-- Tokens are pushed onto the stack when a shift action is defined.  
+-- When a handle has been obtained on PRS_STACK, a reduce 
+-- action replaces it with a new parse tree node representing the
+-- nonterminal to which it has been reduced. 
+-- When an accept action is invoked, PRS_STACK will contain a single 
+-- parse tree node, the root of a parse tree for the entire program. This
+-- is processed by procedure REDUCE, which transforms it into an abstract
+-- syntax tree.
+-- Should no shift or reduce action be possible, the error routine
+-- PRSERR is invoked.  The error recovery routine will return
+-- with the input token sequence adjusted in such a way that
+-- parsing can continue beyond the token that was in error.
+-- If the error recovery requires backing up to some previous
+-- state, then PRS_STACK will be adjusted appropriately.  The 
+-- result is that regardless of the syntax errors that may be
+-- present, the syntax tree represented in PRS_STACK is always
+-- valid.  Of course, syntactical error recovery may induce
+-- semantic errors.
+--
+
+
+    tokens := [gettok()];	-- The token list
+    sta_stack	    := [1];     -- The state stack init with start state
+    null_str_index  := get_name("\"\"");
+    prevtok 	    := [string_sym, null_str_index, top(curtok())];
+    prs_stack 	    := [prevtok];
+    ast             := {};
+    pragmas	    := {};
+    spans           := {};
+
+    if cdebug1 >= 9 then
+	to_errfile("**** Warning Only Lexical Analyzer active", "");
+	while curtok()(1) /= eoft_sym loop 
+    	    next_token;
+    	end loop;
+	return;
+    end if;
+
+    cs := top(sta_stack);			-- current state
+    ct := curtok();        			-- current token
+    reductions := [];				-- list of reductions
+    common_pt := 2;
+
+    n := 2;					-- next state index
+
+    while true loop 
+
+	--print("cs=", cs);
+	--print("ct(1)=", ct(1));
+        act := action(cs, ct(1));	-- determine action
+	--print("act", act);
+	if act = 0 then			-- no action defined
+
+	    clock := time;
+
+	    if reductions /= [] then
+	        -- Bug in compiled code
+	        --sta_stack(common_pt .. ) := [];
+                n2 := #sta_stack;
+                for i in [common_pt..n2] loop
+                  sta_stack(i) := om;
+                end loop;
+
+	        for i in [common_pt .. #prs_stack] loop 
+		    sta_stack with:= 
+		        action(sta_stack(i - 1), prs_stack(i)(1));
+	        end loop;
+	    end if;
+
+
+	    if cdebug1 > 0 then
+	    	to_errfile("PARSE ERROR on ", 
+		    [curtok()(1), find_name(curtok()), curtok()(3)]);
+	    end if;
+
+	    prserr;				-- invoke error recovery
+
+	    for errmess in err_msgs loop 
+    	        err_list( [prserr_loc, "*** Error: "	
+							+ errmess] );
+	        errcount +:= 1;
+	    end loop;
+
+	    cs := top(sta_stack);		-- resume with new states
+	    ct := curtok();			-- and current token
+	    reductions := [];
+	    common_pt := #sta_stack + 1;
+
+	    if cdebug1 > 0 then
+		to_errfile("RECOVERED", "");
+		to_errfile("STATE STACK:", sta_stack);
+		to_errfile("PARSE STACK:", [find_name(t) : 
+				t in prs_stack]);
+		to_errfile("TOKENS:", [find_name(tokens(i)) : 
+				i in [#tokens, #tokens - 1 .. 1]]);
+		to_errfile("RESULT: ", err_msgs);
+	    end if;
+ 
+        elseif act <= num_states then            -- shift or accept 
+
+	    -- perform deferred reductions on PRS_STACK
+	    for red in reductions loop 
+		nolh := lhs(red);
+		n    := #prs_stack - rhs(red) + 1;
+
+	        rh := prs_stack(n .. );		-- the right hand side
+
+	        if rh /= [] then
+		    l_tok := l_span(rh(1));
+		    r_tok := r_span(top(rh));
+	        else
+		    l_tok := curtok();
+		    r_tok := prevtok;
+	        end if;
+	
+	   --print("red=", red);
+	   --print("rh=", rh);
+	   --print("l_tok=", l_tok);
+	   --print("r_tok=", r_tok);
+	    -- include reduction on PRS_STACK 
+
+		temp_ast := reduce(red, rh, l_tok, r_tok);
+		if temp_ast = om then
+		    prs_stack(n)(1) := nolh;
+		else
+		    --prs_stack(n .. ) := [[nolh, temp_ast, l_tok, r_tok]];
+            	    n2 := #prs_stack;
+            	    for i in [n..n2] loop
+                       prs_stack(i) := om;
+                    end loop;
+                    prs_stack with:= [nolh, temp_ast, l_tok, r_tok];
+
+
+		end if;
+
+	    end loop;
+
+            sta_stack with:= (cs := act);	-- stack new state
+            prs_stack with:= ct;		-- stack token
+	    next_token;				-- get next token
+            ct := curtok();
+	    reductions := [];
+	    common_pt := #sta_stack + 1;
+
+	    if act = num_states then	-- accept action
+
+		ast_start := prs_stack(2)(2);
+
+	        --lhs := action_table1 :=
+	        --action_table2 := default := nosym := follow := om;
+	        prs_stack := om;
+
+		return(ast_start);
+
+	    end if;
+
+        else					-- reduce action
+
+	    red := act - num_states;
+	    nolh  := lhs(red);
+	    rlength := rhs(red);
+	    n 	:= #sta_stack - rlength + 1;	-- index of rhs
+	    common_pt min:= n;
+	    reductions with:= red;
+
+	    -- replace rhs states with lhs state
+
+	    -- Bug in compiled code
+	    --sta_stack(n .. ) := [cs := action(sta_stack(n-1), nolh)];
+
+            cs := action(sta_stack(n-1), nolh);
+            n2 := #sta_stack;
+            for i in [n..n2] loop
+               sta_stack(i) := om;
+            end loop;
+            sta_stack with:= cs;
+
+
+
+
+        end if;
+
+    end loop;
+ 
+end lrparse;
+    
+
+procedure init_parser;
+
+    ast		:= {};
+    spans	:= {};
+
+    name_map	:= {};
+    name_list	:= [];
+    for y = nosym(x) | y > 0 loop 
+	name_list(y) := x;
+	name_map(x)  := y;
+    end loop;
+
+
+    check_dist := { };
+
+    init_lex;		-- Call INIT_LEX procedure for language dependent
+			-- initializations
+
+    error_msg_syms :=
+    	{[nosym(u) ? 0, v] : [u, v] in error_msgs } ;
+    error_msg_syms(0) ? := "Bad compilation";
+    check_dist_syms :=
+	{[nosym(u) ? 0, v] : [u, v] in check_dist};
+    
+    opener_syms :=
+	{nosym(t) ? 0 : t in openers};
+    
+    closer_syms := [];
+    for x in closers  loop 
+	y := [nosym(u) ? 0 : u in x];
+	closer_syms with:= y;
+    end loop;
+
+    closer_map_syms := { [nosym(u) ? 0, v] : [u, v] in closer_map };
+
+    closer_message_syms := {};
+    for y = closer_message(x)  loop 
+	x_sym := [nosym(t) ? 0 : t in x];
+	closer_message_syms(x_sym) := y;
+    end loop;
+
+    preferred_for_syms := 
+    	{[nosym(x) ? 0, nosym(t) ? 0] : [x,t] in preferred_for};
+
+    always_preferred_syms :=
+	{nosym(x) ? 0 : x in always_preferred};
+
+    beacon_syms :=
+	{nosym(x) ? 0 : x in beacons};
+
+--  Find the action tokens for each state.  An action token is a 
+--  terminal symbol (exclusive of EOFT) for which in the given state
+--  an explicit shift or reduce action is defined (default actions
+--  are excluded).
+--
+--  Also compute the SHIFT_STATES map.  This map defines for each
+--  nonterminal the set of states shifted to on it.  It is used
+--  to eliminate backup trials in error recovery that are bound
+--  to be fruitless.
+
+    shift_states :=  [{} : a in [1 .. num_inputs - 1]];
+    action_tokens := [{} : s in [1 .. num_states - 1]];
+
+    for e = action_table2(i) | e > 0 loop 
+	[s, a] := [e / num_inputs, e mod num_inputs];
+	if a < eoft_sym then
+	    action_tokens(s) with:= a;
+	end if;
+    end loop;
+
+    for a = in_sym(s) loop 
+	shift_states(a) with:= s;
+    end loop;
+
+    --in_sym := om;
+
+--
+-- Parser initialization is complete
+--
+   return;
+ 
+end init_parser;
+ 
+
+
+procedure prserr;
+--
+-- This routine is the syntactic error recovery routine.  It attempts
+-- to correct simple errors and when that is not possible, deletes
+-- tokens possibly to the left and to the right of the error point
+-- until the parse can safely resume.
+-- The process is thus divided naturally into two parts, called 
+-- primary and secondary recovery.  
+-- Both primary and secondary recovery include efforts at "scope
+-- recovery": i.e. the closing of lexically open scopes
+-- through the insertion of one or more closer token sequences.
+-- Examples of such sequences are right parentheses, "END ;", and 
+-- "END IF;".  
+--
+-- Primary recovery consists of the simple corrections - merging tokens, 
+-- substituting a token (including a reserved word that is misspelled as 
+-- an identifier), inserting a token, and deleting a token - along with
+-- scope recovery.
+--
+-- An attempt at simple correction at either the error token or at some 
+-- parse stack element is called a trial. 
+--
+-- For the first trial simple corrections are attempted at
+-- the token at which the error was detected (the error token), with the
+-- parse in the configuration obtaining just after the shifting of the
+-- previous token. In order to back up to the succeeding trial,
+-- the top elements are peeled from the state and parse stacks, with the
+-- top element of the parse stack appended to the front of the input 
+-- token sequence. 
+-- Again attempts at simple correction are made.  
+-- The process is repeated until the determined extent of the backup move
+-- has been accomplished.
+--
+-- The criterion by which the effectiveness of a simple correction 
+-- candidate is measured is the distance it allows the parse to progress
+-- into the forward context (up to MAX_LOOK_AHEAD = 25 tokens).
+-- During the simple correction trials we gather together the CANDIDATES
+-- that allow the parse to progress the furthest, provided that an 
+-- advance of at least MIN_CHECK is accomplished (if not, then
+-- CANDIDATES is empty and simple correction fails).
+-- If CANDIDATES is not empty, it is pruned in accordance with
+-- certain restrictions described below, and then one of them is chosen
+-- as the appropriate correction provided that a condition described 
+-- below is satisfied.
+-- 
+-- No attempt is made to delete or substitute for a nonterminal.
+--
+-- If no simple correction is chosen, scope recovery is attempted
+-- at each point at which simple recovery was attempted. 
+-- The scope recovery procedure determines whether the insertion of a
+-- sequence of scope closers allows the parse to progress MIN_LEN
+-- distance into the forward context. If so, this multiple insertion is
+-- chosen as the correction candidate.
+--
+-- If scope recovery also fails, then secondary recovery is invoked.
+-- The parse is restored to the configuration obtaining upon entrance to 
+-- PRSERR, and each parse stack element is tested - in sequence from the 
+-- top - to see whether parsing can resume from that point, perhaps with 
+-- the inclusion of one or more closer token sequences. 
+-- The extent of the advance required in order for the parse to be 
+-- regarded as successfully resumed depends upon the current token, but 
+-- is at least MIN_LEN.
+--
+-- If secondary recovery at the current token does not succeed, it is 
+-- ignored and the next one obtained and the same check is repeated.  
+-- Eventually, there must be an input for which the parse can 
+-- continue, because the end of file token, EOFT, is compatible with a
+-- state on the state stack.
+-- 
+-- When the recovery point is found, control is returned to the parser.  
+-- It is assured that parsing can continue beyond the error token.
+--
+
+
+
+    nps := #prs_stack;
+    error_token := curtok();
+    max_check := min_len;
+
+    err_msgs := [];
+    candidates := {};
+    closer_toksyms := [];
+
+    state_stack := sta_stack;	     	-- save for scope and secondary
+    oldprevtok  := prevtok;		-- recovery
+    backuptoks := 0;
+
+    get_next(max_look_ahead);		-- ensure this many tokens
+
+    prs_stack_syms := [r(1) : r in prs_stack];
+    toksyms := [t(1) : t in tokens];
+    --print("toksyms1=",toksyms);
+
+
+-- Simple Recovery begins here
+
+-- Determine number of trials to be performed.
+
+    prs_toks := [curtok()(1)];
+    trials := nps;
+
+    for j in [nps, nps - 1 .. 2] loop 
+
+	r := prs_stack_syms(j);
+
+	-- Check whether it is possible to parse past symbol
+	-- and through the error token.
+
+	if forall s in shift_states(r) | prs_block([s], prs_toks)
+	then
+	    trials := nps - j + (if is_terminal(r) then 2 else 1 end if);
+	    exit ;
+	end if;
+
+	prs_toks with:= r;
+
+    end loop;
+
+    if cdebug1 > 0 then
+	to_errfile("trials = " + str (trials), "");
+    end if;
+
+    for trial in [1 .. trials] loop 
+ 
+-- Attempt simple recovery at token backed up to.
+
+	if cdebug1 > 0 then 
+	    to_errfile("Backup Recovery, trial number is: " + str (trial),"");
+	    to_errfile("STATE STACK:", sta_stack);
+	    to_errfile("PARSE STACK:", 
+			[name_list(t) : t in prs_stack_syms]);
+	    to_errfile("TOKENS:", 
+	     [name_list(toksyms(i)) : 
+			i in [#toksyms, #toksyms - 1 .. 1]]);
+	end if;
+
+ 
+--
+-- Form set of candidates for insertion and substitution.
+--
+	get_poss_tok; 
+
+-- Make insertion test.  
+ 
+	try_insertion;
+
+-- Attempt substitution for current token
+ 
+	try_substitution;
+
+-- Try merging tokens.
+
+	if trial = 1 then
+	    try_merge(curtok(), nexttok());
+	elseif trial = 2 then
+	    try_merge(prevtok, curtok());
+	end if;
+
+-- Check whether parsing can resume with the next token.
+
+	try_deletion;
+
+-- Now we peel off the top state and try again.
+-- Put the "token" (terminal or nonterminal) for previous state on 
+-- the list of tokens, and increase backuptoks accordingly.
+
+	s frome sta_stack;
+        r frome prs_stack_syms;
+	toksyms with:= r;
+        --print("toksyms2=",toksyms);
+	backuptoks +:= 1;
+
+    end loop;
+
+
+-- Form misspelling candidates by applying string distance test in cases
+-- where a reserved word to be substituted for an identifier.
+
+    if candidates("subst") /= om then
+
+	spell_substs := 
+	    --{[u, v, w] in candidates("subst") |
+
+	    {[u, v, w] : [u, v, w] in candidates("subst") |
+	        is_reserved(u) and v = id_sym 
+		    and spell(name_list(u), name_list(
+			(if w = 0 then curtok() 
+			 else prs_stack(nps - w + 1) end if)(2)))};
+
+        if #spell_substs > 0 then
+	    candidates("spell_subst") := spell_substs;
+        end if;
+
+    end if;
+
+    if cdebug1 > 0 then
+	to_errfile("MAX_CHECK= " + str (max_check),"");
+	to_errfile("Candidates:", "");
+	for y = candidates(x) loop 
+	    to_errfile(x + ":", "");
+	    uvw_list := {};
+	    for [u, v, w] in y loop
+	       uvw_list with := if x = "delete" or x = "merge" 
+			        then [name_list(u), str(v + 1)]
+			        else [name_list(u), name_list(v), str(w + 1)] 
+			        end if;
+	    end loop;
+	    to_errfile(uvw_list,"");
+	end loop;
+    end if;
+
+-- The correction candidates now include only those that have checked
+-- the furthest distance into the forward context.
+-- Prune this set by applying the preferences and restrictions relevant 
+-- in each case.
+
+-- If a long parse check has been achieved, set threshold to true.
+
+    threshold := max_check >= min_len + 3;
+
+    for y = candidates(x) loop 
+	case x
+	when "delete" =>
+	
+	-- Remove all reserved word deletions if another deletion exists
+	-- and all such deletions if below the threshold
+
+	    if not threshold or 
+	       (exists [t, -] in y | t > reserved_syms) then
+		-- y -:= {[u, v] in y | is_reserved(u)};
+		y -:= {z in y | is_reserved(z(1))};
+	    end if;
+
+	-- Prefer deletion closest to error token.
+
+	    if y /= {} then
+	        bk := min/{t(2) : t in y};
+	        y := {t in y | t(2) = bk};
+	    end if;
+
+	when "insert" =>
+
+	-- Remove all insertions of reserved words if below threshold
+
+	    if not threshold then
+		-- y -:= {[u, v, w] in y | is_reserved(u)};
+		y -:= {t in y | is_reserved(t(1))};
+	    end if;
+
+	-- Prefer insertions closest to error token.
+
+	    if y /= {} then
+	        bk := min/{t(3) : t in y};
+	        y := {t in y | t(3) = bk};
+	    end if;
+
+	-- Apply preferred insertions
+
+	    -- pi := {[u, v, w] in y | u in always_preferred_syms};
+	    pi := {z in y | z(1) in always_preferred_syms};
+	    if pi /= {} then
+		y := pi;
+	    end if;
+
+	when "subst" =>
+
+	-- Apply preferred substitutions
+
+	    -- ps := {[u, v, w] in y | u in preferred_for_syms{v}
+			-- or (u = id_sym and is_reserved(v))};
+	    ps := {[u, v, w] : [u, v, w] in y | u in preferred_for_syms{v}
+			or (u = id_sym and is_reserved(v))};
+
+	    if ps /= {} then
+		y := ps;
+
+	    else
+
+	-- Remove all substitutions involving reserved words if below 
+	-- the threshold.
+
+		if not threshold then
+		    -- y -:= {[u, v, w] in y | 
+				-- is_reserved(u) or is_reserved(v)};
+		    y -:= {[u, v, w] : [u, v, w] in y | 
+				is_reserved(u) or is_reserved(v)};
+		end if;
+
+	    end if;
+
+	-- Prefer substitutions closest to error token.
+
+	    if y /= {} then
+	        bk := min/{t(3) : t in y};
+	        y := {t in y | t(3) = bk};
+	    end if;
+
+
+	when "spell_subst" =>
+
+	-- Prefer closest to error token.
+
+	    bk := min/{t(3) : t in y};
+	    y := {t in y | t(3) = bk};
+
+	when "merge" =>
+
+	    null;
+
+        otherwise => null;
+
+	end case;
+
+	candidates(x) := if y /= {} then y else om end if;
+
+    end loop;
+
+    if cdebug1 > 0 then
+	to_errfile("Candidates after pruning: ", "");
+	for y = candidates(x) loop 
+	    to_errfile(x + ":", "");
+  	    uvw_list := {};
+            for [u, v, w] in y loop
+               uvw_list with := if x = "delete" or x = "merge"
+                                then [name_list(u), str(v + 1)]
+                                else [name_list(u), name_list(v), str(w + 1)]
+                                end if;
+	    end loop;
+            to_errfile(uvw_list,"");
+	end loop;
+    end if;
+
+--
+-- For each mode - merge, spelling, insertion, substitution, deletion -
+-- there are zero or more correction candidates.  
+-- If one or mode has exactly one correction candidate, then one of those
+-- candidates is chosen.
+--
+-- If no mode has a single candidate, then a simple correction candidate 
+-- is only chosen if the long check distance has been achieved 
+-- (MAX_CHECK >= MIN_LEN + 3).
+--
+-- The preference order among the correction modes is : merge, spelling,
+-- insertion, deletion, substitution.
+
+    single_cand_modes := 
+		{[x, y] : y = candidates(x) | #y = 1};
+
+    if #single_cand_modes > 0 then
+
+    -- Apply one final preference rule where there remains a single 
+    -- deletion and a single insertion candidate - prefer deletion of 
+    -- operator or punctuation symbol to insertion of such a symbol.	
+
+	if (x := single_cand_modes("delete")) /= om 
+	    and (y := single_cand_modes("insert")) /= om
+	    and is_operator((arb x)(1))
+	    and is_operator((arb y)(1))
+	then
+	    single_cand_modes("insert") := om;
+	end if;
+	
+	candidates := single_cand_modes;
+
+    end if;
+
+    if #single_cand_modes > 0 
+	or (#candidates > 0 and threshold) then
+
+	make_correction;
+	return;
+
+    end if;
+
+-- Primary recovery has failed if we reach this point.
+-- Reset parse configuration for scope recovery.
+
+    sta_stack := state_stack;
+    -- Bug in compiled code
+    --toksyms(#tokens + 1 .. ) := [];
+
+    n1 := #tokens + 1;
+    n2 := #toksyms;
+    for i in [n1..n2] loop
+       toksyms(i) := om;
+    end loop;
+
+
+    --print("toksyms3=",toksyms);
+    backuptoks := 0;
+
+-- 
+-- End of primary recovery
+-- 
+ 
+-- Try scope recovery for all trials.
+-- Find positions of openers in parse stack.
+
+    open_seq := 
+		[i in [nps, nps - 1 .. 1] | 
+					    is_opener(prs_stack(i))];
+
+    if cdebug1 > 0 then
+		to_errfile("SCOPE OPENERS= ",
+			[[name_list(prs_stack(i)(1)), i]:
+						i in open_seq]);
+    end if;
+
+    for trial in [1 .. trials] loop 
+
+	if cdebug1 > 0 then
+	    to_errfile("Scope Recovery Trial= " + str (trial), "");
+	end if;
+
+	if scope_recovery(#sta_stack, 1) then
+
+	    prserr_loc := [top(prevtok)];
+	    tokens +:= [[t, t, top(prevtok)] : t in closer_toksyms];
+	    return;
+
+	end if;
+	closer_toksyms := [];
+	
+-- Back up for next trial.
+
+        if trial = trials then
+           exit ;
+        end if;
+
+        s frome sta_stack;
+        r frome prs_stack;
+        
+
+        tokens with:= r;
+        toksyms with:= r(1);
+        --print("toksyms4=",toksyms);
+
+        backuptoks +:= 1;
+        prevtok := r_span(top(prs_stack));
+
+    end loop;
+
+-- Scope recovery efforts have failed : restore parse configuration for 
+-- secondary recovery.
+
+    sta_stack := state_stack;
+
+    for i in [1 .. trials - 1] loop 
+
+	j frome toksyms;
+    --print("toksyms5=",toksyms);
+	t frome tokens;
+	prs_stack with:= t;
+
+    end loop;
+
+    prevtok := oldprevtok;
+    backuptoks := 0;
+
+--
+-- Now try secondary recoveries.
+-- First try deleting the error token and some sequence of tokens in the 
+-- forward context - stop at a beacon symbol.
+--
+   
+    for k in [1 .. max_look_ahead - (min_len + 3)] loop 
+
+	t frome toksyms;
+        --print("toksyms6=",toksyms);
+
+	if prs_check(sta_stack, toksyms) >= min_len + 3 then
+
+	    -- delete k tokens
+
+	    rightt := tokens(#tokens - k + 1);
+
+	    -- Bug in compiled code
+	    --tokens(#tokens - k + 1 ..) := [];
+	    n1 := #tokens - k + 1;
+            n2 := #tokens;
+            for i in [n1..n2] loop
+               tokens(i) := om;
+            end loop;
+
+
+	    
+	    err_msgs := ["Unexpected input"];
+	    prserr_loc :=
+		loc_range(top(error_token), top(rightt), 
+						top(error_token));
+	    return;
+   	end if;
+
+	--if t in beacon_syms then
+	   --exit ;
+	--end if;
+	
+    end loop;
+
+--
+-- Try to resume the parse - perhaps with the inclusion of a sequence of
+-- scope closers-  from some state on the state stack.  
+-- After each attempt the current token is deleted.
+-- To succeed on arbitrary input, some state must accept EOFT.
+--
+ 
+ 
+    if cdebug1>0 then 
+	to_errfile("********** SECONDARY RECOVERY **********", ""); 
+    end if;
+
+    nst := #sta_stack;
+
+    while true loop 
+
+	get_next(sec_check() + 2);	-- ensure that there are ample
+	toksyms := [t(1) : t in tokens];
+    --print("toksyms7=",toksyms);
+	
+        if cdebug1>4 then 
+    	    to_errfile("TRYING: "+ find_name(curtok()), ""); 
+    	end if;
+
+	exit_outer_loop := false;
+	for k in [nst, nst - 1 .. 1] loop 
+
+	   outer_k := k;
+-- Try peeling stacks.
+
+	    if prs_check(sta_stack(1 .. k), toksyms) >= 
+						sec_check() + 2  then
+	        err_msgs := [err_message(k)];
+		exit_outer_loop := true;
+	        exit ;
+	    end if;
+ 
+-- Try closer recovery.
+ 
+	    if scope_recovery(k, 1) then
+
+		err_msgs(1) := 
+			err_message(k) + " -- " + err_msgs(1);  
+
+		exit_outer_loop := true;
+	        exit ;
+
+	    end if;
+	    closer_toksyms := [];
+
+        end loop;
+
+        if exit_outer_loop then
+	   exit;
+	end if;
+--
+-- Get next token
+--
+	next_token();
+
+    end loop;
+
+--
+-- At this point we have recovered.
+-- Locate the range of the error.
+--
+
+    if #state_stack > outer_k then
+	stack_delete_syms := [prs_stack(t)(1) :
+			t in [nps, nps - 1 .. outer_k + 1]];
+	leftt := l_span(prs_stack(outer_k + 1));
+	prs_stack(outer_k + 1 .. ) := [];
+	sta_stack(outer_k + 1 .. ) := [];
+    else
+	stack_delete_syms := [];
+	leftt := l_span(error_token);
+    end if;
+    
+
+-- Form error location.
+
+    if stack_delete_syms /= [] and
+	#stack_delete_syms <= #toksyms and
+	stack_delete_syms = 
+	    toksyms(#toksyms - #stack_delete_syms + 1 .. #toksyms) 
+    then
+	prserr_loc := 
+	    loc_range(top(error_token), 
+		      top(tokens(#tokens - #stack_delete_syms + 1)), 
+		      top(error_token));
+    else
+        prserr_loc := 
+	    loc_range(top(leftt), top(prevtok), top(error_token));
+    end if;
+
+-- If the secondary recovery involves a scope recovery, insert the closer
+-- tokens.
+
+    if closer_toksyms /= [] then
+	tokens +:= [[t, t, top(prevtok)] : t in closer_toksyms];
+    end if;
+
+    return;
+
+end prserr;
+
+
+procedure make_correction;
+
+-- Choose a correction by trying the modes in the order: merge, spelling,
+-- insertion, deletion, substitution.  
+-- Generate appropriate error message.
+-- Apply corrective action to token sequence, and restore state and parse
+-- stacks to correction point.
+
+    if (merges := candidates("merge")) /= om then
+
+	[subtk, bk] := arb merges;
+
+	tv := name_list(subtk);
+	ct := (if bk = 0 then curtok() else prevtok end if);
+	nt := (if bk = 0 then nexttok() else curtok() end if);
+	ctv := find_name(ct);
+	ntv := find_name(nt);
+
+	prserr_loc := [top(ct)];
+	err_msgs := ["\"" + tv + "\" expected instead of \""
+				    + ctv + "\" \"" + ntv + "\""];
+
+	for i in [1 .. bk] loop 
+
+	    r frome prs_stack;
+	    tokens with:= r;
+
+	end loop;
+
+	-- Bug in compiled code
+	--tokens(#tokens - 1 ..) := 
+		    --[[subtk, get_name(token_value_des(tv) ? tv), top(ct)]];
+	n1 := #tokens - 1;
+	n2 := #tokens;
+        for i in [n1..n2] loop
+            tokens(i) := om;
+        end loop;
+        tokens with:= [subtk, get_name(token_value_des(tv) ? tv), top(ct)];
+
+	sta_stack +:= state_stack(#sta_stack + 1 ..
+						#state_stack - bk);
+
+	return;
+
+    elseif (spell_substs := candidates("spell_subst")) /= om then
+
+	[subtk, -, bk] := arb spell_substs;
+
+	tv := name_list(subtk);
+
+	ct := (if bk = 0 then curtok() 
+			    else prs_stack(#prs_stack - bk + 1) end if);
+
+	prserr_loc := [top(ct)];
+
+	tokmod := [[subtk, tv, top(ct)]];
+
+	err_msgs := ["Reserved word \"" + name_list(subtk) +
+				"\" misspelled"];
+
+    elseif (inserts := candidates("insert")) /= om then
+
+	[intok, -, bk] := arb inserts;
+
+	tv := name_list(intok);
+
+	curtoken := 
+		    (if bk = 0 then curtok()
+		        else prs_stack(#prs_stack - bk + 1) end if);
+	ct := l_span(curtoken);
+
+	pt := r_span(prs_stack(#prs_stack - bk));
+
+	tokmod := [curtoken, [intok, get_name(token_value_des(tv) 
+						? tv), top(pt)]];
+
+	if #inserts = 1 then
+
+	    if pt(1) = semi_sym then
+		err_msgs := 
+			[quote(tv) + tv + quote(tv) +
+				" expected before this token"];
+		prserr_loc := [top(ct)(1..2)];
+	    else
+		err_msgs := 
+			[quote(tv) + tv + quote(tv) + 
+				" expected after this token"];
+		prserr_loc := [top(pt)];
+	    end if;		
+
+	else
+
+	    err_msgs := [
+		        "{" +/[" " + name_list(x(1)) : x in inserts] 
+				    + " } expected after this token"];
+	    prserr_loc := [top(pt)];
+
+	end if;
+
+    elseif (deletes := candidates("delete")) /= om then
+
+	[-, bk] := arb deletes;
+
+	ct := (if bk = 0 then curtok()
+		   else prs_stack(#prs_stack - bk + 1) end if);
+
+	err_msgs := ["Unexpected \"" + find_name(ct) + "\" ignored"]; 
+	prserr_loc := [top(ct)];
+
+	tokmod := [];
+
+    elseif (substs := candidates("subst")) /= om then
+
+	[subtk, -, bk] := arb substs;
+
+	tv := name_list(subtk);
+
+	ct := (if bk = 0 then curtok ()
+			    else prs_stack(#prs_stack - bk + 1) end if);
+
+	prserr_loc := [top(ct)];
+
+	tokmod := [[subtk, get_name(token_value_des(tv) 
+						? tv), top(ct)]];
+
+	if #substs = 1 then
+
+	    err_msgs := 
+		    [quote(tv) + tv + quote(tv) + 
+			" expected instead of " + "\"" +
+			 			find_name(ct) + "\""];
+
+	else
+
+	    err_msgs := 
+		    ["{" +/[" " + name_list(x(1)) : x in substs]
+				+ " } expected instead of " + "\"" +
+						find_name(ct) + "\""];
+
+	end if;
+
+    end if;
+
+-- Alter token sequence in accordance with corrective action.
+-- Restore state and parse stacks to correction point.
+
+    for i in [1 .. bk] loop 
+	r frome prs_stack;
+	tokens with:= r;
+    end loop;
+
+    -- Bug in compiled code
+    --tokens(#tokens ..) := tokmod;
+    tokens(#tokens) := om;
+    for i in tokmod loop
+       tokens with:= i;
+    end loop;
+
+    sta_stack +:= state_stack(#sta_stack + 1 .. 
+					#state_stack - bk);
+
+    return;
+
+
+end make_correction;
+
+
+procedure try_deletion;
+
+	if cdebug1 > 0 then 
+	    to_errfile("Try_deletions", ""); 
+	end if;
+
+	if top(toksyms) >= eoft_sym 	-- do not delete a nonterminal
+	then	
+	    return;
+	end if;
+
+
+	ct frome toksyms;
+    --print("toksyms8=",toksyms);
+
+	u := prs_check(sta_stack, toksyms) - backuptoks;
+	candidate := [ct, backuptoks];
+
+	if u > max_check then 
+
+	    max_check := u;
+	    candidates := {["delete", {candidate}]};
+
+	elseif u = max_check then
+
+	    if (dc := candidates("delete")) = om then
+		candidates("delete") := {};
+	    end if;
+
+	    candidates("delete") with:= candidate;
+
+	end if;
+
+	toksyms with:= ct;
+    --print("toksyms9=",toksyms);
+
+	if cdebug1 > 4 then
+	    to_errfile("poss deletion", [name_list(ct), str (u)]);
+	end if;
+
+	return;
+
+end try_deletion;
+ 
+
+procedure try_merge(tok1, tok2);
+
+	ct frome toksyms;
+    --print("toksyms10=",toksyms);
+	nt frome toksyms;
+    --print("toksyms11=",toksyms);
+
+	tok1v := find_name(tok1);
+	tok2v := find_name(tok2);
+	new_tok := tok1v + tok2v;
+
+	if (new_tok_sym := name_map(new_tok) ? eoft_sym) < eoft_sym then
+ 
+	    if cdebug1>0 then 
+		to_errfile("Try Merging to " + new_tok, "");
+	    end if;
+
+	    toksyms with:= new_tok_sym;
+    --print("toksyms12=",toksyms);
+
+	    u := prs_check(sta_stack, toksyms) - backuptoks;
+
+	    if cdebug1 > 0 then
+		to_errfile("distance into forward context= " + str (u) ,"");
+	    end if;
+
+	    candidate := [new_tok_sym, backuptoks];
+
+		if u > max_check then
+
+		    max_check := u;
+		    candidates := {["merge", {candidate}]};
+
+		elseif u = max_check then
+
+		    if candidates("merge") = om then
+			candidates("merge") := {};
+		    end if;
+
+		    candidates("merge") with:= candidate;
+
+		end if;
+
+	    j frome toksyms;
+    --print("toksyms13=",toksyms);
+
+	end if;
+
+	toksyms with:= nt;
+    --print("toksyms14=",toksyms);
+	toksyms with:= ct;
+    --print("toksyms15=",toksyms);
+
+	return;
+
+end try_merge;
+ 
+ 
+procedure try_substitution;
+
+    if cdebug1 > 0 then 
+	to_errfile("Try subst", ""); 
+    end if;
+
+    if top(toksyms) >= eoft_sym 	-- do not delete a nonterminal
+    then	
+	return;
+    end if;
+
+    ct := top(toksyms);
+
+    poss_substs := {};
+
+    for t in poss_tok loop 	
+
+
+        --print("sta_stack=",sta_stack); 
+	toksyms(#toksyms) := t;
+	--print("toksyms16=",toksyms);
+	u := prs_check(sta_stack, toksyms) - (backuptoks + 1);
+
+	if cdebug1 > 4 then
+	    poss_substs with:= [u, t];
+	end if;
+
+	candidate := [t, ct, backuptoks];
+
+	if u > max_check then
+
+	    max_check := u;
+	    candidates := {["subst", {candidate}]};
+	    --print("candidates1=", candidates);
+
+	elseif u = max_check then
+
+	    if candidates("subst") = om then
+		candidates("subst") := {};
+	    end if;
+
+	    candidates("subst") with:= candidate;
+	    --print("candidates2=", candidates);
+
+	end if;
+
+
+    end loop;
+    toksyms(#toksyms) := ct;
+    --print("toksyms17=",toksyms);
+
+    if cdebug1 > 4 then
+	to_errfile("poss substs",
+		{[name_list(x), str (y)] : [y, x] in poss_substs});
+    end if;
+
+    return;
+
+end try_substitution;
+
+
+procedure try_insertion;
+
+    if cdebug1 > 0 then 
+	to_errfile("Try Insertion", ""); 
+    end if;
+
+    ct := top(toksyms);
+
+    toksyms with:= 0;
+    --print("toksyms18=",toksyms);
+
+    poss_inserts := {};
+
+    for t in poss_tok loop 
+
+	toksyms(#toksyms) := t;
+    --print("toksyms19=",toksyms);
+	u := prs_check(sta_stack, toksyms) - (backuptoks + 2);
+
+	if cdebug1 > 4 then
+	    poss_inserts with:= [u, t];
+	end if;
+
+	candidate := [t, ct, backuptoks];
+
+	if u > max_check then
+
+	    max_check := u;
+	    candidates := {["insert", {candidate}]};
+
+	elseif u = max_check then
+
+	    if candidates("insert") = om then
+		candidates("insert") := {};
+	    end if;
+
+	    candidates("insert") with:= candidate;
+
+	end if;
+
+    end loop;
+
+    j frome toksyms;
+    --print("toksyms20=",toksyms);
+
+    if cdebug1 > 4 then 
+	to_errfile("poss inserts",
+	    {[name_list(x), str (y)] : [y, x] in poss_inserts});
+    end if;
+
+    return;
+
+end try_insertion;
+
+
+procedure scope_recovery(k, index);
+
+-- The parameter "k" indicates the portion of the state stack with
+-- which the parse check is to be performed. The parameter 
+-- "index" indicates the portion of the parse stack to be used when
+-- looking for the next opener to be closed.
+
+    if not (exists ind in [index .. #open_seq] 
+				| k >= open_seq(ind)) then
+	return false;
+    end if;
+
+    open_loc := open_seq(ind);
+    
+    opener := prs_stack(open_loc)(1);
+    
+    closer_candidates := 
+		{ closer_syms(j) :
+		    j in closer_map_syms(opener)};
+
+    for closer in closer_candidates loop 
+
+	closer_toksyms := 
+		    closer + closer_toksyms;
+
+	prs_distance := 
+		prs_check(sta_stack(1 .. k), toksyms + closer_toksyms);
+	check_dist := #closer_toksyms;
+
+	if prs_distance >= check_dist + min_len + 1 + backuptoks
+	    or 
+	    (prs_distance >= check_dist and scope_recovery(k, ind + 1))
+	then
+
+	    if cdebug1 > 0 then
+		to_errfile("Successful scope recovery", "");
+	        to_errfile("CLOSER_TOKSYMS= ",
+		    [name_list(closer_toksyms(i)) : i in
+		        [#closer_toksyms, #closer_toksyms - 1 .. 1]]);
+	    end if;
+
+	    opl := prs_stack(open_loc);
+	    opl := l_span(opl);
+	    opl := top(opl);
+
+	    err_msgs := [ closer_message_syms(closer) 
+			    + " on line " + str (opl(1)) ] + err_msgs;
+
+	    return true;
+
+	else
+
+	    closer_toksyms(1 .. #closer) := [];
+
+	end if;
+
+    end loop;
+
+    return scope_recovery(k, ind + 1);
+
+end scope_recovery;
+
+
+procedure spell(str1, str2);
+
+-- First check whether str2 an abbreviation of str1.
+
+    if #str1 > #str2 and #str2 > 2 
+	and str1(1 .. #str2) = str2
+    then
+	return true;
+    end if;
+
+-- Calculate distance between two strings. The method used to calculate 
+-- the distance metric is due to Robert B. K. Dewar.
+
+    str1 := "#" + str1 + "#";
+    str2 := "#" + str2 + "#";
+
+    stra := {str1(i .. i + 1) : i in [1 .. #str1 - 1]};
+    strb := {str2(i .. i + 1) : i in [1 .. #str2 - 1]};
+
+    if (float(#(stra * strb)) / float((#stra max #strb))) > 0.40 then
+	return true;
+    else
+	return false;
+    end if;
+
+end spell;
+
+
+procedure prs_check(stateseq,tokseq);
+--
+-- This is just a parser that operates from the token sequence, tokseq.
+-- It returns when an error occurrs, an accept occurrs, or the sequence
+-- of tokens is exhausted.
+--
+
+    clock := time;
+    nsh := 0;				-- number of tokens shifted
+
+    ts := top(tokseq);
+    cs := top(stateseq);
+    
+    while true loop 
+        
+        act := action(cs, ts);
+	--print("act=", act);
+
+	if act = 0 then
+
+	    return nsh;				-- parse error
+
+        elseif act < num_states then		--shift action
+
+	    if (nsh +:= 1) >= #tokseq then	-- up shift count
+		return nsh;			-- gone far enough
+	    end if;
+
+	    ts := tokseq(#tokseq - nsh);	-- next token
+            stateseq with:= (cs := act);	-- update stateseq
+
+	elseif (red:=act - num_states) = 0 then	-- accept action
+
+	    return if ts = eoft_sym then #tokseq else nsh end if;
+
+        else					-- reduce action
+            nolh := lhs(red);
+            n := #stateseq - rhs(red) + 1;
+            n1 := n - 1;
+	    --print("red=", red);
+	    --print("n1=", n1);
+	    --print("nolh=", nolh);
+	    --print("stateseq=", stateseq);
+        				-- replace rhs states with lhs
+	    -- Bug in compiled code
+            --stateseq(n..) := [cs := action(stateseq(n1), nolh)];
+	    cs := action(stateseq(n1), nolh);
+	    --print("stateseq-before=", stateseq);
+	    --print("n=", n);
+	    --print("cs=", cs);
+            --stateseq(n..) := [cs];
+	    n2 := #stateseq;
+	    for i in [n..n2] loop
+	       stateseq(i) := om;
+	    end loop;
+            stateseq with:= cs;
+	    --print("stateseq-after=", stateseq);
+
+        end if;
+    end loop;
+
+end prs_check;
+
+
+procedure prs_block(states,toks);
+--
+-- This parse checker returns true if the parse blocks and false
+-- if it does not or if it cannot be determined that it will block.
+-- The sequence of states need not be complete, so it is possible
+-- for a reduction to use up all the states.  This makes the goto
+-- undetermined.  In such a case the FOLLOW set for the left hand
+-- side is used.  If the next token is not in the follow set, then
+-- surely the parse must block eventually, but if it is not,
+-- we have to conclude that not blocking is possible.
+-- The value returned is the predicate "the parse must
+-- block if the state stack contains states as a suffix and the
+-- token sequence contains toks as a prefix".
+--
+
+    ts frome toks;
+    cs := top(states);
+    
+    while true loop 
+        
+        act := action(cs, ts);
+
+	if act = 0 then
+
+	    return true;			-- parse error
+
+        elseif act < num_states then		--shift action
+
+	    if toks = [] then 
+		return false; 
+	    end if;
+
+	    ts frome toks;			-- next token
+            states with:= (cs := act);		-- update stateseq
+
+	elseif (red:=act - num_states) = 0 then	-- accept action
+
+	    return false;
+
+        else					-- reduce action
+            nolh := lhs(red);
+            n := #states - rhs(red) + 1;
+	    if n <= 1 then 
+		return is_terminal(ts) and ts notin follow(nolh);
+	    end if;
+        				-- replace rhs states with lhs
+            states(n .. ) := [cs := action(states(n - 1), nolh)];
+
+        end if;
+    end loop;
+
+end prs_block;
+
+
+procedure err_message(k);
+
+-- Form error message for secondary recovery.
+-- The parameter "k" indicates the point in the parse and state stacks at
+-- which the recovery is being made.
+
+    if (err_mess := error_msg_syms(prs_stack(k)(1))) = om
+    then
+	act := action(sta_stack(k), curtok()(1));
+	if act > num_states then		-- reduce action
+	    nolh := lhs(act - num_states);
+	    return (error_msg_syms(nolh) ? "Unexpected input");
+	else
+	    return ("Unexpected input");
+	end if;
+    else
+        return err_mess;
+    end if;
+
+end err_message;
+
+
+procedure get_next(k);
+--
+-- This procedure ensures that tokens contains at least k tokens.
+-- 
+
+    m := (#tokens - 1) min k;
+
+    for i in [1 .. k - m] loop 
+        tokens := [gettok()] + tokens;
+    end loop;
+
+    return;
+
+end get_next;
+
+procedure loc_range(l1,l2,l3);		
+
+-- Form error location for secondary recovery. Location may assume three
+-- components : the left and right spans of the error, as well as the 
+-- error token.
+
+    if l2(1)<l1(1) or (l2(1) = l1(1) and (l2(3)<l1(2))) then
+	return [l1,l3];
+    elseif l3(1) < l1(1) or l3(1) > l2(1) 
+		or (l3(1)=l1(1) and l3(2) <= l1(2)) 
+		or (l3(1)=l2(1) and l3(3) >= l2(3)) then
+	return [l1,l2];		-- l3 not in range so don"t try to point
+    else
+	return [l1,l2,l3];
+    end if;
+
+end loc_range;
+ 
+procedure get_poss_tok;
+--
+-- Get the tokens that are acceptable to the top state on the stack.
+-- 
+
+    ss := top(sta_stack);
+    temp_sta_stack := sta_stack;
+    act_sta := [];
+
+    while (dr := default(ss)) /= 0  loop 
+
+	act_sta with:= ss;
+	red := dr - num_states;
+	nolh := lhs(red);
+	n := #temp_sta_stack - rhs(red) + 1;
+
+	-- Bug in compiled code
+	--temp_sta_stack(n ..) := [action(temp_sta_stack(n - 1),nolh)];
+        n2 := #temp_sta_stack;
+        for i in [n..n2] loop
+            temp_sta_stack(i) := om;
+        end loop;
+        temp_sta_stack with:= action(temp_sta_stack(n - 1),nolh);
+
+
+	ss := top(temp_sta_stack);
+
+    end loop;
+
+    act_sta with:= ss;
+    poss_tok := +/{action_tokens(s) : s in act_sta};
+
+    if cdebug1 > 4 then 
+	to_errfile("Poss_Toks", {name_list(x) : x in poss_tok});
+    end if;
+ 
+end get_poss_tok;
+
+end adaprs;

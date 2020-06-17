@@ -1,0 +1,1 @@
+WITH Spider; USE Spider;WITH Left;PROCEDURE Drawing18 ISBEGIN                   -- Begin the drawingReset;Turn;Turn;Step;Step;Turn;Red; Step;Step;Step;Left;Step;Blue;Step;Step;Step;Quit;END Drawing18;

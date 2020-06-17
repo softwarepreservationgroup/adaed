@@ -1,0 +1,4 @@
+echo "This program will produce an error during compilation"
+echo "Don't quite understand it but it appears to deal with generics"
+echo "Compiling"
+adacomp -vnl test2 test2

@@ -1,0 +1,77 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adaprs_.stl,v 1.1 90/12/05 16:15:30 ada Exp $
+--
+-- Copyright 1990. Ada Project, Courant Institute, New York University
+
+package adaprs;
+        ------------------------------------------
+        --                                       -
+        --           A D A   -   P R S 		 -
+        --                                       -
+        --                                       -
+	--					 -
+        --              Ada Project              -
+        --           Courant Institute           -
+        --          New York University          -
+        --           251 Mercer Street           -
+        --        New York, New York 10012       -
+        --                                       -
+	--	    (C) COPYRIGHT 1990		 -
+	--					 -
+        ------------------------------------------
+ 
+-- This package contains the procedure LRPARSE which performs the LALR(1)
+-- parsing. It uses the error recovery procedure PRSERR.
+--
+--
+   procedure lrparse;
+   procedure init_parser;
+
+--			LRPARSE
+--
+-- The parser is an LALR(1) parser driven by the tables produced by an
+-- LALR parser generator.  These tables are assumed to be present as a
+-- SETL formatted text file symbolically named "TABFILE".  The parser 
+-- invokes the procedure Gettok to obtain the next token from the source
+-- program input file.
+--
+-- It maintains a state stack, STA_STACK, and a developing abstract 
+-- syntax tree(AST), PRS_STACK.
+--
+-- Each token is represented as a tuple:
+--
+--		[TOK_NUM, TOK_INDEX, TOK_LOC]
+--
+-- where TOK_NUM is the NOSYM number for the token (i.e. a code number
+-- describing the type of the token, each reserved word and delimiter 
+-- having its own number), TOK_INDEX is the unique number for this
+-- token based on the NAME_LIST tuple, and TOK_LOC is the location of 
+-- the token in the form of the tuple [LINENUM, COLNO1, COLNO2].
+-- Here LINENUM is the line number,  COLNO1 is the starting column 
+-- location and COLNO2 is the ending column location.
+-- The NAME_LIST contains the actual token value.  
+--
+-- Each rule is represented by a tuple containing the left hand side
+-- symbol number, the rule number, the rule right hand side (or reduced
+-- right hand side), and the left- and right-most tokens spanned by
+-- the rule:
+--
+--	    [RULE_NUM, RIGHT_HAND_SIDE, LEFT_TOKEN, RIGHT_TOKEN]
+--
+-- If the rule has an empty right hand side, then the current token
+-- and the previous token are used to mark the left and right spans, 
+-- respectively, of the rule.
+--
+--		   [RULE_NUM, [], CURTOK, PREVTOK]
+--
+-- When a rule is reduced, a user defined REDUCE routine may be invoked
+-- with the rule in the above described format passed as an argument.
+-- The REDUCE procedure returns a value which can represent an abstract
+-- syntax tree or semantic information.  This value takes the place of
+-- the right hand side of the rule as it is placed on the PRS_STACK.
+--
+-- Error recovery is handled by the routine PRSERR.
+--
+
+end adaprs;
+

@@ -1,0 +1,85 @@
+
+-------- SIMTEL20 Ada Software Repository Prologue ------------
+--                                                           -*
+-- Unit name    : UNPAGE
+-- Version      : 1.0
+-- Author       : Mitre Corp.
+-- DDN Address  : wis_ada at mitre
+-- Copyright    :
+-- Date created : 21 JAN 85
+-- Release date : 29 JAN 85
+-- Last update  : 21 JAN 85
+-- Machine/System Compiled/Run on : Intellimac 7000M
+--                                  UNIX
+--                                  Telesoft unvalidated
+--                                                           -*
+---------------------------------------------------------------
+--                                                           -*
+-- Keywords     :  Table builder, Text formatter
+--
+----------------:
+--
+-- Abstract     :  
+--      UNPAGE is a simple little program which complements the
+-- UNIX page command.  The UNIX page command can be used to combine
+-- several source files, interspersing file headers of the form:
+--
+--                    ::::::::::
+--                    FILENAME
+--                    ::::::::::
+--
+--	UNPAGE reads such a file breaking the subfiles into separate
+-- files as indicated by the filename headers.  UNPAGE has been
+-- enhanced to also recognize file headers which have the format of
+-- an Ada comment:
+--
+--                    --::::::::::
+--                    --FILENAME
+--                    --::::::::::
+----------------:  
+--                                                           -*
+------------------ Revision history ---------------------------
+--                                                           -*
+-- DATE         VERSION	AUTHOR           HISTORY
+-- 12/15/84	1.0	Mitre Corp 	 Initial Release
+-- 01/21/85     1.0     Mitre Corp       Add recognition of
+--                                       --:::::::::::
+--                                                           -*
+------------------ Distribution and Copyright -----------------
+--                                                           -*
+-- This prologue must be included in all copies of this software.
+--
+-- This software is released to the Public Domain (note:
+--   software released to the Public Domain is not subject
+--   to copyright protection).
+--
+-- Restrictions on use or distribution:  Although there are
+--      no current plans to provide maintenance for UNPAGE,
+--      we would appreciate your reporting problems and
+--      experiences to:
+--              
+--                wis_ada at mitre (net address)
+--
+--      or call at:
+--
+--                (703)  883-7697
+--                                                           -*
+------------------ Disclaimer ---------------------------------
+--                                                           -*
+-- This software and its documentation are provided "AS IS" and
+-- without any expressed or implied warranties whatsoever.
+-- No warranties as to performance, merchantability, or fitness
+-- for a particular purpose exist.
+--
+-- Because of the diversity of conditions and hardware under
+-- which this software may be used, no warranty of fitness for
+-- a particular purpose is offered.  The user is advised to
+-- test the software thoroughly before relying on it.  The user
+-- must assume the entire risk and liability of using this
+-- software.
+--
+-- In no event shall any person or organization of people be
+-- held responsible for any direct, indirect, consequential
+-- or inconsequential damages or lost profits.
+--                                                           -*
+-------------------END-PROLOGUE--------------------------------

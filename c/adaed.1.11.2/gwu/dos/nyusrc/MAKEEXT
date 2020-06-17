@@ -1,0 +1,144 @@
+0a.o : hdr.h vars.h dbxp.h dclmapp.h arithp.h miscp.h smiscp.h setp.h chapp.h 
+0b.o : hdr.h vars.h dbxp.h errmsgp.h dclmapp.h miscp.h smiscp.h chapp.h 
+10.o : hdr.h libhdr.h vars.h ifile.h chapp.h setp.h smiscp.h miscp.h libp.h libwp.h dclmapp.h dbxp.h errmsgp.h 
+11.o : hdr.h vars.h smiscp.h miscp.h setp.h errmsgp.h chapp.h 
+12a.o : hdr.h vars.h libhdr.h attr.h unitsp.h errmsgp.h miscp.h smiscp.h setp.h libp.h dclmapp.h nodesp.h chapp.h 
+12b.o : hdr.h vars.h libp.h librp.h miscp.h smiscp.h dclmapp.h sspansp.h errmsgp.h nodesp.h setp.h chapp.h 
+12c.o : hdr.h vars.h attr.h dbxp.h dclmapp.h miscp.h smiscp.h setp.h nodesp.h errmsgp.h chapp.h 
+13.o : hdr.h vars.h attr.h setp.h dclmapp.h arithp.h errmsgp.h miscp.h smiscp.h chapp.h 
+14.o : hdr.h vars.h attr.h errmsgp.h chapp.h 
+2.o : hdr.h vars.h libhdr.h dclmapp.h libp.h errmsgp.h miscp.h smiscp.h setp.h chapp.h 
+3a.o : 3.h attr.h arithp.h miscp.h smiscp.h dclmapp.h nodesp.h errmsgp.h evalp.h setp.h chapp.h 
+3b.o : 3.h attr.h setp.h dclmapp.h errmsgp.h evalp.h nodesp.h miscp.h smiscp.h chapp.h 
+4a.o : 4.h attr.h setp.h evalp.h errmsgp.h dclmapp.h sspansp.h nodesp.h miscp.h smiscp.h utilp.h chapp.h 
+4b.o : 4.h dbxp.h setp.h arithp.h nodesp.h errmsgp.h evalp.h miscp.h smiscp.h chapp.h 
+4c.o : 4.h attr.h setp.h libp.h miscp.h smiscp.h errmsgp.h nodesp.h dclmapp.h evalp.h chapp.h 
+5.o : attr.h hdr.h vars.h setp.h dclmapp.h miscp.h errmsgp.h dbxp.h evalp.h nodesp.h smiscp.h chapp.h 
+6.o : hdr.h libhdr.h vars.h setp.h dclmapp.h errmsgp.h miscp.h smiscp.h nodesp.h utilp.h chapp.h libp.h 
+7.o : hdr.h libhdr.h vars.h setp.h errmsgp.h dclmapp.h libp.h miscp.h unitsp.h nodesp.h smiscp.h chapp.h 
+8.o : hdr.h vars.h attr.h dclmapp.h errmsgp.h sspansp.h nodesp.h setp.h miscp.h smiscp.h chapp.h 
+9.o : hdr.h vars.h setp.h errmsgp.h miscp.h smiscp.h nodesp.h dclmapp.h chapp.h 
+action.o : hdr.h ada.h miscp.h actionp.h 
+acttoks.o : config.h 
+adafront.o : hdr.h ada.h ifile.h miscp.h libfp.h actionp.h adaredp.h prsutilp.h prserrp.h adalexp.h adaprsp.h vars.h libhdr.h libp.h librp.h libwp.h setp.h dbxp.h arithp.h smiscp.h chapp.h dclmapp.h sspansp.h 
+adalex.o : hdr.h adalex.h miscp.h errsp.h adalexp.h 
+adared.o : hdr.h vars.h ada.h adared.h nodesp.h smiscp.h setp.h adalexp.h reducep.h ppredefp.h pspansp.h prsutilp.h errsp.h adaredp.h miscp.h 
+aggr.o : hdr.h vars.h gvars.h attr.h miscp.h setp.h gutilp.h gnodesp.h gmiscp.h smiscp.h initobjp.h expandp.h aggrp.h 
+arith.o : config.h miscp.h arithp.h 
+axqr.o : config.h ifile.h segment.h slot.h stdlib.h libfp.h miscp.h axqrp.h 
+axqw.o : hdr.h vars.h segment.h gvars.h slot.h ifile.h setp.h libfp.h miscp.h segmentp.h axqwp.h 
+blib.o : hdr.h libhdr.h vars.h segment.h gvars.h ops.h type.h ifile.h axqrp.h genp.h segmentp.h ginterp.h setp.h bmainp.h gutilp.h dclmapp.h libp.h libfp.h librp.h glibp.h miscp.h gmiscp.h smiscp.h gnodesp.h blibp.h 
+bmain.o : hdr.h vars.h gvars.h libhdr.h segment.h ifile.h slot.h arithp.h dclmapp.h readp.h dbxp.h initp.h blibp.h libp.h glibp.h libfp.h librp.h libwp.h g0ap.h setp.h miscp.h gmiscp.h bmainp.h 
+
+
+dbg.o : hdr.h vars.h segment.h gvars.h type.h dbgp.h 
+dbx.o : hdr.h libhdr.h vars.h ifile.h setp.h arithp.h sspansp.h chapp.h librp.h miscp.h smiscp.h dbxp.h 
+dclmap.o : hdr.h vars.h miscp.h dclmapp.h 
+debug.o : hdr.h ada.h adalexp.h reducep.h pspansp.h 
+decl.o : hdr.h vars.h gvars.h ops.h setp.h maincasp.h miscp.h smiscp.h segment.h genp.h typep.h statp.h segmentp.h exprp.h gmiscp.h gutilp.h axqrp.h declp.h 
+errmsg.o : hdr.h ada.h hdr.h vars.h miscp.h chapp.h smiscp.h sspansp.h errmsgp.h 
+errs.o : hdr.h ada.h vars.h ifile.h libfp.h pspansp.h adalexp.h errsp.h 
+eval.o : hdr.h vars.h attr.h arithp.h setp.h errmsgp.h nodesp.h machinep.h sspansp.h chapp.h miscp.h smiscp.h evalp.h 
+expand.o : hdr.h libhdr.h vars.h gvars.h attr.h slot.h segment.h setp.h langp.h initp.h initobjp.h dbxp.h miscp.h utilp.h glibp.h readp.h libp.h arithp.h librp.h gnodesp.h gmiscp.h gutilp.h aggrp.h chapp.h smiscp.h gmainp.h expandp.h 
+expand2.o : hdr.h libhdr.h vars.h gvars.h attr.h gmainp.h setp.h miscp.h gnodesp.h gutilp.h gmiscp.h initobjp.h arithp.h chapp.h smiscp.h expandp.h 
+expr.o : hdr.h vars.h segment.h gvars.h attr.h ops.h type.h namp.h segmentp.h genp.h miscp.h maincasp.h setp.h typep.h gutilp.h arithp.h gmiscp.h smiscp.h chapp.h axqrp.h exprp.h 
+farith.o : config.h int.h ivars.h intbp.h miscp.h farithp.h 
+follow.o : followp.h 
+g0a.o : hdr.h vars.h gvars.h gutilp.h dbxp.h setp.h arithp.h miscp.h smiscp.h g0ap.h 
+gen.o : hdr.h vars.h gvars.h ops.h segment.h slot.h attr.h genop.h opdescp.h segmentp.h gpredefp.h peepp.h setp.h miscp.h gmiscp.h smiscp.h genp.h 
+ginter.o : hdr.h libhdr.h vars.h segment.h gvars.h ops.h type.h ifile.h setp.h libp.h miscp.h bmainp.h ginterp.h 
+glib.o : hdr.h libhdr.h vars.h segment.h gvars.h ops.h type.h ifile.h segmentp.h gutilp.h setp.h axqrp.h libp.h libfp.h miscp.h glibp.h 
+gmain.o : hdr.h vars.h gvars.h libhdr.h segment.h ifile.h dbxp.h packp.h g0ap.h dclmapp.h arithp.h axqrp.h axqwp.h genp.h segmentp.h expandp.h procp.h libp.h libfp.h librp.h libwp.h readp.h setp.h initp.h glibp.h gutilp.h miscp.h gmiscp.h gmainp.h 
+gmisc.o : hdr.h vars.h segment.h gvars.h ops.h slot.h dbxp.h exprp.h setp.h genp.h gmainp.h segmentp.h arithp.h libp.h gutilp.h initp.h miscp.h smiscp.h gmiscp.h 
+gnodes.o : hdr.h vars.h gvars.h chapp.h gmiscp.h dbxp.h setp.h miscp.h smiscp.h chapp.h gutilp.h gnodesp.h 
+gpredef.o : config.h miscp.h gpredefp.h 
+gutil.o : hdr.h vars.h segment.h gvars.h setp.h segmentp.h dbxp.h miscp.h gmiscp.h smiscp.h gutilp.h 
+
+ilist.o : config.h int.h ivars.h intap.h opnamep.h ilistp.h 
+imain.o : config.h ivars.h slot.h ifile.h intap.h loadp.h miscp.h libfp.h 
+imisc.o : ipredef.h time.h imiscp.h 
+init.o : hdr.h vars.h gvars.h libhdr.h segment.h slot.h ifile.h readp.h setp.h genp.h miscp.h smiscp.h arithp.h axqrp.h initp.h 
+initobj.o : hdr.h vars.h gvars.h attr.h setp.h gutilp.h gmiscp.h smiscp.h gnodesp.h initobjp.h 
+inta.o : config.h int.h ivars.h farithp.h predefp.h machinep.h taskingp.h imiscp.h intbp.h intcp.h intap.h 
+intb.o : config.h int.h ivars.h machinep.h farithp.h taskingp.h predefp.h intcp.h intbp.h 
+intc.o : config.h int.h ivars.h machinep.h farithp.h intap.h intbp.h intcp.h 
+ipar.o : ipar.h int.h iparp.h 
+
+lang.o : hdr.h libhdr.h vars.h gvars.h attr.h setp.h gutilp.h miscp.h gmiscp.h gmainp.h langp.h 
+lib.o : hdr.h vars.h libhdr.h ifile.h dbxp.h miscp.h smiscp.h setp.h libfp.h librp.h libp.h 
+libf.o : config.h ifile.h miscp.h libfp.h 
+libr.o : hdr.h vars.h libhdr.h ifile.h dbxp.h chapp.h arithp.h dclmapp.h miscp.h smiscp.h setp.h libfp.h libp.h librp.h 
+libw.o : hdr.h vars.h libhdr.h ifile.h setp.h dbxp.h miscp.h smiscp.h chapp.h libp.h libfp.h libwp.h 
+load.o : config.h int.h segment.h slot.h ivars.h ifile.h miscp.h libfp.h axqrp.h loadp.h 
+lookup.o : lookupp.h 
+machine.o : config.h machinep.h 
+maincase.o : hdr.h vars.h gvars.h ops.h segment.h dbxp.h namp.h procp.h exprp.h setp.h genp.h statp.h miscp.h gmiscp.h smiscp.h segmentp.h declp.h typep.h packp.h gutilp.h axqrp.h sepp.h maincasp.h 
+makecorr.o : hdr.h ada.h adalexp.h pspansp.h prsutilp.h errsp.h lookupp.h recoverp.h makecorp.h 
+misc.o : config.h time.h ifile.h miscp.h 
+nam.o : hdr.h vars.h gvars.h ops.h segment.h setp.h genp.h smiscp.h exprp.h maincasp.h gmiscp.h gutilp.h namp.h 
+nodes.o : hdr.h vars.h setp.h nodesp.h miscp.h smiscp.h sspansp.h chapp.h 
+opdesc.o : hdr.h vars.h gvars.h opdescp.h 
+opname.o : opnamep.h 
+pack.o : hdr.h libhdr.h vars.h segment.h gvars.h ops.h type.h setp.h statp.h procp.h miscp.h maincasp.h genp.h gutilp.h gmiscp.h libp.h segmentp.h smiscp.h packp.h 
+peep.o : hdr.h vars.h gvars.h ops.h genop.h genp.h peepp.h 
+ppredef.o : config.h predef.h miscp.h ppredefp.h 
+predef1.o : ipredef.h intbp.h intcp.h predefp.h 
+predef2.o : ipredef.h time.h intbp.h intcp.h predefp.h 
+predef3.o : ipredef.h intcp.h predefp.h 
+predef4.o : ipredef.h miscp.h predefp.h 
+predef5.o : ipredef.h machinep.h predefp.h 
+predef6.o : ipredef.h 
+proc.o : hdr.h libhdr.h vars.h segment.h gvars.h ops.h type.h axqrp.h namp.h maincasp.h exprp.h dbxp.h miscp.h libp.h statp.h setp.h genp.h segmentp.h gmiscp.h smiscp.h gutilp.h procp.h 
+prserr.o : hdr.h ada.h adalexp.h actionp.h pspansp.h errsp.h lookupp.h prsutilp.h recoverp.h makecorp.h prserrp.h 
+prsinit.o : hdr.h ada.h 
+prsutil.o : hdr.h ada.h stdlib.h adalexp.h miscp.h smiscp.h prsutilp.h 
+pspans.o : hdr.h vars.h ada.h miscp.h adalexp.h pspansp.h 
+read.o : hdr.h libhdr.h vars.h segment.h gvars.h slot.h ifile.h axqrp.h axqwp.h libwp.h gutilp.h gmiscp.h gmainp.h libfp.h librp.h setp.h libp.h miscp.h readp.h 
+recover.o : hdr.h ada.h miscp.h prsutilp.h followp.h actionp.h lookupp.h pspansp.h adalexp.h errsp.h recoverp.h 
+reduce.o : hdr.h ada.h adared.h setp.h smiscp.h prsutilp.h errsp.h adalexp.h pspansp.h reducep.h 
+segment.o : hdr.h vars.h gvars.h type.h segment.h miscp.h dbxp.h axqrp.h gmiscp.h segmentp.h 
+sep.o : hdr.h ifile.h slot.h libhdr.h vars.h gvars.h ops.h type.h segment.h setp.h axqrp.h genp.h gutilp.h segmentp.h readp.h gmiscp.h libp.h sepp.h 
+set.o : config.h set.h miscp.h setp.h 
+shift.o : 
+smisc.o : hdr.h vars.h setp.h dbxp.h arithp.h chapp.h dclmapp.h miscp.h smiscp.h 
+sspans.o : hdr.h vars.h miscp.h setp.h smiscp.h sspansp.h 
+stat.o : hdr.h vars.h gvars.h ops.h segment.h setp.h genp.h exprp.h namp.h procp.h maincasp.h miscp.h gmiscp.h gutilp.h statp.h 
+tasking.o : config.h ipar.h ivars.h int.h tasking.h segment.h iparp.h intap.h intbp.h intcp.h miscp.h taskingp.h 
+type.o : hdr.h vars.h segment.h gvars.h attr.h ops.h type.h axqrp.h setp.h dbxp.h initobjp.h maincasp.h gmainp.h arithp.h segmentp.h genp.h exprp.h gutilp.h arithp.h genp.h miscp.h gmiscp.h smiscp.h statp.h typep.h 
+units.o : hdr.h vars.h unitsp.h 
+util.o : hdr.h vars.h arithp.h miscp.h smiscp.h utilp.h 
+
+3.h : hdr.h vars.h 
+	[ -f 3.h ] && touch 3.h
+4.h : hdr.h libhdr.h vars.h 
+	[ -f 4.h ] && touch 4.h
+ada.h : config.h constant.h 
+	[ -f ada.h ] && touch ada.h
+adalex.h : ada.h 
+	[ -f adalex.h ] && touch adalex.h
+axqrp.h : ifile.h slot.h 
+	[ -f axqrp.h ] && touch axqrp.h
+genp.h : genop.h 
+	[ -f genp.h ] && touch genp.h
+gmiscp.h : segment.h 
+	[ -f gmiscp.h ] && touch gmiscp.h
+gutilp.h : segment.h 
+	[ -f gutilp.h ] && touch gutilp.h
+gvars.h : gvars.ch
+hdr.h : hdr.vbs
+hdr.vbs : config.h arith.h symbol.h ghdr.h 
+	[ -f hdr.vbs ] && touch hdr.vbs
+int.h : attr.h ops.h type.h 
+	[ -f int.h ] && touch int.h
+ipredef.h : config.h int.h predef.h ivars.h 
+	[ -f ipredef.h ] && touch ipredef.h
+ivars.h : ivars.ch
+libhdr.h : libhdr.vbs
+libp.h : libhdr.h ifile.h 
+	[ -f libp.h ] && touch libp.h
+miscp.h : ifile.h 
+	[ -f miscp.h ] && touch miscp.h
+vars.h : vars.ch
+ghdr.h : ghdr.vbs
+symbol.h : set.h 
+	[ -f symbol.h ] && touch symbol.h

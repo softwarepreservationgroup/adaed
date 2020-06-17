@@ -1,0 +1,197 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem2.stl,v 1.1 90/12/05 16:16:16 ada Exp $
+--
+ -- 
+ --
+package body adasem2;
+
+use globals;
+use adasem1;
+use adasem3;
+use adasem4;
+use adasem5;
+use adasem6;
+use adasem7;
+use adasem8;
+use adasem9;
+use adasem10;
+use adasem11;
+use adasem12;
+use adasem13;
+use evalstat;
+use adalib;
+use adaio;
+
+--T+ 2. Lexical elements
+--S+ process_pragma
+
+procedure process_pragma(node) ;
+sem_trace_proc_entry(3, "Process_Pragma");
+ 
+-- This arbitrarily extensible procedure processes pragma declarations.
+-- The name of the pragma determines the way in which the args are
+-- processed. If no meaning has been attached to a pragma name, the user
+-- is notified, and the pragma is ignored.
+
+[-, id_node, arg_list] := ast(node) ;
+id := adasem(id_node) ;
+
+
+if is_empty(arg_list) then		-- pragma with no parameters
+   case id 
+      when "EDUMP", "TDUMP", "TRACE_ON", "TRACE_OFF", "TRACE_TABLES_OFF" => 
+          warning("This pragma is provided for compiler debugging only");
+          sem_trace_proc_exit(3, "Process_Pragma");
+          return ["pragma", id] ;
+     otherwise =>
+          warning("Format error in pragma");
+          sem_trace_proc_exit(3, "Process_Pragma");
+          return [];
+    end case;
+else
+    -- Process list of arguments.
+    arg_list := [adasem(a) : a in arg_list] ;
+    -- New syntax : named associations can be used for pragmas. For
+    -- now, discard the names.
+   
+    args := [a(2) : a in arg_list] ;	
+
+    case id 
+ 
+    when "IO_INTERFACE"  => 
+
+        -- Current interface to predefined procedures (e.g. text_io). 
+        -- The pragma makes up the body of a predefined procedure. 
+        -- This body is formatted into a single tuple :
+        --
+        --		[ 'predef_', marker , name1, name2...]
+        --
+        -- where the marker is the  second argument  of the  pragma. This
+        -- marker is  used as an  internal switch by the tio interpreter.
+        -- The remaining components of  the tuple are the unique names of
+        -- the formal parameters of the procedure. The pragma must follow
+        -- the  subprogram to which  it applies, whose  nature is still a
+        -- spec. The pragma supplies a dummy body for it.
+ 
+	[-,id] := args(1) ;
+	proc_name := declared(current_scope)(id) ;
+        assert exists proc_name in 
+		ST(declared(current_scope)(id)).overloads
+		| rmatch(ST(proc_name).nature, "_spec") /= "" ;
+        return trace_and_return(3, "Process_Pragma", 
+            [ST(proc_name).nature,proc_name, build_signature(proc_name),
+		   [[],
+            	   [["predef_", args(2)(2)] + 
+	    [ST(proc_name).signature + [find_old(t(2)): t in args(3..)]]],
+		   []]
+		]) ; 
+
+     when "ELABORATE" => 
+        sem_trace_proc_exit(3, "Process_Pragma");
+	return ["elaborate", [a(2): a in args]] ;
+ 
+     when "PRIORITY" => 
+        if #args = 1 then
+	    if "SYSTEM" in vis_mods then
+	        p_type := declared("SYSTEM")("PRIORITY") ;
+	    else			-- there should be a warning.
+	        warning("use of PRIORITY without presence of package SYSTEM is ignored");
+                sem_trace_proc_exit(3, "Process_Pragma");
+	        return [] ;
+	    end if;
+            priority := check_type(p_type, args(1));
+            sem_trace_proc_exit(3, "Process_Pragma");
+            if is_value(priority) then
+                return ["set_priority", priority(2)] ;
+--
+-- If the argument to pragma PRIORITY does not lie in the range of the subtype
+-- PRIORITY, the pragma has no effect. [AI-00031]
+--
+            elseif is_tuple(priority) and priority(1) = "raise" then
+		warning("The argument to pragma PRIORITY does not lie in the range of the");
+		warning("subtype PRIORITY, the pragma has no effect. [AI-00031]");
+                return [];
+
+            else
+                warning("Priority must be static - the pragma has no effect");
+                return [];
+            end if;
+         else
+            warning("Invalid format for pragma priority");
+            sem_trace_proc_exit(3, "Process_Pragma");
+            return [];
+         end if;
+
+      when "DEBUG" => 
+      -- An implementation  defined  debug  utility :  the expressions in
+      -- the argument list are written on the standard output in a simple
+      -- format  without the use of text_io.
+
+          arg_list := [];
+          for arg in args loop 
+              arg := check_old(arg) ;
+              if arg /= "?" then
+                  arg_list with:= arg;
+              end if;
+           end loop;
+           sem_trace_proc_exit(3, "Process_Pragma");
+           return ["pragma", "DEBUG", arg_list] ;
+        
+      when "DUMP","TRACE_TABLES_ON" => 
+
+            warning("This pragma provided for compiler debugging only");
+            arg_list := [];
+            for arg in args loop 
+                if is_tuple(arg) and arg(1) = "name" 
+                  and is_identifier(arg(2)) then
+                    arg_list with:= arg(2);
+                else
+                    errmsg("Invalid pragma format","","none");
+                    sem_trace_proc_exit(3, "Process_Pragma");
+                    return [];
+                end if;
+            end loop;
+            sem_trace_proc_exit(3, "Process_Pragma");
+            return ["pragma", id, arg_list] ;
+
+      when "INCLUDE_CODE" =>  
+
+-- Reads an AIS file and includes its compilation units in the current 
+-- library. An implementation defined separate compilation feature.
+ 
+	   for arg in args loop
+	      if is_tuple(arg) and arg(1) = {"string_literal"} then
+		    include_ais(arg(2));
+	       else
+		    errmsg("Invalid file name ","","none");
+	       end if;
+	   end loop;
+           sem_trace_proc_exit(3, "Process_Pragma");
+	   return [];
+
+        when "PACK" => 
+          arg := args(1);
+          arg := check_old(arg) ;
+          if arg /= "?" then
+	     apply_pragma_pack(arg);
+          end if;
+          sem_trace_proc_exit(3, "Process_Pragma");
+	  return [];
+
+        when "CONTROLLED", "INCLUDE", "INLINE", "INTERFACE",
+             "LIST", "MEMORY_SIZE", "OPTIMIZE", "STORAGE_UNIT",
+             "SUPRESS", "SYSTEM" => 
+            warning("This pragma will have no effect");
+            sem_trace_proc_exit(3, "Process_Pragma");
+            return [];
+
+     otherwise =>
+          warning("format error in pragma");
+          sem_trace_proc_exit(3, "Process_Pragma");
+          return [];
+
+     end case;
+  end if;
+sem_trace_proc_exit(3, "Process_Pragma");
+end process_pragma;
+end adasem2;

@@ -1,0 +1,1 @@
+WITH Spider; Use Spider;PROCEDURE Drawing16 IS BEGIN Reset; Red;Step;Step;Step;Step;Black;Turn;Step;Turn;Turn;Green;Step;Step;Step;END Drawing16;

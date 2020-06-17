@@ -1,0 +1,153 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_init.stl,v 1.1 91/01/02 15:25:53 banner Exp $
+--
+package body int_init;
+
+  use globals;
+  use int_globals;
+  use int_tasking;
+  use int_util;
+  use adaarith;
+
+--S+ INIT_ENV
+procedure init_env(rd predef_procs);
+--
+--  Called during compiler initialization (in ADAMAIN).
+--
+--  Predef_procs are declarations for procedures or objects in the
+--  standard environment or text_io. Init_env initializes internal
+--  tables, and then calls the interpreter with predef_procs as the
+--  statement sequence, to allow the initialization of EMAP with
+--  this precompiled material. The interpreter tables are then cleaned 
+--  up to allow user programs to be run on subsequent normal calls of 
+--  the interpreter.
+--
+ --  Note that MAINTASK, and IDLE are constants
+ --  defined in the directory.
+
+  uninitialized := newat_str();
+
+  contents := {}; -- initialized here because global to all tasks
+
+  object_representation := {};
+
+  memory_allocated := 0; 
+
+  trace_mode := "list";
+  trace_count := 0;
+  qual_map := { ["record", "qual_discr_"],
+                ["array", "qual_index_"],
+                ["integer", "qual_range_"],
+                ["float", "qual_range_"],
+                ["fixed", "qual_range_"],
+                ["enum", "qual_range_"]  };
+
+  taskname_map := { [maintask, maintask], [idle, idle] };
+
+  initialize_tasking;
+--
+--
+--  Create the initial environment stack
+  empty_env := [ [{}, [[]], [], [], {}, ""]];
+  envstackt := { [idle, empty_env], [maintask, empty_env] };
+  envstackt(idle)(height(idle)).stsqt := [ ["loop", [["finish_check_"]]] ];
+--
+  global_emap := {};                 
+  envstackt(maintask)(height(maintask)).emapt := initialize_standard();
+--
+  select_mode := "FAIR";
+  time_slice := 2000;
+  strace := 0;
+  ais_prio := [];
+  --interp();
+  ais_code := [];
+  -- code entered from AIS_CODE by interpreter
+  envstackt(maintask)(height(maintask)).stsqt := []; 
+  -- to increase speed, better have a  map containing things that never change
+  global_emap := envstackt(maintask)(height(maintask)).emapt; 
+--
+--
+end init_env;
+--S+ INITIALIZE_STANDARD
+procedure initialize_standard;
+--
+-- This routine creates the structures used to initialize
+-- the standard environment. Called by INIT_ENV.
+--
+
+  null_ := "$null";
+  null_loc := newat_str();
+  representation := {};
+  contents +:= { [null_loc, null_] };
+
+  return {[ "INTEGER", ["integer", ada_min_integer, ada_max_integer]],
+	   ["SHORT_INTEGER", ["integer", -2 ** 15, 2 ** 15 -1]],
+	   ["NATURAL", ["integer", 0, ada_max_integer ]],
+	   ["POSITIVE", ["integer", 1, ada_max_integer ]],
+   
+
+           ["FLOAT", 
+		["float", float_first, float_last,
+		 float_digits, float_digits]],
+
+           ["LONG_FLOAT", 
+		["float", long_float_first, long_float_last,
+		 long_float_digits, long_float_digits]],
+           
+           ["universal_fixed", ["fixed", rat_umin(rat_infinity),
+                                         rat_infinity,
+                                         rat_0, rat_0]],
+
+	   ["PRIORITY", ["integer", 0, 9 ]],
+	   ["PRIORITY_RANGE", ["integer", 0, 9 ]],
+           ["BOOLEAN", ["enum", boolean_false, boolean_true,
+                                  {[boolean_false, "FALSE"],
+                                  [boolean_true, "TRUE"] }]],
+
+           ["DURATION", ["fixed", fix_umin(delay_day()),
+                                  delay_day(),
+                                  delay_small, delay_small ]],
+--
+           ["TASK", ["task"] ],
+--
+-- character as an enumeration type
+--
+           ["CHARACTER", ["enum", 0, 127,
+               {[i, "'" + char(i) + "'"] : i in {0..127}}]],
+--
+--
+--
+           ["STRING", ["array", ["POSITIVE"], "CHARACTER", false] ],
+--
+-- Access variable with NULL pointer for setting access 
+-- objects to null.
+--
+           ["NULL", ["access_iobject", null_loc]]
+--
+--
+                                    }   
+--
+--  names of predefined operators (used by renames)
+--
+      + {[op_name, ["$operator", op_name]] : op_name in
+           {
+            ":=", "=", "/=", "<", "<=",
+            ">", ">=", "&", "&ca", "&ac", "&cc",
+            "and", "or", "xor",
+            "not",
+            "row", "andthen",
+            "orelse",
+            "+i", "+fl", "+fx", "-i", "-fl", "-fx",
+            "*i", "*fl", "*fx", "/i", "/fl", "/fx", 
+            "*ifx", "*fxi", "/fxi",
+            "**i", "**fl",
+            "+ui", "+ufl", "+ufx", "-ui", "-ufl", "-ufx",
+            "absi", "absfl", "absfx",
+            "modi", "remi"
+            }  };
+ 
+end initialize_standard;
+procedure delay_day; 
+    return fix_fri(86400, delay_small); 
+end delay_day;
+end int_init;

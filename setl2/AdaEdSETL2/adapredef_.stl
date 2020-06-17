@@ -1,0 +1,8 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adapredef_.stl,v 1.1 91/01/02 15:56:56 banner Exp $
+--
+package predefs;
+   procedure initialize_predef();
+   procedure predef(operation);
+   procedure predef_term;
+end predefs;

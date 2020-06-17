@@ -1,0 +1,479 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adalex.stl,v 1.1 90/12/05 16:15:12 ada Exp $
+--
+package body adalex;
+
+  use globals;
+  use parse_tables;
+  use adautil;
+  use adaio;
+--
+-- SCAN_ERRORS is a tuple of error messages which may be returned by 
+-- a utility routine for use by the lexical analyzer.
+-- Each error message is a tuple of the form:
+--	[LOCATION, MESSAGE]
+-- where LOCATION is a tuple giving the starting and ending indices 
+-- of the error within the argument string S; and MESSAGE is the actual
+-- error message.
+-- (Note that for the lexical analyzer, LOCATION must be converted
+-- to an address within the source text as follows:
+-- 	[LINENUM, START, END]
+-- where START and END are offset from the values given in LOCATION by
+-- the number of characters already scanned off the current source
+-- line).
+
+-- Package constants, and variables used internally by the lexical analyzer
+--
+ 
+    const 
+        eol := " ",              -- The end of line character (space)
+        error_sym := 0,
+	eoft := "$EOF";		 -- Name of the End-of-File token for LexParse.
+
+   var
+        number_sym,			-- The symbol number of numbers
+	prime_can_follow := false,	-- Used to determine use of "
+	prime_could_follow := false,
+        line     := eol,        	-- The text line
+        colno    := 1,
+        linesize := 1,
+	used_linesize := 0;
+
+procedure tokloc;
+   return [linenum,colno,linesize-#line];
+end tokloc;
+ 
+procedure prevcharloc;
+   return [linenum,linesize-#line,linesize-#line];
+end prevcharloc;
+
+procedure scannedloc(e);
+   return [linenum,used_linesize+e(1)(1),used_linesize+e(1)(2)];
+end scannedloc;
+
+procedure get_name(tok_val);
+   if (name_number := name_map(tok_val)) = om then
+      name_list with:= (tok_val);
+      name_map(tok_val) := #name_list;
+      name_number := #name_list;
+   end if;
+   return name_number;
+end get_name;
+
+--
+--T+ Gettok
+procedure gettok;
+ 
+   const 
+        digits		 := "0123456789";
+   var
+	scan_errors,
+	alpha		 := {"A","B","C","D","E","F","G","H","I","J",
+			     "K","L","M","N","O","P","Q","R","S","T",
+			     "U","V","W","X","Y","Z",
+			     "a","b","c","d","e","f","g","h","i","j",
+			     "k","l","m","n","o","p","q","r","s","t",
+			     "u","v","w","x","y","z"},
+	delimiters	 := {"(", ")", "'", "&", "*", ":", "-", "=",
+			     "/", "+", ";", ">", "<", ",", ".", "|",
+			     "!"},
+	string_bracketq  := "\"",	-- Quote or
+	string_bracketp	 := "%",	-- Percent symbol are valid
+	other_special	 := {"%", "_", "#", "$", "?", "@", "[", "\\", 
+			     "]", "^", "`", "{", "}", "~"},
+        qstring_characters := 
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+		"1234567890 #&'*+,-./:;<=>_|%()!$?@[\\]^`{}~",
+	-- PSTRING_Characters is the same as STRING_Characters, except
+	-- that is has the "%" removed. This is to allow for the use of
+	-- the "%" as a string delimiter.
+        pstring_characters := 
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+		"1234567890 #&'*+,-./:;<=>_|()!$?@[\\]^`{}~",
+        tab 		 := "	",	-- Tab
+        spaces 		 := " ",	-- Space
+	non_printing_character :=
+	       {[0,"NUL"],	[1,"SOH (^A)"],	
+		[2,"STX (^B)"],	[3,"ETX (^C)"],	[4,"EOT (^D)"],	
+		[5,"ENQ (^E)"],	[6,"ACK (^F)"],	[7,"BEL (^G)"],	
+		[8,"BS (^H)"],	[9,"HT (^I)"],	[10,"LF(^J)"],	
+		[11,"VT (^K)"],	[12,"FF (^L)"],	[13,"CR (^M)"],	
+		[14,"SO (^N)"],	[15,"SI (^O)"],	[16,"DLE (^P)"],
+		[17,"DC1 (^Q)"],[18,"DC2 (^R)"],[19,"DC3 (^S)"],
+		[20,"DC4 (^T)"],[21,"NAK (^U)"],[22,"SYN (^V)"],
+		[23,"ETB (^W)"],[24,"CAN (^X)"],[25,"EM (^Y)"],
+		[26,"SUB (^Z)"],[27,"ESC"],     [28,"FS"],
+		[29,"GS"],	[30,"RS"],	[31,"US"],
+		[127,"DEL"]},
+ 
+	-- The characters which are not allowed within comments are all the
+	-- Non Printing Characters except HT,LF,VT,FF,CR (ascii values 9-13).
+	-- The set below is the ascii balues of these characters.
+        unallowed_comment_chars := 
+		{0,1,2,3,4,5,6,7,8,
+		 14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,
+		 127};
+
+    -- Remove leading SPACES from LINE.  When only the end of line
+    -- character remains, get the next LINE from INFILE.  When there
+    -- is no next LINE, return the end of text character.  Otherwise,
+    -- append the end of line character to LINE and continue.
+    -- At end of file LINE becomes om.
+ 
+    if line = om then
+	return [eoft_sym, eoft_sym, [linenum, linesize, linesize]];
+    end if;
+
+    while true loop 
+	span(line,spaces); 
+        while line = ""  loop 
+	    line := getline();
+	    if line = om then
+		return [eoft_sym,eoft_sym,[linenum,linesize,linesize]];
+	    end if;
+	    line    +:= eol;
+	    linesize := #line;
+	    span(line,spaces);
+	end loop;
+ 
+	char1 := line(1);
+	colno := linesize - #line + 1;
+ 
+        -- set advance the flag indicating if the last token could be 
+        -- folllowed by a " for the later lexical " to " conversion
+
+	prime_can_follow   := prime_could_follow;
+	prime_could_follow := false;
+
+	
+        -- Determine the type of the first character in the next token.
+ 
+	break_alpha := false;
+	break_digit := false;
+
+	if char1 = "_" then
+
+	    -- Token erroneously begins with underscore -- if next
+	    -- character is letter, then scan as for identifier;
+	    -- if next character is digit, then scan as for number;
+	    -- else it is merely extra character to be ignored.
+	    -- (Note that computation of ch_after_breaks relies on
+	    -- there being at least one non-underscore character 
+	    -- following the underscores -- e.g. end-of-line blank.)
+
+	    ch_after_breaks := 
+		line(min / [i in [1..#line] | line(i) /= "_"]);
+	    if ch_after_breaks in alpha then
+		break_alpha := true;
+	    elseif ch_after_breaks in digits then
+		break_digit := true;
+	    else
+		line := line(2..);
+		return [error_sym, get_name(line(1)), tokloc()];
+	    end if;
+	end if;
+
+	if char1 in alpha or break_alpha then	  
+
+    	    --$$ Token is reserved_word or identifier
+
+	    used_linesize := linesize - #line;
+	    [ident, line, scan_errors] := scan_identifier(line);
+	    for e in scan_errors loop 
+		lexerr(scannedloc(e), e(2));
+	    end loop;
+	    tok_ind            := get_name(ident);
+	    tok_sym 	       := tok_ind min id_sym;
+    	    rval 	       := [tok_sym, tok_ind, tokloc()];
+	    prime_could_follow := 
+			tok_sym = id_sym or ident = "RANGE"
+                                         or ident = "ALL";
+	    return rval;
+
+
+	elseif char1 = string_bracketq 
+	    or char1 = string_bracketp then
+
+	    --$$ Token is character_string
+	    -- Set the string bracket from the first character of
+	    -- LINE. It must be one of "\"" or "%".
+	    string_bracket := char1;
+	    -- Decide which set of string characters to allow.
+	    string_characters := if string_bracket = string_bracketq 
+					then
+				 		qstring_characters 
+					else 
+						pstring_characters 
+				end if;
+            line := line(2..);
+    	    if string_bracket notin line then 
+					-- Missing right string bracket
+    		return [error_sym, get_name(string_bracket), tokloc()];
+    	    else
+		strng := "";
+		while true loop 
+		    strngp := span(line,string_characters) ;
+		    if line = "" then	-- Missing right string bracket
+			lexerr(tokloc(), "Missing string bracket");
+			line := strngp;	-- Restore the rest of the line
+			exit ;
+		    end if;
+		    strng +:= strngp;	
+		    if line(1) = string_bracket then
+			if line(2) = line(1) then
+			    -- Embedded STRING_BRACKET
+			    strng +:= line(1);
+			    line   := line(3..);
+			else  -- String bracket closes string
+			    line := line(2..);
+			    exit ;
+			end if;
+		    else
+			bad_char := line(1);
+			line     := line(2..);
+			if bad_char = tab then 
+			    linesize +:= ((8 - (linesize - #line) mod 8)
+					 mod 8);
+			    lexerr(prevcharloc(),
+			        "Invalid character TAB = " +
+		   	        non_printing_character(abs (bad_char)) +
+			        " in string deleted");
+			elseif #line = 0 then
+			    lexerr([linenum,linesize,linesize],
+			        "Last character of line is " +
+			        non_printing_character(abs (bad_char)) ?
+			        ("\""+bad_char+"\"")+" not "+strngbrack);
+			    if non_printing_character(abs (bad_char)) /= 
+    				om then 
+    				linesize -:= 1; 
+    			    end if;
+			else
+			    lexerr(prevcharloc(),
+				"Invalid character " + 
+				non_printing_character(abs (bad_char)) ? 
+				     ("\""+bad_char+"\"") 
+				+ " in string deleted");
+			    if non_printing_character(abs (bad_char)) /= 
+				om then 
+    				linesize -:= 1;  
+    			    end if;
+			end if;
+		    end if;
+		end loop;
+    	    end if;
+	    return [string_sym, get_name("\""+strng+"\""),
+    			 tokloc()];
+ 
+
+	elseif char1 in digits or break_digit then	  
+
+    	    --$$ Token is a number
+
+	    used_linesize := linesize - #line;
+	    [num, line, scan_errors] := 
+		scan_number(line, "integer_or_real");
+	    num := num(1 .. #num - 1);			-- $ $ change GF
+	    rval := [number_sym, get_name(num), tokloc()];
+	    for e in scan_errors loop 
+		lexerr(scannedloc(e), e(2));
+	    end loop;
+	    if line(1) in alpha then
+		lexerr(tokloc(),"Number should be separated from " +
+		              "adjacent identifier");
+	    end if;
+	    return rval;
+
+ 
+	elseif char1 in delimiters then	    
+
+    	    --$$ Token may be delimiter
+
+            length := 1;
+
+            case line(1)
+
+                when "-" =>
+		--
+		-- If the rest of the line is a comment scan it to make sure 
+		-- that there are no characters which are not allowed to appear.
+		-- (i.e. the non printing characters except HT,LF,VT,FF,CR).
+                    if line(2) = "-" then    -- Comment, get next token
+		       if exists c in line(3..#line) |  
+			 abs (c) in unallowed_comment_chars then
+		   	 lexerr([linenum,colno,colno],
+			 "Invalid character " +
+			 non_printing_character(abs (c)) + " in comment");
+		       end if;
+                       line := line(#line);
+		       continue ;
+                    end if;
+
+                when "=" =>
+                    if line(2) = ">" then 
+                      length := 2; 
+                    end if;
+
+                when "*" =>
+                    if line(2) = "*" then 
+                      length := 2; 
+                    end if;
+
+                when "." =>
+                    if line(2) = "." then
+                        if line(3) = "." then      -- addition for PAT
+                            if pat_option then                      
+                               length := 3;                    
+                            else 	
+                                lexerr(tokloc(), "Unexpected sequence");
+                            end if;
+			else
+                            length := 2;
+                        end if;
+                    elseif line(2) in digits then
+                        -- "." not a delimiter, begins an approximate
+                        -- number, to which an initial zero is supplied
+                        lexerr([linenum,colno,colno],
+			       "Missing digit before decimal point");
+                        line      := "0" + line;
+                        linesize +:= 1;
+			continue ;
+                    end if;
+
+                when ":" =>
+                    if line(2) = "=" then
+                        length := 2;
+                    end if;
+
+                when "/" =>
+                    if line(2) = "=" then 
+                      length := 2; 
+                    end if;
+
+                when ">" =>
+                    if line(2) in "=>" then 
+                      length := 2; 
+                    end if;
+
+                when "<" =>
+                    if line(2) in "=<>" then 
+                      length := 2; 
+                    end if;
+
+                when "!" =>
+                    line(1) := "|";    -- Standard bar character
+
+		when "'" =>
+		    delim := "'";
+		    line  := line(2..);
+    		    if line(2) = delim and
+    			(if prime_can_follow then line(1) /= "("
+    					     else true end if) then
+    			
+    			--$$ Character literal
+
+			if line(1) = tab then
+	    		   lexerr(prevcharloc(),
+				  "Invalid HT in character literal");
+			   -- sustitute the blank character for error recovery
+    			   char_lit := "' '";
+			else
+    			   char_lit := "'" + line(1) + "'";
+			end if;
+    			line := line(3..);
+    			return [char_sym, get_name(char_lit), tokloc()];
+
+    		    elseif not prime_can_follow and
+    			(exists p in [1..#line-1] |
+    			    (if p = 1 then
+    				line(p) = delim and line(p+1) /= delim
+    			     else
+    				line(p-1) /= delim and line(p) = delim
+    				    and line(p+1) /= delim
+    			     end if)) and
+    			(not (exists q in [1..p] |
+    			    line(q..q+1) = "--"))
+			then
+
+    			-- prime probably used instead of the double
+    			-- quote for a string literal
+
+    		      lexerr_2([linenum,colno,colno],
+    			    [linenum,linesize-(#line-p), linesize-(#line-p)],
+			   "Expect double quote to delimit a character string");
+    			for q in [1..p] | line(q) = delim loop 
+    			    line(q) := string_bracketq;
+    			end loop;
+    			line := string_bracketq + line;
+    			continue ;
+
+    		    else
+
+    			--$$ Prime
+
+    			return [nosym(delim), nosym(delim), tokloc()];
+    		    end if;
+
+                -- INSTRUMENTATION for Measuring Code Coverage
+                otherwise => null;
+            end case;
+
+            delim 	       := line(1..length);
+ 	    prime_could_follow := delim = ")";
+            line 	       := line(length+1..);
+            return [nosym(delim), nosym(delim), tokloc()];
+ 
+	elseif char1 in other_special then
+            line := line(2..);
+	    return [error_sym, get_name(char1), tokloc()];
+					-- to be caught by parser 
+ 
+	elseif char1 = tab then
+            line      := line(2..);
+            linesize +:= ((8 - colno mod 8) mod 8);
+	    continue ;
+ 
+	else
+ 	    bad_ascii := abs (line(1));	-- get ascii value
+	    line      := line(2..);
+	    lexerr(prevcharloc(),"Next Character is bad:  "
+	       + non_printing_character(bad_ascii) ? char (bad_ascii));
+	    if non_printing_character(bad_ascii) /= om then
+	       linesize -:= 1;
+	    end if;
+	    continue ;
+	end if;
+    end loop;
+end gettok;
+
+procedure lexerr(tokloc1,msg);
+    err_list([[tokloc1],"*** Lexical Error: "+msg]);
+    errcount +:= 1;
+end lexerr;
+
+procedure lexerr_2(tokloc1,tokloc2,msg);
+    err_list([[tokloc1,tokloc2],"*** Lexical Error: "+msg]);
+    errcount +:= 1;
+end lexerr_2;
+ 
+--T+ Init Lex
+procedure init_lex;
+
+--
+-- Convert the error recovery maps from strings (names) into symbol and
+-- rule numbers to speed error recovery operations.
+--
+    eoft_sym	:= nosym(eoft);
+    id_sym	:= nosym("identifier");
+    string_sym	:= nosym("string_literal");
+    number_sym	:= nosym("numeric_literal");
+    char_sym	:= nosym("character_literal");
+    semi_sym	:= nosym(";");
+    reserved_syms := id_sym - 1;	-- ID follows reserved words
+
+    for y in {"identifier","string_literal",
+	      "numeric_literal", "character_literal"} loop 
+	name_map(y) := om;
+    end loop;
+end init_lex;
+
+end adalex;

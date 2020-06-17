@@ -1,0 +1,21 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem10_.stl,v 1.1 90/12/05 16:15:50 ada Exp $
+--
+package adasem10;
+   procedure init_compunit;
+   procedure new_compunit(typ, name);
+   procedure compunit(u);
+   procedure unit_symbtab(unit_unam) ;
+   procedure predef_scopes ;
+   procedure save_subprog_info(unit_unam) ;
+   procedure save_spec_info(unit_unam, old_vis) ;
+   procedure save_body_info(nam) ;
+   procedure establish_context(name);
+   procedure elaborate_pragma(nam_list) ;
+   procedure subprogram_stub(spec_node) ;
+   procedure stub_head(nat, id) ;
+   procedure save_stub(kind, name) ;
+   procedure subunit(tree) ;
+   procedure check_separate(name);
+   procedure retrieve_env(name) ;
+end adasem10;

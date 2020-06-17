@@ -1,0 +1,88 @@
+Executing file  NYU Ada/Ed 1.11 SUN UNIX Version
+ADAfile:	sequential_io.ada
+ASTfile:	
+AISfile:	sequential_io.ais
+LIBfile:	predef.lib
+	
+	
+    1   with IO_EXCEPTIONS;
+    2   generic
+    3       type ELEMENT_TYPE is private;
+    4   
+    5   package SEQUENTIAL_IO is
+    6   
+    7       type FILE_TYPE is limited private;
+    8       
+    9       type FILE_MODE is (IN_FILE, OUT_FILE);
+   10         
+   11   
+   12       -- File management
+   13   
+   14   
+   15       procedure CREATE   (FILE : in out FILE_TYPE;
+   16                           MODE : in FILE_MODE := OUT_FILE;
+   17                           NAME : in STRING    := "";
+   18                           FORM : in STRING    := "");
+   19       pragma IO_interface(CREATE, SIO_CREATE, ELEMENT_TYPE);
+   20   
+   21       procedure OPEN     (FILE : in out FILE_TYPE;
+   22                           MODE : in FILE_MODE;
+   23                           NAME : in STRING;
+   24                           FORM : in STRING := "");
+   25       pragma IO_interface(OPEN, SIO_OPEN, ELEMENT_TYPE);
+   26   
+   27       procedure CLOSE    (FILE : in out FILE_TYPE);
+   28       pragma IO_interface(CLOSE, SIO_CLOSE);
+   29   
+   30       procedure DELETE   (FILE : in out FILE_TYPE);
+   31       pragma IO_interface(DELETE, SIO_DELETE);
+   32   
+   33       procedure RESET    (FILE : in out FILE_TYPE; MODE : in  FILE_MODE);
+   34       pragma IO_interface(RESET, SIO_RESET_MODE);
+   35   
+   36       procedure RESET    (FILE : in out FILE_TYPE);
+   37       pragma IO_interface(RESET, SIO_RESET);
+   38   
+   39       function  MODE     (FILE : in FILE_TYPE)  return FILE_MODE;
+   40       pragma IO_interface(MODE, SIO_MODE);
+   41   
+   42       function  NAME     (FILE : in FILE_TYPE)  return STRING;
+   43       pragma IO_interface(NAME, SIO_NAME);
+   44   
+   45       function  FORM     (FILE : in FILE_TYPE)  return STRING;
+   46       pragma IO_interface(FORM, SIO_FORM);
+   47       
+   48       function  IS_OPEN  (FILE : in FILE_TYPE)  return BOOLEAN;
+   49       pragma IO_interface(IS_OPEN, SIO_IS_OPEN);
+   50   
+   51       -- Input and Output Operations:
+   52   
+   53       procedure READ   (FILE : in FILE_TYPE; ITEM : out ELEMENT_TYPE);
+   54       pragma IO_interface(READ, SIO_READ,ELEMENT_TYPE);
+   55   
+   56       procedure WRITE  (FILE : in FILE_TYPE; ITEM : in ELEMENT_TYPE);
+   57       pragma IO_interface(WRITE, SIO_WRITE,ELEMENT_TYPE);
+   58   
+   59       function  END_OF_FILE(FILE : in FILE_TYPE) return BOOLEAN;
+   60       pragma IO_interface(END_OF_FILE, SIO_END_OF_FILE);
+   61   
+   62       -- Exceptions:
+   63   
+   64       STATUS_ERROR : exception renames IO_EXCEPTIONS.STATUS_ERROR;
+   65       MODE_ERROR   : exception renames IO_EXCEPTIONS.MODE_ERROR;
+   66       NAME_ERROR   : exception renames IO_EXCEPTIONS.NAME_ERROR;
+   67       USE_ERROR    : exception renames IO_EXCEPTIONS.USE_ERROR;
+   68       DEVICE_ERROR : exception renames IO_EXCEPTIONS.DEVICE_ERROR;
+   69       END_ERROR    : exception renames IO_EXCEPTIONS.END_ERROR;
+   70       DATA_ERROR   : exception renames IO_EXCEPTIONS.DATA_ERROR;
+   71   
+   72   private
+   73   
+   74       type FILE_TYPE is array (1 .. 1) of INTEGER;
+   75   
+   76   end SEQUENTIAL_IO;
+   77   
+   78   package body SEQUENTIAL_IO is end ;
+   79   
+   
+  No translation errors detected

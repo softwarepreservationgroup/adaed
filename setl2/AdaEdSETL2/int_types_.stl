@@ -1,0 +1,6 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/int_types_.stl,v 1.1 91/01/02 15:55:37 banner Exp $
+--
+package int_types;
+  procedure teval_proc(type_expr);
+end int_types;

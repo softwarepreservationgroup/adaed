@@ -1,0 +1,39 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adaio_.stl,v 1.1 90/12/05 16:15:09 ada Exp $
+--
+-- Copyright 1990. Ada Project, Courant Institute, New York University
+--
+package adaio;
+ 
+        ------------------------------------------
+        --                                       -
+        --       A D A  -  I O P A C K A G E     -
+        --                                       -
+        --                                       -
+        --               written by              -
+        --                                       -
+        --              Ada Project              -
+        --           Courant Institute           -
+        --          New York University          -
+        --           251 Mercer Street           -
+        --        New York, New York 10012       -
+        --                                       -
+        ------------------------------------------
+
+var
+  list_control := {},
+  page_control := {};
+
+  procedure to_list(msg);             -- Lists a sequence of messages
+  procedure to_errfile(msg1,msg2);    -- Lists messages to ERRFILE only
+  procedure warning(msg);	      -- Issue a warning message
+  procedure err_list(msg);            -- List error messages on ERRFILE
+  procedure getline;                  -- Returns the next line of input.
+  procedure produce_listing(toline);  -- Force a listing through line toline.
+  procedure convert_ast(x);           -- Converts AST to tuple form, 
+				      -- for P.Printing.
+  procedure pretty_print(file,obj);   -- Pretty print obj on file.
+  procedure set_list_level(lvl);      -- set the listing discipline to be used
+
+end adaio;
+

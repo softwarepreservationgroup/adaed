@@ -1,0 +1,660 @@
+
+
+
+ADAED()              Unix Programmer's Manual             ADAED()
+
+
+NNAAMMEE
+       adaed  -  NYU  translator and interpreter for the Ada pro-
+       gramming language
+
+SSYYNNOOPPSSIISS
+       aaddaaccoommpp [ option ] ...  _f_i_l_e
+
+       aaddaabbiinndd [ option ] ...  [ _l_i_b_r_a_r_y ]
+
+       aaddaaeexxeecc  [ option ] ...  [ _l_i_b_r_a_r_y ]
+
+       aaddaalliibb [ _l_i_b_r_a_r_y ]
+
+DDEESSCCRRIIPPTTIIOONN
+       Adaed is a translator/interpreter for the Ada  programming
+       language  that  is intended primarily for educational use.
+       AAddaaccoommpp compiles an Ada program; it invokes in  succession
+       the  three compilation phases: parsing, semantic analysis,
+       and code generation.  The  _f_i_l_e  argument  refers  to  the
+       source  file;  if  it contains no suffix the Ada source is
+       assumed to be in _f_i_l_e_._a_d_a_.  It may be a  full  path  name.
+       The output of the compiler is an instruction stream for an
+       abstract Ada machine, which is subsequently interpreted.
+
+       AAddaabbiinndd binds the _l_i_b_r_a_r_y with the specified _m_a_i_n___u_n_i_t  to
+       form an executable program.
+
+       AAddaaeexxeecc  invokes  the  Ada  machine  interpreter.  _L_i_b_r_a_r_y
+       specifies a library containing a bound program.
+
+       AAddaalliibb is a utility that enables the user to  examine  the
+       contents of the specified library.
+
+       Note:  all  options  must  precede the file name (for aaddaa--
+       ccoommpp), or library name (for aaddaabbiinndd, aaddaaeexxeecc, and  aaddaalliibb)
+       and must be in lower case.
+
+LLIIBBRRAARRYY
+       All compilations require a library.  A library is a subdi-
+       rectory, which is created or reinitialized when  the  user
+       invokes a command containing --nn option, such as:
+                      _a_d_a_c_o_m_p _-_n _-_l _l_i_b_n_a_m_e _a_d_a_f_i_l_e
+       Intermediate  files  appear in subdirectory _l_i_b_n_a_m_e.  This
+       directory is created by the command if it does not already
+       exist.   Only  the listing files are created in the direc-
+       tory from which _a_d_a_c_o_m_p is invoked.  The _l_i_b_n_a_m_e directory
+       should be used to hold files created by the _a_d_a_e_d commands
+       only (i.e. those produced by the Ada/Ed system); confusion
+       and  grief  may  result  if  you  attempt to use a library
+       directory to hold other files.  The _l_i_b_n_a_m_e  argument  may
+       be a full path name.
+
+       If  the  environment variable ADALIB is defined, its value
+       is used as a default library and the --ll option  (including
+
+
+
+NYU Ada Group           23 September 1991                       1
+
+
+
+
+
+ADAED()              Unix Programmer's Manual             ADAED()
+
+
+       its  _l_i_b_n_a_m_e  argument)  to _a_d_a_c_o_m_p can be omitted.  Simi-
+       larly, if ADALIB is defined then the library name need not
+       be provided to _a_d_a_b_i_n_d_, _a_d_a_e_x_e_c, and _a_d_a_l_i_b.
+
+       A given utility library, UL (e.g. one that contains mathe-
+       matical functions) may be used by several  unrelated  pro-
+       grams.   It  may  then be convenient to create independent
+       libraries for each program, and  initialize  each  library
+       with  the contents of UL.  This can be done simply by cre-
+       ating directories for each library, and copying  the  con-
+       tents of UL into each of these.
+
+OOPPTTIIOONNSS
+       The options for _a_d_a_c_o_m_p are as follows:
+
+       --aa             Generates   instructions  for  use  by  the
+                      interpreter (_a_d_a_e_x_e_c command) to trace  the
+                      Ada  source lines. Used in conjunction with
+                      the --tt aa option of adaexec.
+
+       --bb             Indicates that the binding of  the  library
+                      is  to be performed if the current compila-
+                      tion is completed without errors.
+
+       --gg             Specifies that the compiler is to produce a
+                      listing  of  the generated instructions for
+                      the Ada machine (of little interest to most
+                      users).
+
+       --ii_x            This is an option to the binder and is rel-
+                      evant only if the --bb option is  used.   See
+                      options for _a_d_a_b_i_n_d below.
+
+       --ll_l_i_b_r_a_r_y      Uses  the specified library to satisfy ref-
+                      erences to compilation units not present in
+                      the file being compiled. If the compilation
+                      is successful, the  units  defined  in  the
+                      file  are  added  to  the library.  If this
+                      option  is  not  specified  explicitly,   a
+                      default  library  is  implicitly defined by
+                      the ADALIB environment variable.
+
+       --mm_u_n_i_t___n_a_m_e    This is an option to the binder and is rel-
+                      evant  only  if the --bb option is used.  See
+                      options for _a_d_a_b_i_n_d below.
+
+       --nn             Indicates that a new library is to be  cre-
+                      ated  for this compilation. The name of the
+                      library is indicated by the  --ll  option  or
+                      through  the  ADALIB  environment variable.
+                      The --nn option  must  be  specified  if  the
+                      library referenced by the --ll option (or the
+                      ADALIB  environment  variable)   does   not
+                      already exist or must be reinitialized.
+
+
+
+NYU Ada Group           23 September 1991                       2
+
+
+
+
+
+ADAED()              Unix Programmer's Manual             ADAED()
+
+
+       --ss             Produces  a listing of the source file. The
+                      name of the listing file is the input  file
+                      name  prefix with suffix _._l_i_s.  By default,
+                      no listing file is generated  unless  there
+                      are  warnings, errors or informational mes-
+                      sages to report.
+
+       --vv             Gives a (verbose) descriptive trace showing
+                      the subsidiary programs invoked by the _a_d_a_-
+                      _c_o_m_p command,  the  options  and  arguments
+                      passed  to  them,  and  their  exit status.
+                      This is used primarily for system checkout.
+
+       The options for _a_d_a_b_i_n_d are as follows:
+
+       --mm_u_n_i_t___n_a_m_e    Specifies  the name of the unit which is to
+                      serve as a main program.  When the  library
+                      contains  only one main program (which must
+                      be a parameterless procedure)  this  option
+                      is not needed.
+
+       --ii_x            To  be  used  for  programs that use pprraaggmmaa
+                      INTERFACE. _x designates the non-Ada  inter-
+                      faced  procedures and may be a) the name of
+                      an object file, created by the user, of the
+                      form  _f_i_l_e_n_a_m_e_._o  (that appears in the same
+                      directory as the Ada  program);  or  b)  an
+                      abbreviation for the library '/lib/lib_x.a'.
+                      If    that    does    not    exist     then
+                      '/usr/lib/lib_x.a'    is   searched.    This
+                      library is unrelated  to  the  Ada  program
+                      library  referenced  by  the  various _a_d_a_e_d
+                      commands, and generally refers to  a  stan-
+                      dard  library provided for another program-
+                      ming language.  This option may be used  as
+                      many  times  as  necessary,  providing that
+                      each use represents only a single  file  or
+                      library.   Thus,  _a_d_a_b_i_n_d  _-_i _a_._o _-_i _b_._o _-_i
+                      _l_i_b _._._. is acceptable, while _a_d_a_b_i_n_d _-_i _a_._o
+                      _b_._o  _l_i_b  _._._.  is not.  To use this option,
+                      the environment variable INT must be set to
+                      point  to the directory containing the file
+                      _a_d_a_i_n_t (see the Setup file or  your  system
+                      manager).  Usage examples appear below.
+
+       The options for _a_d_a_e_x_e_c are as follows:
+
+       --mm_b_o_u_n_d___m_a_i_n___u_n_i_t
+                 Specifies  the name of the bound main unit, i.e.
+                 the main unit that was specified to _a_d_a_b_i_n_d,  or
+                 _a_d_a_c_o_m_p. Note that a given library may have been
+                 bound several times with different  main  units.
+                 When  the  library  has been bound with only one
+                 main unit, this option is not needed.
+
+
+
+NYU Ada Group           23 September 1991                       3
+
+
+
+
+
+ADAED()              Unix Programmer's Manual             ADAED()
+
+
+       --hh_h_e_a_p___s_i_z_e
+                 Specify the size of the heap increment in  kilo-
+                 words,  by  which  the heap is expanded when the
+                 elaboration of a new  entity  requires  it.  The
+                 heap  expands  to  fill  available  memory.  The
+                 default increment is 128.  This parameter limits
+                 the  size of the largest object that can be cre-
+                 ated in a program.
+
+       --pp_p___s_i_z_e  Specifies the size in bytes of the program stack
+                 size  for  the main task.  The default is 10000.
+                 Argument values in the range  1..31  are  multi-
+                 plied  by  1024  to  obtain  the  stack  size in
+                 bytes.  The maximum value is 32767.
+
+       --ss_t___s_i_z_e  Specifies the size in bytes of  the  stack  size
+                 for  each new task.  The default is 10000. Argu-
+                 ment values in the range 1..31 are multiplied by
+                 1024  to obtain the stack size in bytes.  Use of
+                 small stack sizes may be appropriate  when  exe-
+                 cuting  programs  with many tasks, each of which
+                 can run with a small stack.  The  maximum  value
+                 is 32767.
+
+       --tt_t_r_a_c_e___o_p_t_i_o_n_s
+                 Specify  one  or  more  of the following letters
+                 indicating the kind of  trace(s)  requested  for
+                 the execution of the program.
+
+                 aa    (Ada line)     Display the source line num-
+                                     bers.   This  requires  that
+                                     the program be compiled with
+                                     the --aa option.
+
+                 cc    (calls)        Display  the  name  of  each
+                                     subprogram  as it is entered
+                                     and exited.
+
+                 ee    (exceptions)   Display  the  name  of  each
+                                     exception as it is raised.
+
+                 rr    (rendezvous)   Trace each rendezvous.
+
+                 tt    (tasks)        Display task creation, acti-
+                                     vation, and  termination.
+
+
+EEXXAAMMPPLLEESS
+       The following examples show typical usage:
+
+
+            1)   Compile t1.ada into a new library called testlib
+                 and  bind  the  library;  then  execute it.  The
+                 listing is written to t1.lis.  Note that  --ss  is
+
+
+
+NYU Ada Group           23 September 1991                       4
+
+
+
+
+
+ADAED()              Unix Programmer's Manual             ADAED()
+
+
+                 used to force a listing file to be created.
+                                _a_d_a_c_o_m_p _-_s _-_n_l _t_e_s_t_l_i_b _-_b _t_1
+                                _a_d_a_e_x_e_c _t_e_s_t_l_i_b
+
+            2)   Compile  a  package  specification  in p.spc and
+                 corresponding body in p.bod into a  new  library
+                 called  tstlib.   Then  compile  t2.ada into the
+                 same library, bind the main program, and execute
+                 it
+                                _a_d_a_c_o_m_p _-_n_l _t_s_t_l_i_b _p_._s_p_c
+                                _a_d_a_c_o_m_p _-_l _t_s_t_l_i_b _p_._b_o_d
+                                _a_d_a_c_o_m_p _-_l _t_s_t_l_i_b _-_b _t_2
+                                _a_d_a_e_x_e_c _t_s_t_l_i_b
+
+
+            3)   In  the example above, the binding could be done
+                 in  a  separate  phase.   This  is  achieved  by
+                 replacing the third command above with:
+                                _a_d_a_c_o_m_p _-_l _t_s_t_l_i_b _t_2
+                                _a_d_a_b_i_n_d _t_s_t_l_i_b
+
+
+            4)   Example 2 above could be done without explicitly
+                 specifying the library by setting  the  environ-
+                 ment variable ADALIB, as follows:
+                                _s_e_t_e_n_v                     _A_D_A_L_I_B
+                           my_default_directory
+                                _a_d_a_c_o_m_p _-_n _p_._s_p_c
+                                _a_d_a_c_o_m_p _p_._b_o_d
+                                _a_d_a_c_o_m_p _-_b _t_2
+                                _a_d_a_e_x_e_c
+
+
+
+            5)   Compile a program with line numbers included  in
+                 the  generated  code.  Execute it displaying Ada
+                 source line numbers as they are encountered.
+                                _a_d_a_c_o_m_p _-_a _-_n_l _l_i_b_n_a_m_e _-_b _t_1
+                                _a_d_a_e_x_e_c _-_t _a _l_i_b_n_a_m_e
+
+            6)   Compile a program with two parameterless  proce-
+                 dures  (potential main programs) which are named
+                 MAIN1 and  MAIN2  in  files  p1.ada  and  p2.ada
+                 respectively,  and bind the library _t_s_t_l_i_b using
+                 MAIN1 as the main program.
+                                _a_d_a_c_o_m_p _-_n_l _t_s_t_l_i_b _p_1
+                                _a_d_a_c_o_m_p _-_l _t_s_t_l_i_b _p_2
+                                _a_d_a_b_i_n_d _-_m _m_a_i_n_1 _t_s_t_l_i_b
+                                _a_d_a_e_x_e_c _t_s_t_l_i_b
+
+            7)   Suppose we wish to add another  program  to  the
+                 library tstlib (created in Example 6) whose main
+                 program unit is named MAIN3 and appears in  file
+                 p3.ada.  The following commands will compile and
+
+
+
+NYU Ada Group           23 September 1991                       5
+
+
+
+
+
+ADAED()              Unix Programmer's Manual             ADAED()
+
+
+                 execute MAIN3. As tstlib  was  previously  bound
+                 with  MAIN1  as a main unit, it is now necessary
+                 to use the --mm option  to  _a_d_a_e_x_e_c  in  order  to
+                 select the desired bound main unit.
+                                _a_d_a_c_o_m_p _-_l _t_s_t_l_i_b _p_3
+                                _a_d_a_b_i_n_d _-_m _m_a_i_n_3 _t_s_t_l_i_b
+                                _a_d_a_e_x_e_c _-_m _m_a_i_n_3 _t_s_t_l_i_b
+
+            8)   The  contents  of the library above can be exam-
+                 ined by:
+                                _a_d_a_l_i_b _t_s_t_l_i_b
+                 _A_d_a_l_i_b writes the  name,  type  and  compilation
+                 date  of  each  unit in the specified library to
+                 standard output.  In  addition,  it  writes  the
+                 current  status  (active  or  obsolete)  of each
+                 unit. Units which may be main programs are noted
+                 by  "(Main)";  if  there  is  more than one such
+                 unit, the --mm option to adabind must be specified
+                 during  binding.  Libraries that have been bound
+                 will contain at least one unit labeled  "binding
+                 unit".   If  several of these are active, the --mm
+                 option must be specified for _a_d_a_e_x_e_c.
+
+PPRRAAGGMMAA IINNTTEERRFFAACCEE
+       Pragma interface (LRM 13.9)  is  currently  supported  for
+       interfacing to subprograms written in FORTRAN or C.
+
+       Arguments to interfaced procedures must be one of the fol-
+       lowing types:
+       For C: integer, float, access, array, record, and enumera-
+       tion types.
+       For  FORTRAN:  integer, float and array.  The return types
+       available are integer and float.
+
+       Following are sample Ada programs that are  interfaced  to
+       subprograms coded in FORTRAN and C, together with the code
+       for the interfaced subprograms:
+
+       1)   Interface to FORTRAN
+
+        C This is a source file called _f_u_n_c_._f which contains  two
+       functions to be used in an
+        C Ada program with pragma INTERFACE.
+
+            function sqr(x)
+            sqr = x*x
+            return
+            end
+
+            function cube(x)
+            cube = x*x*x
+            return
+            end
+
+
+
+
+NYU Ada Group           23 September 1991                       6
+
+
+
+
+
+ADAED()              Unix Programmer's Manual             ADAED()
+
+
+        --  Assume  that  the  following are the contents of file
+       _f_o_r_t_l_i_b_._a_d_a.
+        -- It contains a compilation unit that defines two  func-
+       tions which are
+        -- interfaced to the above routines.
+
+        ppaacckkaaggee FORTRAN_LIB iiss
+            ffuunnccttiioonn SQR(X:FLOAT) rreettuurrnn FLOAT;
+            ffuunnccttiioonn CUBE(X:FLOAT) rreettuurrnn FLOAT;
+        pprriivvaattee
+            pprraaggmmaa INTERFACE(FORTRAN, SQR);
+            pprraaggmmaa INTERFACE(FORTRAN, CUBE);
+        eenndd FORTRAN_LIB;
+
+        wwiitthh FORTRAN_LIB, TEXT_IO; uussee FORTRAN_LIB, TEXT_IO;
+        pprroocceedduurree TEST iiss
+           ffuunnccttiioonn SQRT(X : FLOAT) rreettuurrnn FLOAT;
+           pprraaggmmaa INTERFACE(C,SQRT);
+           ppaacckkaaggee   MY_FLOAT_IO   iiss  nneeww  FLOAT_IO(FLOAT);  uussee
+       MY_FLOAT_IO;
+        bbeeggiinn
+            PUT(SQR(2.0));
+            NEW_LINE;
+            PUT(CUBE(2.0));
+            NEW_LINE;
+            PUT(SQRT(2.0));
+            NEW_LINE;
+        eenndd TEST;
+
+       To compile and execute, enter the following commands:
+                      _f_7_7 _-_c _f_u_n_c_._f
+                      _a_d_a_c_o_m_p _-_n_l _t_e_s_t_l_i_b _-_b _-_i _f_u_n_c_._o _f_o_r_t_l_i_b
+                      _a_d_a_e_x_e_c _t_e_s_t_l_i_b
+       The output will be:
+        4.00000E+00
+        8.00000E+00
+        1.41421E+00
+
+       2)   Interface to C
+
+       /*
+        * Source  file  _p_r_o_c_._c  contains  procedures  PRINTA  and
+       PRINTS1 called by
+        * the Ada program above.
+        */
+       printa(ara)
+       int ara[];
+       {
+           int i;
+           for (i=0;i<10;i++) {
+              printf("%d ",ara[i]);
+           }
+           printf("\n");
+       }
+
+
+
+NYU Ada Group           23 September 1991                       7
+
+
+
+
+
+ADAED()              Unix Programmer's Manual             ADAED()
+
+
+       prints1(ara,len)
+       int ara[];
+       int len;
+       {
+           int i;
+           for (i=0;i<len;i++) {
+               printf("%c",ara[i]);
+           }
+           printf("\n");
+       }
+
+       --  Assume  that file _t_e_s_t___i_n_t_e_r_f_a_c_e_._a_d_a contains the fol-
+       lowing program:
+        pprroocceedduurree C_INTERFACES iiss
+            ttyyppee ARA10 iiss aarrrraayy(1..10) ooff INTEGER;
+            A10: ARA10 := (1,2,3,4,5,6,7,8,9,10);
+
+            pprroocceedduurree PRINTA(A:ARA10);
+            -- PRINTA prints an array  of  10  elements  of  type
+       INTEGER
+            pprraaggmmaa INTERFACE(C, PRINTA);
+
+            pprroocceedduurree PRINTS1(A:STRING; LEN: INTEGER);
+            --  PRINTS1  prints  an array of LEN elements of type
+       CHARACTER
+            pprraaggmmaa INTERFACE(C, PRINTS1);
+
+            pprroocceedduurree PRINTS(A:STRING) iiss
+            -- This routine prints a string by passing the string
+       and its length
+            -- to the routine PRINTS1 which is written in C.
+            bbeeggiinn
+                PRINTS1(A, A'length);
+            eenndd;
+
+        bbeeggiinn
+           PRINTA(A10);
+           PRINTS("this is any string");
+        eenndd;
+
+       To compile and execute, enter the following:
+                      _c_c _-_c _p_r_o_c_._c
+                      _a_d_a_c_o_m_p    _-_i   _p_r_o_c_._o   _-_n_l   _t_e_s_t_l_i_b   _-_b
+                 _t_e_s_t___i_n_t_e_r_f_a_c_e
+                      _a_d_a_e_x_e_c _t_e_s_t_l_i_b
+
+       The resulting output is as follows:
+       1 2 3 4 5 6 7 8 9 10
+       this is any string
+
+
+EENNVVIIRROONNMMEENNTT
+       The environment variable AADDAALLIIBB contains the name  of  the
+       library used if none is specified on the command line.
+
+
+
+NYU Ada Group           23 September 1991                       8
+
+
+
+
+
+ADAED()              Unix Programmer's Manual             ADAED()
+
+
+       Normally  the executables called by aaddaaccoommpp and the prede-
+       fined libraries are in a directory built into the  system.
+       The  directory  containing  these  can be specified by the
+       environment variable AADDAAEEDD which overrides  the  built  in
+       directory name.
+
+       The location of individual components called by aaddaaccoommpp or
+       the location of the predefined libraries can be overridden
+       with  the  following  environment  variables:  PPRRSS For the
+       parser, aaddaapprrss;; SSEEMM For the semantic analyzer, aaddaasseemm;; GGEENN
+       For  the  code  generator,  aaddaaggeenn;;  BBNNDD  For  the binder,
+       aaddaabbiinndd;; and AADDAAEEDDPPRREEDDEEFF For the predefined libraries.
+
+FFIILLEESS
+       file.ada      Ada source file
+       adaint        partially built interpreter (used for pragma
+       interface)
+       predef.axq    symbol table for predef
+       predef.trc    tree file for predef
+       predef.lib    library for predef
+
+DDIIAAGGNNOOSSTTIICCSS
+       Adaed  commands  return  an  exit code of 0 in the case of
+       success, and nonzero otherwise.  An error code of 1  indi-
+       cates  errors  in usage of the Ada language, 2 is returned
+       if there is an internal Adaed system error, and 3  denotes
+       some  invalid  usage  of the Adaed system.  Error messages
+       regarding invalid system usage are directed to  the  stan-
+       dard  error  file.  Ada language related messages detected
+       at compilation are written  to  the  listing  file,  while
+       those  detected  by  _a_d_a_b_i_n_d or _a_d_a_e_x_e_c appear on standard
+       output.
+
+       Note, that an error in a given compilation unit may  cause
+       subsequent compilation units (within the same compilation)
+       not to be recognized.
+
+AAUUTTHHOORRSS
+       Ada/Ed-C was written by the following members of  the  NYU
+       Ada  Project:  Bernard  Banner,  Jerome  Chiabaut,  Robert
+       Dewar, Anne Dinning, Alain Lauque, Gail Schenker Morgulis,
+       Brett  Porter,  Jean-Pierre Rosen, Edmond Schonberg, David
+       Shields, Brian Siritzky, Franck Triplet.
+
+BBUUGGSS
+       We give absolutley no warranty as to  the  correctness  of
+       the  system.  It  was  designed strictly for teaching pur-
+       poses. Currently it is unvalidated although we hope to put
+       it in a validatable shape in the near future.
+
+       Any  compilation  or  execution that terminates abnormally
+       with mention of _i_n_t_e_r_n_a_l _e_r_r_o_r has uncovered  a  bug  that
+       should be reported to the NYU Ada group.
+
+
+
+
+NYU Ada Group           23 September 1991                       9
+
+
+
+
+
+ADAED()              Unix Programmer's Manual             ADAED()
+
+
+              NYUADA project
+              New York University
+              251 Mercer Street
+              New York, N.Y. 10012
+              (212) 998 - 3480
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+NYU Ada Group           23 September 1991                      10
+
+

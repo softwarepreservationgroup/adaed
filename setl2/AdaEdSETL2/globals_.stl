@@ -1,0 +1,85 @@
+package globals;
+
+var
+   opsys,
+   cname,
+   errcount := 0,
+   pre_errcount := 0,
+   feature_use_map,
+   ada_bits_integer,
+   ada_max_integer,
+   ada_min_integer,
+   ada_max_integer_sqrt,
+
+   current_node,
+   ok_to_execute := false,
+
+   name_list,
+   ast,
+   spans,
+
+   linenum,
+
+   float_digits, 		-- FLOAT'DIGITS
+   float_first,			-- FLOAT'FIRST
+   float_last, 			-- FLOAT'LAST
+   float_machine_emax, 		-- FLOAT'MACHINE_EMAX
+   float_machine_mantissa, 	-- FLOAT'MACHINE_MANTISSA
+   long_float_digits, 		-- LONG_FLOAT'DIGITS
+   long_float_first,   		-- LONG_FLOAT'FIRST
+   long_float_last, 		-- LONG_FLOAT'LAST
+   long_float_machine_emax, 	-- LONG_FLOAT'MACHINE_EMAX
+   long_float_machine_mantissa,	-- LONG_FLOAT'MACHINE_MANTISSA
+
+   lib_unit,       -- Library map of compilation units to AIS files
+   lib_stub,       -- Library map of stub bodies to AIS files
+   stub_parent,    -- Library map of stubs to their parent units
+   comp_date,      -- Date, time, order of compilation from AIS file
+   pre_comp,       -- Union of visibility lists for compilation unit
+   pragma_elab,    -- Map of units that are arguments to pragma ELABORATE
+   compilation_order,
+	           -- Tuple of compilation units in order they were compiled
+   generic_units,  -- Set of generic compilation units.
+   instantiations, -- Map of instantiated package names
+   unit_decl,      -- Module symbol table accessed by other units
+   stub_env,       -- Enviornment at point a stub was declared
+   code_units,     -- AIS code segments for compilation units
+   predef_units,   -- Set of predefined library units
+   except_unames,  -- Map of exceptions in predefined units to
+	           -- their uniques names
+
+   infile,
+   aisfile,
+   adafile,
+   astfile,
+   lisfile,
+   errfile,
+   datafile,
+   libfile, 
+
+   ada_option	   := true,
+   lib_option      := false,
+   pat_option      := false,
+   ast_option      := true,
+   aix_option      := false,
+   ais_option      := false,
+   list_option     := true,
+   feature_options := false,
+   new_library 	   := false,
+   predef_option   := false,
+
+   ais_main,
+
+   cdebug  := 0,
+   cdebug1 := 0,
+   cdebug2 := 0,
+   cdebug3 := 0,
+   cdebug4 := 0,
+   cdebug5 := 0,
+   trace  := 0,
+   max_memory_allocated ;
+
+   procedure sbreak(rw s, c);
+   procedure srbreak(rw s, c);
+   procedure newat_str;
+end globals;

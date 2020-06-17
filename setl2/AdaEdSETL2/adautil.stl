@@ -1,0 +1,628 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adautil.stl,v 1.2 91/01/09 17:22:11 banner Exp $
+--
+package body adautil;
+
+use globals;
+
+var
+  scan_errors,
+  slength := 0;
+
+const 
+
+  alphanum := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+
+  digits := "0123456789" ,
+
+  hexdigits := "0123456789ABCDEFabcdef" ,
+
+  alpha_set := {"A","B","C","D","E","F","G","H","I",
+		"J","K","L","M","N","O","P","Q","R",
+		"S","T","U","V","W","X","Y","Z",
+		"a","b","c","d","e","f","g","h","i",
+		"j","k","l","m","n","o","p","q","r",
+		"s","t","u","v","w","x","y","z"} ,
+
+  digit_set := {"0","1","2","3","4","5","6","7","8","9"} ,
+
+  hexdigit_set := {"0","1","2","3","4","5","6","7","8","9",
+		   "A","B","C","D","E","F",
+		   "a","b","c","d","e","f"} ,
+
+   conv := {["0",0],["1",1],["2",2],["3",3],["4",4],
+       	    ["5",5],["6",6],["7",7],["8",8],["9",9],
+       	    ["A",10],["B",11],["C",12],["D",13],["E",14],["F",15]} ;
+
+
+-- In the following location procedures "slength" is a global which is set 
+-- in scan_identifier or scan_number
+
+procedure tokloc(s);   
+   return [1, slength - #s];
+end tokloc;
+--
+procedure prevcharloc(s);
+   return [slength - #s, slength - #s];
+end prevcharloc;
+--
+procedure curcharloc(s);
+    return [slength - #s + 1, slength - #s + 1];
+end curcharloc;
+--
+procedure prev_pos(s);
+    return slength - #s;
+end prev_pos;
+--
+procedure cur_pos(s);
+    return slength - #s + 1;
+end cur_pos;
+--
+
+procedure subtok (rw s, charset, break);
+ 
+  -- S should start with a character from CHARSET or an underscore.
+  --
+  -- Identifiers, reserved words, and numbers may contain isolated 
+  -- embedded underscores.  SUBTOK searches the beginning of S for
+  -- characters in (CHARSET + "_"), checking that any underscores are 
+  -- indeed embedded and surrounded by characters in CHARSET.
+  --
+  -- If an underscore is found to be misplaced, an error message is 
+  -- added to SCAN_ERRORS.
+  --
+  -- Underscores are replaced by the value of the argument BREAK,
+  -- which is the null string ("") if underscores are to be removed
+  -- (as in numbers), or the underscore ("_") if underscores are 
+  -- significant and should be kept (as in identifiers).  Lower-case 
+  -- letters are folded to upper case.  The "sub-token" is
+  -- removed from S and returned.
+ 
+    -- Check for initial (erroneous) underscores.
+ 
+    while s(1) = "_" loop
+      s := s(2..);
+      scan_errors with:=
+         [prevcharloc(s), "Break character misplaced",prev_pos(s)-1];
+    end loop;
+
+    -- Scan initial part of sub-token.
+
+    item := span (s, charset) ;
+
+    -- Scan alternating underscores and CHARSET characters.
+
+    while s(1) = "_" loop 
+      s     := s(2..);
+      nitem := span (s, charset);
+
+      -- Check for multiple or trailing underscores.  In the case
+      -- of multiple underscores, report the error and process only
+      -- the last one.
+
+      if nitem = "" then
+        scan_errors with:=
+              [prevcharloc(s), "Break character misplaced",prev_pos(s)];
+	if s(1) /= "_" then 
+	  exit ; 
+        end if;
+      else
+	item +:= break + nitem;
+      end if;
+    end loop;
+
+    return item;
+end subtok;
+--
+--
+procedure scan_int_or_real (rw s, digs);
+
+  --
+  -- A simple integer or real literal (non-based and without exponent)
+  -- is scanned using the digit set in DIGS.  S(1) is assumed to be in 
+  -- DIGS.
+
+    snum := subtok (s, digs, "");
+    if s(1) = "." and s(2) /= "." then
+      snum +:= s(1);
+      s     := s(2..);
+      if s(1) in digs or s(1) = "_" then
+	snum +:= subtok (s, digs, "");
+      else
+	scan_errors with:= 
+	  [prevcharloc(s), "Missing digit after decimal point",prev_pos(s)];
+	snum +:= "0";		-- supply zero
+      end if;
+    end if;
+    return snum;
+end scan_int_or_real;
+
+procedure scan_int (rw s, digs);
+-- this is variant of scan_int_or_real that is used when we are looking
+-- specifically for an integer value (and scan_int_or_real does too much!)
+
+    snum := subtok (s, digs, "");
+    return snum;
+end scan_int;
+ 
+procedure scan_identifier (s);
+
+-- Scan a lexical identifier from the front of the string S
+-- (it is assumed that the first character of S is a letter).
+-- A tuple is returned as follows:
+--	[ID, remnant of S, SCAN_ERRORS]
+-- where ID is the string scanned and converted (i.e. folded to
+-- upper-case); remnant of S is whatever is left of S after ID is
+-- scanned off (possibly the null string); and SCAN_ERRORS is a
+-- tuple of error messages for use by the lexical analyzer (see
+-- comments above).  If the first character of S is not a letter,
+-- then ID is returned as the null string.
+
+  scan_errors := [];
+  slength     := #s;
+
+  if s(1) in alpha_set or s(1) = "_" then
+    id := subtok (s, alphanum, "_");
+    id := upper_case_of (id) ? "";
+  else
+    id := "";
+  end if;
+
+  return [id, s, scan_errors];
+
+end scan_identifier ;
+
+
+procedure scan_number (s, typ);
+
+-- Scan a lexical numeric literal from the front of the string S
+-- (it is assumed that the first character of S is a digit).
+-- TYP is the type of numeric literal to scan: "integer", "real", or
+-- "integer_or_real" (for the lexical analyzer).
+-- A tuple is returned as follows:
+--	[NUM, remnant of S, SCAN_ERRORS]
+-- where NUM is the string scanned and converted (i.e. underscores
+-- removed, base delimiters ("#" or ":") converted to "#", and with the
+-- suffix "I" or "R" if TYP was "integer_or_real"); remnant of S
+-- is whatever is left of S after NUM is scanned off (possibly the
+-- null string); and SCAN_ERRORS is a tuple of error messages for use
+-- by the lexical analyzer (see comments above).  If the first character
+-- of S is not a digit or a sequence of underscores followed by a digit,
+-- or a real is expected and only an integer is found, then NUM is 
+-- returned as the null string.
+
+  scan_errors := [];
+  slength     := #s;
+  saved_s     := s;
+
+  if s(1) in digit_set or s(1) = "_" then
+    if typ = "integer" then
+	num := scan_int (s, digits);
+    else
+    	num := scan_int_or_real (s, digits);
+    end if;
+
+    -- Check for based number (in which case, NUM contains the integer 
+    -- base).
+
+    if "." notin num and s(1) in "#:" then
+
+      -- If the base contained underscores, which have now been stripped
+      -- out, pad it with leading zeroes to its length with the under-
+      -- scores so that any error reported in CHECK_BASED will point to
+      -- the correct character.
+
+      base_length := slength - #s;
+      num	  := (base_length - #num) * "0" + num;
+
+      num  +:= "#";
+      delim := s(1);
+      s     := s(2..);
+      if s(1) = "." and s(2) /= "." then
+	scan_errors with:=
+	  [curcharloc(s), "Missing digit before decimal point",cur_pos(s)];
+	s := "0" + s;		-- supply zero
+      end if;
+
+      -- Span internal based number.
+
+
+      if s(1) in hexdigit_set with "_" then
+	if typ = "integer" then
+	  num +:= subtok (s, hexdigits, "");
+	else
+	  while s(1) in hexdigit_set or s(1) = "_" loop 
+	    num +:= scan_int_or_real (s, hexdigits);
+	    if s(1) = "." and s(2) /= "." then
+	      -- More than one decimal point -- will be
+	      -- caught by check_based.
+	      num +:= s(1);
+	      s    := s(2..);
+	    end if;
+	  end loop;
+	end if;
+      end if;
+
+
+      if num(#num) = "#" then
+	-- There weren"t any digits.
+
+        scan_errors with:=
+          [curcharloc(s), "Incomplete based number",cur_pos(s)];
+	num +:= "0";		-- supply zero
+      else
+	num := upper_case_of (num) ? "";
+      end if;
+
+      if s(1) /= delim then
+	scan_errors with:= 
+	  [tokloc(s), "Expect '"+delim+"' after last digit",prev_pos(s)];
+      else
+	s := s(2..);
+      end if;
+
+      num +:= "#";
+      num  := check_based (num);
+     end if;
+
+
+    -- Scan the exponent, if present, and put the sign in
+    -- signum_is and the exponent in expon.
+
+    if s(1) in "Ee" then 	
+      s	      := s(2..);
+      signum_is := "";
+
+      -- Check for initial (erroneous) underscores.
+
+      while s(1) = "_" loop
+        s := s(2..);
+        scan_errors with:=
+          [prevcharloc(s), "Break character misplaced",prev_pos(s)-1];
+      end loop;
+
+      if s(1) in "+-" then 
+	signum_is := s(1);
+	s         := s(2..);
+      end if;
+      if s(1) in digit_set or s(1) = "_" then
+	expon := subtok (s, digits, "");
+      else 
+	scan_errors with:= [tokloc(s), "Incomplete exponent",prev_pos(s)];
+	expon 	      := "0";		-- Supply zero for exponent
+      end if;
+    else
+      signum_is := "";
+      expon     := "";
+    end if;
+
+    -- Put the number together.
+
+    if "." notin num then
+
+      if expon = "" then
+	typ_suffix := "I";
+      elseif signum_is = "-" then
+	scan_errors with:= 
+	  [tokloc(s), "Missing decimal point in real number",prev_pos(s)];
+	num +:= ".0E" + signum_is + expon;
+	typ_suffix := "R";
+      else
+	num +:= "E" + signum_is + expon;
+	typ_suffix := "I";
+      end if;
+
+    else
+
+      if expon /= "" then
+	num +:= "E" + signum_is + expon;
+      end if;
+      typ_suffix := "R";
+    end if;
+
+    -- Check that expected type of number was scanned.
+
+    if (typ_suffix = "R" and typ = "integer") then
+      num := "";
+      s   := saved_s;
+    end if;
+
+    if (typ_suffix = "I" and typ = "real") then
+       s   := saved_s;
+       before_e := sbreak(num, "Ee");
+       bad_position := if before_e = om then #num else #before_e end if;
+       scan_errors with:= [[0,0], "", bad_position];
+       num := "";
+    end if;
+
+
+    -- If called by lexical analyzer, append type suffix to NUM.
+
+    if typ = "integer_or_real" then
+      num +:= typ_suffix;
+    end if;
+
+  else
+
+    -- S(1) is not a digit.
+    scan_errors with:= [[0,0], "", 0 ];
+
+    num := "";
+
+  end if;
+
+  return [num, s, scan_errors];
+
+end scan_number ;
+
+
+procedure check_based (number);
+
+  -- Check for correctness a based number of the form:
+  --
+  -- 	base # extended_digits [. extended_digits] #
+
+  num := number;
+
+  -- Compute the base.
+
+  b   := break(num,"#");
+  bse := 0;
+
+   for c = b(i)  loop 
+     if c notin digits then
+        scan_errors with:=
+          [[1,(#i)], "Non-numeric value in Base" , #i-1];
+        return if "." in num then "0.0" else "0" end if;
+     end if;
+   end loop;
+
+  for c in b  loop 
+    bse := bse*10 + conv(c);
+  end loop;
+
+  if bse notin [2..16] then
+    scan_errors with:= 
+      [[1,(#b)], "Base not in range 2..16", #b+#num];
+    return if "." in num
+	     then "0.0"
+	     else "0"
+	   end if;
+  end if;
+
+  -- Check the rest of the number.
+
+  digset      := hexdigits(1..bse);
+  num	      := num(2..#num-1);      -- strip off delimiters "#".
+  period_seen := false;
+
+  for c = num(i)  loop 
+    if c = "." and period_seen then
+      scan_errors with:= 
+	[[1+(#b)+i,1+(#b)+i], "Extra decimal point in based number"];
+      return "0.0";
+    elseif c = "." then
+      period_seen := true;
+    elseif c notin digset then
+      scan_errors with:= 
+  	[[1+(#b)+i,1+(#b)+i], "Invalid based-number digit",#b+#num+3];
+      return if "." in num
+  	       then "0.0"
+  	       else "0"
+  	     end if;
+    end if;
+  end loop;
+  return number;
+end check_based ;
+
+
+-- procedure for use by the following IMAGE utility routines:
+--
+procedure left_pad (rw x, l, c);
+--
+-- Left-pad the string x to length l using character c.
+--
+  x := (l - #x) * c + x;
+end left_pad;
+--
+procedure right_pad (rw x, l, c);
+--
+-- Right-pad the string x to length l using character c.
+--
+  x +:= (l - #x) * c;
+end right_pad;
+
+procedure image_float (num_string, fore, aft, expnt);
+util_trace("At proc IMAGE_FLOAT ", num_string);
+util_trace("At proc IMAGE_FLOAT ", fore);
+util_trace("At proc IMAGE_FLOAT ", aft);
+util_trace("At proc IMAGE_FLOAT ", expnt);
+--
+-- Return a string representing ITEM as a decimal quantity with the 
+-- format defined be FORE, AFT and EXP.  If the value is negative, a 
+-- preceding minus sign is included.  If EXP has the value zero, then the
+-- integer part has as many digits as necessary to represent the integer
+-- part of the value of ITEM, overriding FORE if necessary, or consists 
+-- of the digit zero if the value of ITEM has no integer part.
+-- If EXP has a value greater than zero, then the integer part has a
+-- single digit, which is non-zero except for (0.0).  If the integer part
+-- has fewer than FORE characters, including any minus sign, then leading
+-- spaces are included.
+-- The fractional part will have AFT digits (right-padded by zeros
+-- if necessary). If EXP is zero there is no exponent part; otherwise 
+-- the exponent will have either EXP - 1 digits (left-padded by zeros, 
+-- if necessary) if that is sufficient to represent the exponent, or 
+-- else it will have the minimum number of significant digits necessary.
+-- 
+assert is_string(num_string) ;
+  -- Separate mantissa from the string
+
+  mant := sbreak (num_string, "Ee") ? num_string;
+  if mant = num_string then		-- (num_string = 0.0)
+    num_string := "E+00";
+  end if;
+
+  if mant(1) = "-" then     -- Adjust sign of mantissa.
+    mant     := mant(2..);
+    sgn_mant := "-";
+  else
+    sgn_mant := "";
+  end if;
+  util_trace("mant=", str (mant)) ;
+
+  fract_digs := #mant - 2;             -- Numbers of digits in fraction 
+  if num_string(2) in {"+","-"} then
+	expnt_sgn  := num_string(2) ;        -- Assign sign of exponent
+	num_string := num_string(3..);	     -- Remove "E" and sign of exponent
+  else
+	expnt_sgn  := "+" ;		     -- Assign sign of exponent
+	num_string := num_string(2..);	     -- Remove "E" of exponent
+  end if;
+ -- Strip off leading zeroes in the exponent. It will be determined later if 
+ -- leading zeroes will be necessary. If string is then empty it means the
+ -- exponent was 0.
+ --
+  zeroes := span (num_string, "0");
+  if (#num_string = 0) then 
+     num_string := "0"; 
+  end if;
+
+  util_trace("num_string=", str (num_string)) ;
+  num_exp := if #num_string=1 then
+		conv(num_string(1))
+	     else
+		conv(num_string(1))*10 + conv(num_string(2))
+	     end if;
+
+  -- FORE ...
+
+  if expnt = 0 then 
+
+     if expnt_sgn = "+" then          -- number >= 1.0
+        fore_str := mant(1);
+        if num_exp > fract_digs then
+           fore_str +:= mant(3..) + (num_exp - fract_digs) * "0";
+        else
+           fore_str +:= mant(3..num_exp + 2);
+        end if;
+     else
+        fore_str := "0";
+     end if;
+
+  else  -- exponent > 0
+      fore_str := mant(1);
+  end if;
+
+  fore_str :=  sgn_mant + fore_str;
+  if #fore_str < fore then
+     left_pad (fore_str, fore, " ");
+  end if;
+
+  -- AFT ...
+
+  if expnt > 0 then                -- exponent will be present in result
+
+     if aft > fract_digs then 
+        aft_str := mant(3..) + (aft - fract_digs) * "0";
+     else 
+        aft_str := mant(3..aft+2);
+     end if;
+  
+  else                             -- exponent will be absent in result
+
+     if expnt_sgn = "+" then   -- positive exponent 
+     
+        if num_exp > fract_digs then
+           aft_str := aft * "0";
+        else
+           aft_str := mant(num_exp+3 .. (aft+num_exp+2) min #mant);
+        end if;
+        if aft > fract_digs - num_exp then
+           right_pad (aft_str, aft, "0");
+        end if;
+      
+     else        -- negative exponent
+        
+       if aft < num_exp then
+          aft_str := aft * "0";
+       else
+          aft_str :=(num_exp-1)*"0" +  mant(1) + 
+                     mant(3.. (aft-num_exp + 2) min #mant);
+       end if;
+       if aft > fract_digs + num_exp then 
+          right_pad (aft_str, aft, "0");
+       end if;
+
+     end if;
+    
+  end if;
+  
+  -- EXPONENT...
+
+  if expnt > 0 then
+          
+     if #num_string < (expnt -1) then
+        left_pad (num_string, expnt - 1, "0");
+     end if;
+     expnt_str := "E" + expnt_sgn + num_string;   -- Build exponent part
+      
+   else
+     expnt_str := "";
+
+  end if;
+
+  return  fore_str + "." + aft_str + expnt_str;
+
+end image_float ;
+
+procedure image_fixed (item, small, fract);
+--
+-- Return a string representing the fixed point quantity ITEM
+-- with a preceding minus sign if ITEM is negative, and at least
+-- one digit preceding the decimal point.  The fractional part after
+-- the decimal point should be of length FRACT (right-padded by zeros 
+-- or rounded, if necessary).
+--
+  return fix_tos (item, small, fract);
+
+end image_fixed ;
+
+procedure lower_case_of(s);
+ 
+-- map used to unfold letters back to lower case
+--
+const
+   lcfold := {["A","a"],["B","b"],["C","c"],["D","d"],["E","e"],
+              ["F","f"],["G","g"],["H","h"],["I","i"],["J","j"],
+              ["K","k"],["L","l"],["M","m"],["N","n"],["O","o"],
+              ["P","p"],["Q","q"],["R","r"],["S","s"],["T","t"],
+              ["U","u"],["V","v"],["W","w"],["X","x"],["Y","y"],
+              ["Z","z"]};
+--
+return  ""+/[lcfold(c) ? c  : c in (s ? "")];
+--
+end lower_case_of;
+
+
+procedure upper_case_of(s);
+ 
+-- map used to fold letters to upper case
+--
+const
+   ucfold := { ["a","A"],["b","B"],["c","C"],["d","D"],["e","E"],
+              ["f","F"],["g","G"],["h","H"],["i","I"],["j","J"],
+              ["k","K"],["l","L"],["m","M"],["n","N"],["o","O"],
+              ["p","P"],["q","Q"],["r","R"],["s","S"],["t","T"],
+              ["u","U"],["v","V"],["w","W"],["x","X"],["y","Y"],
+              ["z","Z"]};
+--
+return  ""+/[ucfold(c) ? c  : c in (s ? "")];
+--
+end upper_case_of;
+
+procedure util_trace(msg1, msg2);
+  if cdebug2 > 3 then
+     printa(errfile, msg1, msg2) ;
+  end if;
+end util_trace;
+end adautil;

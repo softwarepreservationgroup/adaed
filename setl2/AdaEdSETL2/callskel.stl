@@ -1,0 +1,71 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/callskel.stl,v 1.1 91/01/02 15:57:00 banner Exp $
+--
+--
+--  Callout skeleton
+--  ================
+--
+--  This is a skeleton of the SETL2 side of a callout handler.
+--
+
+package callout_package;
+
+   -- list all the services C will provide
+
+   procedure reset_clock;
+   procedure cumtime;
+   procedure getdirname;
+
+end callout_package;
+
+package body callout_package;
+
+   var cumtime_string;
+   var pathname;
+
+   -- transfer to C
+
+   procedure reset_clock;
+      callout(1,callback_handler,[]);
+   end reset_clock;
+
+   procedure cumtime;
+
+      const conv := {["0",0],["1",1],["2",2],["3",3],["4",4],
+   		     ["5",5],["6",6],["7",7],["8",8],["9",9]};
+
+      callout(2,callback_handler,[]);
+      total := 0;
+      for dig = cumtime_string(i) loop 
+         total := (total * 10) + conv(dig); 
+      end loop;
+      return total;
+   end cumtime;
+
+   procedure getdirname;
+      callout(3,callback_handler,[]);
+      return pathname;
+   end getdirname;
+
+   --
+   --  the callback handler routes calls based on the first argument
+   --
+
+   procedure callback_handler(service,args);
+
+      case service
+
+         when "reset_clock" =>
+            null;
+
+         when "cumtime" =>
+            cumtime_string := args(1);
+
+         when "getdirname" =>
+            pathname := args(1);
+
+      end case;
+
+   end callback_handler;
+
+end callout_package;

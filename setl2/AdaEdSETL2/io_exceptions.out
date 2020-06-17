@@ -1,0 +1,21 @@
+Executing file  NYU Ada/Ed 1.11 SUN UNIX Version
+ADAfile:	io_exceptions.ada
+ASTfile:	
+AISfile:	io_exceptions.ais
+LIBfile:	predef.lib
+	
+	
+    1   package IO_EXCEPTIONS is
+    2   
+    3      STATUS_ERROR : exception;
+    4      MODE_ERROR   : exception;
+    5      NAME_ERROR   : exception;
+    6      USE_ERROR    : exception;
+    7      DEVICE_ERROR : exception;
+    8      END_ERROR    : exception;
+    9      DATA_ERROR   : exception;
+   10      LAYOUT_ERROR : exception;
+   11   
+   12   end IO_EXCEPTIONS;
+   
+  No translation errors detected

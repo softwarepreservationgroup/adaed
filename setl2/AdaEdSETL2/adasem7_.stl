@@ -1,0 +1,26 @@
+--
+--$Header: /cs.a/ada/ada/src/ada9x/adasem7_.stl,v 1.1 90/12/05 16:17:02 ada Exp $
+--
+package adasem7;
+   procedure package_specification(node) ;
+   procedure new_package(id, kind) ;
+   procedure package_declarations(vis_node, priv_node) ;
+   procedure private_part(priv_node) ;
+   procedure module_body_id(mod_nature, name) ;
+   procedure package_body(blk) ;
+   procedure generic_package_body(package_name, blk) ;
+   procedure private_decl(id, opt_discr, priv_kind) ;
+   procedure check_fully_declared(type_mark) ;
+   procedure check_fully_declared2(type_mark) ;
+   procedure is_private(type_mark) ;
+   procedure is_limited_type(type_mark) ; 
+   procedure private_kind(type_mark) ;
+   procedure is_fully_private(type_mark) ;
+   procedure check_private_declaration(kind, type_name) ;
+   procedure private_ancestor(type_name) ;
+   procedure trace_ancestor(type_name, seen) ;
+   procedure end_specs(kind, declarations) ;
+   procedure check_incomplete_decls(scope, rw decls) ;
+   procedure needs_body(name) ;
+   procedure get_specs(name) ;
+end adasem7;

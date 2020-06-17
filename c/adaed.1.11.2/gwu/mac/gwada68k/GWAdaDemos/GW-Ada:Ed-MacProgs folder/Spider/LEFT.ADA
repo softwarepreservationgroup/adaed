@@ -1,0 +1,1 @@
+WITH Spider; USE Spider;PROCEDURE Left IS       -- Defining a new command for the spiderBEGIN   Turn;   Turn;   Turn;END Left;               -- End of Definition

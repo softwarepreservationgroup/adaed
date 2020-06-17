@@ -1,0 +1,1 @@
+WITH Spider; USE Spider;PROCEDURE Drawing19 ISPROCEDURE Arm ISBEGIN Black;Step;Step;Step;Turn;Turn;Turn;Step;Turn;Red;Step;Turn;Step;Turn;Step;Step;Step;Step;Step;Turn;END Arm;BEGINReset;Arm;Arm;Arm;Arm;-- Step; -- Predict what happens with this statement added.Quit;END Drawing19;
